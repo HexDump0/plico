@@ -1,5 +1,7 @@
 <script lang="ts">
-	import favicon from '$lib/assets/favicon.svg';
+	import '@fontsource-variable/plus-jakarta-sans';
+	import '../app.css';
+	import favicon from '$lib/assets/plico.svg';
 
 	let { children } = $props();
 </script>
