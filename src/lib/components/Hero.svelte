@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import gsap from 'gsap';
 	import { IconPlus } from '@tabler/icons-svelte-runes';
 	import { tools, type ToolId } from '$lib/tools';
@@ -29,26 +28,6 @@
 			{ strokeDashoffset: 0, duration: 0.7, ease: 'power2.out', overwrite: true }
 		);
 	}
-
-	onMount(() => {
-		const motion = gsap.matchMedia();
-		motion.add(
-			'(prefers-reduced-motion: no-preference)',
-			() => {
-				gsap
-					.timeline({ defaults: { ease: 'power2.out', clearProps: 'transform,opacity' } })
-					.from('.hero-copy > *', { y: 14, opacity: 0, duration: 0.55, stagger: 0.08 })
-					.from('.drop-zone', { y: 12, opacity: 0, duration: 0.5 }, 0.1)
-					.from('.tool-chip', { x: -8, opacity: 0, duration: 0.4, stagger: 0.045 }, 0.2)
-					.from('.connections', { opacity: 0, duration: 0.55 }, 0.35);
-			},
-			root
-		);
-		return () => {
-			motion.revert();
-			gsap.killTweensOf(root.querySelectorAll('[data-connection]'));
-		};
-	});
 </script>
 
 <div
@@ -69,13 +48,13 @@
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"
-			class="hero-stage relative grid flex-1 items-center gap-10 px-6 py-10 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 lg:py-16 xl:px-24"
+			class="hero-stage relative grid flex-1 items-center gap-10 px-6 py-10 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 lg:py-20 xl:px-24"
 		>
 			<div class="hero-copy relative z-10 min-w-0 lg:col-span-5">
-				<h1 id="hero-title" class="text-3xl leading-tight font-bold tracking-tight sm:text-4xl">
+				<h1 id="hero-title" class="text-5xl leading-tight font-bold tracking-tight">
 					All the PDF tools<br />You would ever want
 				</h1>
-				<p class="mt-4 text-sm text-subtle sm:text-base">With a really cool UI</p>
+				<p class="mt-3 text-lg text-subtle font-bold">Blablabla idk what to write here</p>
 			</div>
 			<div
 				class="tool-scene relative z-10 w-full min-w-0 lg:col-span-7 lg:aspect-[989/446] lg:max-w-4xl lg:justify-self-end"
