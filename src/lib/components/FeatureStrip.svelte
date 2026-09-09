@@ -15,10 +15,10 @@
 </script>
 
 <section
-	class="feature-strip relative z-10 shrink-0 rounded-t-[2rem] bg-brand text-panel lg:mx-auto lg:w-[90%] lg:max-w-[108rem] lg:rounded-t-[2.5rem] xl:w-[88%]"
+	class="feature-strip relative z-10 shrink-0 rounded-t-4xl bg-brand text-panel lg:mx-auto lg:w-7/8 lg:max-w-432"
 >
 	<div
-		class="feature-grid mx-auto grid max-w-[120rem] grid-cols-2 gap-y-10 px-4 py-10 sm:px-8 lg:min-h-[clamp(13rem,12.5vw,15rem)] lg:grid-cols-4 lg:items-center lg:gap-y-0 lg:px-6 lg:py-8"
+		class="feature-grid mx-auto grid grid-cols-2 gap-y-10 px-4 py-10 sm:px-8 lg:min-h-52 lg:grid-cols-4 lg:items-center lg:gap-y-0 lg:px-6 lg:py-8 xl:min-h-56 2xl:min-h-60"
 	>
 		{#each features as feature, index (feature.title)}
 			<div
@@ -33,11 +33,11 @@
 					stroke={1.8}
 					aria-hidden="true"
 				/>
-				<h2 class="text-base font-bold sm:text-xl lg:text-[clamp(1.25rem,1.35vw,1.625rem)]">
+				<h2 class="text-base font-bold sm:text-xl 2xl:text-2xl">
 					{feature.title}
 				</h2>
 				<p
-					class="mt-2 max-w-72 text-xs leading-relaxed text-panel/75 sm:text-sm lg:text-[1.0625rem] xl:text-lg"
+					class="mt-2 max-w-72 text-xs leading-relaxed text-panel/75 sm:text-sm lg:text-base xl:text-lg"
 				>
 					{feature.body}
 				</p>

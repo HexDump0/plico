@@ -61,7 +61,7 @@
 
 <section
 	aria-label="PDF file selection"
-	class="drop-zone relative flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 transition-colors duration-200 sm:p-6 {dragging
+	class="drop-zone flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 transition-colors duration-200 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
 		: ''}"
 	ondragenter={(event) => {
@@ -82,32 +82,17 @@
 	{#if files.length === 0}
 		<button
 			type="button"
-			class="group relative flex min-h-56 w-full flex-1 flex-col items-center justify-center gap-5 rounded-2xl text-muted transition-colors duration-200 hover:bg-brand/5 hover:text-brand sm:min-h-60 lg:min-h-0"
+			class="group flex min-h-56 w-full flex-1 flex-col items-center justify-center gap-5 rounded-2xl border-2 border-dashed border-current text-muted transition-colors duration-200 hover:bg-brand/5 hover:text-brand sm:min-h-60 lg:min-h-0"
 			onclick={() => input.click()}
 			aria-label="Choose PDFs or drop them here"
 			aria-describedby="file-feedback"
 		>
-			<svg
-				class="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-				aria-hidden="true"
-				><rect
-					x="1"
-					y="1"
-					width="calc(100% - 2px)"
-					height="calc(100% - 2px)"
-					rx="16"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-dasharray="12 12"
-				/></svg
-			>
 			<IconUpload
 				class="upload-icon size-10 transition-transform duration-200 sm:size-11"
 				stroke={1.8}
 				aria-hidden="true"
 			/>
-			<span class="text-xl font-medium lg:text-[clamp(1.0625rem,1.05vw,1.25rem)]"
+			<span class="text-xl font-medium lg:text-lg 2xl:text-xl"
 				>{dragging
 					? 'Let go. They stay here.'
 					: tool

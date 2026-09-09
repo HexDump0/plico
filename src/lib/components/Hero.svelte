@@ -51,7 +51,10 @@
 	});
 </script>
 
-<div bind:this={root} class="hero-shell relative isolate mx-auto max-w-[120rem] overflow-clip">
+<div
+	bind:this={root}
+	class="hero-shell relative isolate mx-auto flex min-h-svh flex-col overflow-clip"
+>
 	<div class="hero-art pointer-events-none absolute -z-10 select-none" aria-hidden="true">
 		<img
 			src="/hero-contours.svg"
@@ -63,24 +66,19 @@
 		/>
 	</div>
 	<SiteHeader bind:this={header} onselect={selectTool} />
-	<main id="main-content" class="hero-main">
+	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"
-			class="hero-stage relative px-6 pt-10 pb-16 sm:px-10 sm:pt-14 lg:h-[clamp(28rem,28.65vw,34.375rem)] lg:p-0"
+			class="hero-stage relative grid flex-1 items-center gap-10 px-6 py-10 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 lg:py-16 xl:px-24"
 		>
-			<div
-				class="hero-copy relative z-10 mb-10 sm:mb-14 lg:absolute lg:top-[44%] lg:left-[6.1458%] lg:mb-0 lg:-translate-y-1/2"
-			>
-				<h1
-					id="hero-title"
-					class="text-[clamp(1.875rem,5vw,3rem)] leading-[1.18] font-bold tracking-[-0.025em] lg:text-[clamp(2rem,2.3vw,2.75rem)] lg:tracking-[-0.02em]"
-				>
+			<div class="hero-copy relative z-10 min-w-0 lg:col-span-5">
+				<h1 id="hero-title" class="text-3xl leading-tight font-bold tracking-tight sm:text-4xl">
 					All the PDF tools<br />You would ever want
 				</h1>
 				<p class="mt-4 text-sm text-subtle sm:text-base">With a really cool UI</p>
 			</div>
 			<div
-				class="tool-scene relative z-10 lg:absolute lg:top-[42%] lg:right-[5.15625%] lg:aspect-[989/446] lg:w-[48%] lg:max-w-[55rem] lg:-translate-y-1/2"
+				class="tool-scene relative z-10 w-full min-w-0 lg:col-span-7 lg:aspect-[989/446] lg:max-w-4xl lg:justify-self-end"
 			>
 				<svg
 					class="connections pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block"
@@ -108,7 +106,7 @@
 				<div class="mb-6 flex flex-wrap gap-2 sm:gap-3 lg:contents" aria-label="Choose a PDF tool">
 					{#each tools as tool, index (tool.id)}
 						<button
-							class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap transition-[background-color,box-shadow,translate] duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-[clamp(0.8125rem,0.82vw,1rem)] xl:gap-2.5 {tool.color} {selectedTool ===
+							class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base {tool.color} {selectedTool ===
 							tool.id
 								? 'ring-2 ring-current'
 								: ''}"
@@ -119,25 +117,22 @@
 							onpointerenter={() => animateConnection(tool.id)}
 							onfocus={() => animateConnection(tool.id)}
 							><tool.icon
-								class="size-5 shrink-0 xl:size-[1.375rem]"
+								class="size-5 shrink-0 xl:size-6"
 								stroke={1.8}
 								aria-hidden="true"
 							/>{tool.label}</button
 						>
 					{/each}
 					<button
-						class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap text-brand transition-[background-color,translate] duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-[clamp(0.8125rem,0.82vw,1rem)] xl:gap-2.5"
+						class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap text-brand transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base"
 						style:--chip-left="11.73%"
 						style:--chip-top="87.44%"
 						onclick={() => header.openTools()}
 						aria-haspopup="dialog"
 						onpointerenter={() => animateConnection('more')}
 						onfocus={() => animateConnection('more')}
-						><IconPlus
-							class="size-5 shrink-0 xl:size-[1.375rem]"
-							stroke={1.8}
-							aria-hidden="true"
-						/>More Tools</button
+						><IconPlus class="size-5 shrink-0 xl:size-6" stroke={1.8} aria-hidden="true" />More
+						Tools</button
 					>
 				</div>
 				<div class="h-80 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%]">
@@ -176,24 +171,6 @@
 		.tool-chip {
 			left: var(--chip-left);
 			top: var(--chip-top);
-		}
-	}
-	@media (min-width: 1024px) and (min-height: 850px) {
-		.hero-shell {
-			display: flex;
-			height: 100svh;
-			flex-direction: column;
-		}
-		.hero-main {
-			display: flex;
-			min-height: 0;
-			flex: 1;
-			flex-direction: column;
-		}
-		.hero-stage {
-			min-height: 0;
-			height: auto;
-			flex: 1;
 		}
 	}
 </style>

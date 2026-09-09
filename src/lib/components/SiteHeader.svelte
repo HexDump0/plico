@@ -38,16 +38,16 @@
 </script>
 
 <header
-	class="relative z-20 mx-auto flex h-20 w-full max-w-[120rem] shrink-0 items-center justify-between px-6 sm:h-24 sm:px-10 lg:h-[clamp(6.5rem,11svh,8rem)] lg:px-[5%]"
+	class="relative z-20 mx-auto flex h-20 w-full shrink-0 items-center justify-between px-6 sm:h-24 sm:px-10 lg:grid lg:h-24 lg:grid-cols-3 lg:px-20"
 >
 	<a
 		href={resolve('/')}
-		class="flex shrink-0 items-center gap-2 rounded-md text-2xl font-bold lg:text-[1.625rem]"
+		class="flex shrink-0 items-center gap-2 rounded-md text-2xl font-bold lg:justify-self-start"
 		aria-label="Plico home"><img src={logo} width="26" height="30" alt="" />Plico</a
 	>
 	<nav
 		aria-label="Main navigation"
-		class="flex items-center gap-4 text-sm font-medium sm:gap-8 sm:text-base lg:absolute lg:left-1/2 lg:-translate-x-1/2 lg:gap-9"
+		class="flex items-center gap-4 text-sm font-medium sm:gap-8 sm:text-base lg:gap-9 lg:justify-self-center"
 	>
 		<button
 			class="flex min-h-11 items-center gap-1 rounded-md transition-colors hover:text-brand"
@@ -60,7 +60,9 @@
 			aria-haspopup="dialog">About</button
 		>
 	</nav>
-	<div class="hidden items-center gap-8 text-base font-medium sm:flex lg:gap-10">
+	<div
+		class="hidden items-center gap-8 text-base font-medium sm:flex lg:gap-10 lg:justify-self-end"
+	>
 		<button
 			class="flex min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand"
 			onclick={() => open('github')}
@@ -79,7 +81,7 @@
 <dialog
 	bind:this={dialog}
 	aria-labelledby="dialog-title"
-	class="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-lg rounded-3xl border border-white/10 bg-panel p-6 text-white shadow-2xl backdrop:bg-canvas/80 backdrop:backdrop-blur-sm sm:p-8"
+	class="fixed inset-4 m-auto w-auto max-w-lg overflow-y-auto rounded-3xl border border-white/10 bg-panel p-6 text-white shadow-2xl backdrop:bg-canvas/80 backdrop:backdrop-blur-sm sm:p-8"
 	onclick={(event) => {
 		if (event.target === dialog) {
 			const rect = dialog.getBoundingClientRect();
