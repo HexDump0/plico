@@ -1,6 +1,8 @@
 <script lang="ts">
 	import gsap from 'gsap';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { quickTools, toolColumns } from '$lib/tool-catalog';
 	import { IconPlus } from '@tabler/icons-svelte-runes';
 	import { tools, type ToolId } from '$lib/tools';
 	import type { CatalogTool } from '$lib/tool-catalog';
@@ -13,6 +15,15 @@
 	let selectedTool = $state<CatalogTool | null>(null);
 	let moreToolsButton: HTMLButtonElement;
 	let toolCue: gsap.core.Tween | undefined;
+	onMount(() => {
+		const toolId = page.url.searchParams.get('tool');
+		if (toolId)
+			selectedTool =
+				[
+					...quickTools,
+					...toolColumns.flatMap((column) => column.flatMap((group) => group.tools))
+				].find((tool) => tool.id === toolId) ?? null;
+	});
 	const selectedHeroTool = $derived(selectedTool?.heroTool ?? selectedTool?.id);
 	const positions = [
 		{ left: 14.26, top: 0, path: 'M321 28C362.5 28 362.5 108 404 108' },

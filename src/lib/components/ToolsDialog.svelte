@@ -31,8 +31,7 @@
 		searchVersion += 1;
 		searchMotion?.kill();
 		departing?.replaceChildren();
-		if (results)
-			gsap.set(resultElements(), { clearProps: 'transform,opacity,filter,transitionProperty' });
+		if (results) gsap.set(resultElements(), { clearProps: 'transform,opacity' });
 	}
 
 	async function filterTools(value: string) {
@@ -52,7 +51,7 @@
 			}
 		}
 		departing.replaceChildren();
-		gsap.set(resultElements(), { clearProps: 'transform,opacity,filter,transitionProperty' });
+		gsap.set(resultElements(), { clearProps: 'transform,opacity' });
 		query = value;
 		await tick();
 		if (version !== searchVersion || closing || !dialog.open) return;
@@ -90,17 +89,15 @@
 			searchMotion.fromTo(
 				element,
 				{
-					...(moving
-						? { x, y, force3D: false, filter: 'blur(0.6px)', transitionProperty: 'none' }
-						: {}),
+					...(moving ? { x, y, force3D: false } : {}),
 					opacity: before?.opacity ?? 0
 				},
 				{
-					...(moving ? { x: 0, y: 0, force3D: false, filter: 'blur(0px)' } : {}),
+					...(moving ? { x: 0, y: 0, force3D: false } : {}),
 					opacity: 1,
 					duration: moving ? 0.22 : 0.1,
 					ease: moving ? spring : 'sine.out',
-					clearProps: moving ? 'transform,opacity,filter,transitionProperty' : 'opacity'
+					clearProps: moving ? 'transform,opacity' : 'opacity'
 				},
 				0
 			);

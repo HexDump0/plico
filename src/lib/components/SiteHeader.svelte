@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		IconChevronDown,
 		IconBrandGithub,
 		IconCurrencyDollar,
 		IconX
 	} from '@tabler/icons-svelte-runes';
+	import { linkMotion } from '$lib/motion/link';
 	import logo from '$lib/assets/plico.svg';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import ToolsDialog from './ToolsDialog.svelte';
@@ -15,9 +17,8 @@
 	let { onselect }: { onselect: (tool: CatalogTool) => void } = $props();
 	let toolsButton: HTMLButtonElement;
 	let dialog: HTMLDialogElement;
-	let content = $state<'about' | 'github' | 'donate'>('about');
+	let content = $state<'github' | 'donate'>('github');
 	const titles = {
-		about: 'A little about Plico',
 		github: 'Open by design',
 		donate: 'Support Plico'
 	};
@@ -43,40 +44,74 @@
 	class="relative z-20 mx-auto flex h-20 w-full shrink-0 items-center justify-between px-6 sm:h-24 sm:px-10 lg:grid lg:h-24 lg:grid-cols-3 lg:px-20"
 >
 	<a
+		use:linkMotion={{ hover: false, pressScale: 0.95 }}
 		href={resolve('/')}
 		class="flex shrink-0 items-center gap-2 rounded-md text-2xl font-bold lg:justify-self-start"
-		aria-label="Plico home"><img src={logo} width="26" height="30" alt="" />Plico</a
+		aria-label="Plico home"
+		><span class="flex items-center gap-2"
+			><img src={logo} width="26" height="30" alt="" />Plico</span
+		></a
 	>
 	<nav
 		aria-label="Main navigation"
 		class="flex items-center gap-4 text-sm font-medium sm:gap-8 sm:text-base lg:gap-9 lg:justify-self-center"
 	>
 		<button
+			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			bind:this={toolsButton}
 			class="flex min-h-11 items-center gap-1 rounded-md transition-colors hover:text-brand"
 			onclick={(event) => openTools(event.currentTarget)}
-			aria-haspopup="dialog">Tools <IconChevronDown size={18} aria-hidden="true" /></button
+			aria-haspopup="dialog"
+			><span class="flex items-center gap-1"
+				>Tools <IconChevronDown size={18} aria-hidden="true" /></span
+			></button
 		>
-		<button
-			class="min-h-11 rounded-md transition-colors hover:text-brand"
-			onclick={() => open('about')}
-			aria-haspopup="dialog">About</button
+		<a
+			use:linkMotion={{ hover: false, pressScale: 0.95 }}
+			href={resolve('/about')}
+			aria-current={page.url.pathname === resolve('/about') ? 'page' : undefined}
+			class="grid min-h-11 items-center rounded-xl transition-colors hover:text-brand"
 		>
+			<span class="z-10 col-start-1 row-start-1 px-4">About</span>
+			{#if page.url.pathname === resolve('/about')}
+				<span
+					aria-hidden="true"
+					class="about-selection col-start-1 row-start-1 h-full w-full rounded-xl bg-panel-hover"
+				></span>
+			{/if}
+		</a>
 	</nav>
 	<div
 		class="hidden items-center gap-8 text-base font-medium sm:flex lg:gap-10 lg:justify-self-end"
 	>
 		<button
+			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			class="flex min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand"
 			onclick={() => open('github')}
 			aria-haspopup="dialog"
-			><IconBrandGithub size={21} aria-hidden="true" /><span class="hidden md:inline">Github</span
-			><span class="sr-only md:hidden">Github</span></button
+			><span class="flex items-center gap-1.5"
+				><IconBrandGithub size={21} aria-hidden="true" /><span class="hidden md:inline">Github</span
+				><span class="sr-only md:hidden">Github</span></span
+			></button
 		>
 		<button
+			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			class="flex min-h-11 items-center gap-1 rounded-xl bg-brand px-4 py-2.5 text-panel transition-colors hover:bg-violet-300"
-			onclick={() => open('donate')}
-			aria-haspopup="dialog"><IconCurrencyDollar size={18} aria-hidden="true" />Donate</button
+			onclick={() => {
+				if (page.url.pathname === resolve('/about')) {
+					document.getElementById('support')?.scrollIntoView({
+						behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+							? 'instant'
+							: 'smooth',
+						block: 'center'
+					});
+					document.getElementById('support')?.focus({ preventScroll: true });
+				} else open('donate');
+			}}
+			aria-haspopup={page.url.pathname === resolve('/about') ? undefined : 'dialog'}
+			><span class="flex items-center gap-1"
+				><IconCurrencyDollar size={18} aria-hidden="true" />Donate</span
+			></button
 		>
 	</div>
 </header>
@@ -107,15 +142,7 @@
 			aria-label="Close dialog"><IconX size={22} aria-hidden="true" /></button
 		>
 	</div>
-	{#if content === 'about'}
-		<p class="text-base leading-relaxed text-muted">
-			Plico is an open-source PDF toolbox being built around a simple idea: working with your
-			documents should feel easy, and your files should stay yours.
-		</p>
-		<p class="mt-4 text-base leading-relaxed text-muted">
-			Local processing. A thoughtful interface. No unnecessary steps.
-		</p>
-	{:else if content === 'github'}
+	{#if content === 'github'}
 		<p class="leading-relaxed text-muted">
 			Plico is being built in the open. A link to the public repository will be available here when
 			it launches.
@@ -124,14 +151,6 @@
 		<p class="leading-relaxed text-muted">
 			Thanks for wanting to support Plico. Donations aren’t set up yet.
 		</p>
-	{/if}
-	{#if content === 'about'}
-		<div class="mt-6 flex gap-6 sm:hidden">
-			<button class="text-sm text-brand" onclick={() => (content = 'github')}>Github</button><button
-				class="text-sm text-brand"
-				onclick={() => (content = 'donate')}>Donate</button
-			>
-		</div>
 	{/if}
 </dialog>
 
