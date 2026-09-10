@@ -1,0 +1,9 @@
+[workspace]
+members = ["rust/plico-engine"]
+resolver = "2"
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true
+

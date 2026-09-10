@@ -1,6 +1,15 @@
 <script lang="ts">
-	import { IconUpload, IconFileTypePdf, IconX, IconPlus } from '@tabler/icons-svelte-runes';
+	import { onDestroy, untrack } from 'svelte';
+	import {
+		IconUpload,
+		IconFileTypePdf,
+		IconX,
+		IconPlus,
+		IconDownload,
+		IconLoader2
+	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
+	import { processPdfs } from '$lib/pdf/processor';
 
 	let {
 		selectedTool = null,
@@ -13,16 +22,41 @@
 	} = $props();
 	let input: HTMLInputElement;
 	let files = $state<File[]>([]);
-	let error = $state('');
+	let selectionError = $state('');
 	let dragging = $state(false);
 	let dragDepth = 0;
+	let processing = $state(false);
+	let processingError = $state('');
+	let resultUrl = $state('');
+	let resultSize = $state(0);
+	let controller: AbortController | undefined;
+	let previousToolId: string | undefined;
+
+	$effect(() => {
+		const toolId = selectedTool?.id;
+		if (toolId === previousToolId) return;
+		previousToolId = toolId;
+		untrack(clearProcessingResult);
+	});
+
+	onDestroy(clearProcessingResult);
+
+	function clearProcessingResult() {
+		controller?.abort();
+		controller = undefined;
+		processing = false;
+		processingError = '';
+		resultSize = 0;
+		if (resultUrl) URL.revokeObjectURL(resultUrl);
+		resultUrl = '';
+	}
 
 	function addFiles(incoming: FileList | File[]) {
 		const candidates = Array.from(incoming);
 		const pdfs = candidates.filter(
 			(file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
 		);
-		error =
+		selectionError =
 			pdfs.length === candidates.length
 				? ''
 				: 'Please choose PDF files. Other file types were skipped.';
@@ -39,9 +73,36 @@
 				next.push(file);
 		}
 		const firstFiles = files.length === 0 && next.length > 0;
+		if (next.length !== files.length) clearProcessingResult();
 		files = next;
 		input.value = '';
 		if (firstFiles && !selectedTool) onneedstool();
+	}
+
+	function removeFile(file: File) {
+		clearProcessingResult();
+		files = files.filter((item) => item !== file);
+	}
+
+	async function mergeFiles() {
+		if (processing || files.length < 2 || selectedTool?.id !== 'merge') return;
+		clearProcessingResult();
+		processing = true;
+		controller = new AbortController();
+		try {
+			const bytes = await processPdfs('merge', files, controller.signal);
+			resultSize = bytes.byteLength;
+			resultUrl = URL.createObjectURL(
+				new Blob([bytes.slice().buffer], { type: 'application/pdf' })
+			);
+		} catch (error) {
+			if (!(error instanceof DOMException && error.name === 'AbortError')) {
+				processingError = error instanceof Error ? error.message : 'The PDFs could not be merged.';
+			}
+		} finally {
+			processing = false;
+			controller = undefined;
+		}
 	}
 
 	function drop(event: DragEvent) {
@@ -132,8 +193,8 @@
 						<button
 							class="rounded-md p-2 text-muted hover:bg-white/5 hover:text-white"
 							aria-label={`Remove ${file.name}`}
-							onclick={() => (files = files.filter((item) => item !== file))}
-							><IconX size={18} aria-hidden="true" /></button
+							disabled={processing}
+							onclick={() => removeFile(file)}><IconX size={18} aria-hidden="true" /></button
 						>
 					</li>
 				{/each}
@@ -149,10 +210,62 @@
 					>.
 				{/if}
 			</div>
+			{#if selectedTool?.id === 'merge'}
+				<div class="mt-4 border-t border-white/10 pt-4">
+					{#if resultUrl}
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<p class="text-sm font-medium text-merge">
+								Merged locally · {formatSize(resultSize)}
+							</p>
+							<a
+								href={resultUrl}
+								download="plico-merged.pdf"
+								class="flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-panel transition-colors hover:bg-violet-300"
+								><IconDownload size={19} aria-hidden="true" />Download PDF</a
+							>
+						</div>
+					{:else}
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<p class="text-xs leading-relaxed text-muted">
+								{files.length < 2 ? 'Add one more PDF to merge.' : 'Ready to merge on this device.'}
+							</p>
+							{#if processing}
+								<div class="flex items-center gap-3">
+									<button
+										class="min-h-11 px-2 text-sm text-muted hover:text-white"
+										onclick={() => controller?.abort()}>Cancel</button
+									>
+									<span
+										class="flex min-h-11 items-center gap-2 rounded-xl bg-brand/80 px-4 py-2.5 text-sm font-bold text-panel"
+										><IconLoader2 class="animate-spin" size={19} aria-hidden="true" />Merging…</span
+									>
+								</div>
+							{:else}
+								<button
+									disabled={files.length < 2}
+									class="min-h-11 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-panel transition-colors hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+									onclick={mergeFiles}>Merge PDFs</button
+								>
+							{/if}
+						</div>
+					{/if}
+					{#if processingError}<p role="alert" class="mt-3 text-xs leading-relaxed text-convert">
+							{processingError}
+						</p>{/if}
+				</div>
+			{:else if selectedTool}
+				<p class="mt-4 border-t border-white/10 pt-4 text-xs leading-relaxed text-muted">
+					Merge PDF is connected to the local engine first. {selectedTool.label} is not available yet.
+				</p>
+			{/if}
 		</div>
 	{/if}
-	<p id="file-feedback" role="status" class={error ? 'mt-3 text-xs text-convert' : 'sr-only'}>
-		{error ||
+	<p
+		id="file-feedback"
+		role="status"
+		class={selectionError ? 'mt-3 text-xs text-convert' : 'sr-only'}
+	>
+		{selectionError ||
 			(files.length ? `${files.length} PDF files selected. Nothing has been uploaded.` : '')}
 	</p>
 </section>

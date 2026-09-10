@@ -1,0 +1,12 @@
+[package]
+name = "plico-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lopdf = { version = "0.44.0", default-features = false, features = ["wasm_js"] }
+wasm-bindgen = "0.2"

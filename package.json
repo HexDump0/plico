@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
+		"build:wasm": "wasm-pack build rust/plico-engine --target web --out-dir ../../src/lib/pdf/wasm --out-name plico_engine --no-pack --no-opt",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
