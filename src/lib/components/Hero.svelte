@@ -44,7 +44,7 @@
 			class="h-full w-full opacity-40 sm:opacity-45"
 		/>
 	</div>
-	<SiteHeader bind:this={header} onselect={selectTool} />
+	<SiteHeader bind:this={header} onselect={(tool) => (selectedTool = tool)} />
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"

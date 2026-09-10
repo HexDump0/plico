@@ -7,21 +7,22 @@
 		IconX
 	} from '@tabler/icons-svelte-runes';
 	import logo from '$lib/assets/plico.svg';
-	import { tools, type ToolId } from '$lib/tools';
+	import type { ToolId } from '$lib/tools';
+	import ToolsDialog from './ToolsDialog.svelte';
+	let toolsDialog: ToolsDialog;
 	import gsap from 'gsap';
 
 	let { onselect }: { onselect: (tool: ToolId) => void } = $props();
 	let dialog: HTMLDialogElement;
-	let content = $state<'tools' | 'about' | 'github' | 'donate'>('tools');
+	let content = $state<'about' | 'github' | 'donate'>('about');
 	const titles = {
-		tools: 'PDF tools',
 		about: 'A little about Plico',
 		github: 'Open by design',
 		donate: 'Support Plico'
 	};
 
 	export function openTools() {
-		open('tools');
+		toolsDialog.open();
 	}
 
 	function open(view: typeof content) {
@@ -104,27 +105,7 @@
 			aria-label="Close dialog"><IconX size={22} aria-hidden="true" /></button
 		>
 	</div>
-	{#if content === 'tools'}
-		<div class="grid gap-2">
-			{#each tools as tool (tool.id)}
-				<button
-					class="flex items-center gap-4 rounded-xl p-4 text-left transition-colors hover:bg-white/5"
-					onclick={() => {
-						onselect(tool.id);
-						dialog.close();
-					}}
-					><tool.icon class={tool.color} size={24} aria-hidden="true" /><span
-						><span class="block font-semibold {tool.color}">{tool.label}</span><span
-							class="mt-1 block text-sm text-muted">{tool.description}</span
-						></span
-					></button
-				>
-			{/each}
-		</div>
-		<p class="mt-5 text-sm leading-relaxed text-muted">
-			Choose a tool to set up your files. Processing is coming next.
-		</p>
-	{:else if content === 'about'}
+	{#if content === 'about'}
 		<p class="text-base leading-relaxed text-muted">
 			Plico is an open-source PDF toolbox being built around a simple idea: working with your
 			documents should feel easy, and your files should stay yours.
@@ -151,3 +132,5 @@
 		</div>
 	{/if}
 </dialog>
+
+<ToolsDialog bind:this={toolsDialog} {onselect} />
