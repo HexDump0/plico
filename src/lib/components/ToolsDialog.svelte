@@ -3,6 +3,7 @@
 	import gsap from 'gsap';
 	import { IconSearch, IconX } from '@tabler/icons-svelte-runes';
 	import { quickTools, toolColumns, type CatalogTool } from '$lib/tool-catalog';
+	import { searchTools } from '$lib/tool-search';
 	let {
 		onselect,
 		selectionTarget
@@ -17,6 +18,94 @@
 	let previousOverflow: string | undefined;
 	let motion: gsap.core.Timeline | undefined;
 	let trigger: HTMLElement | undefined;
+	let results: HTMLDivElement;
+	let departing: HTMLDivElement;
+	let searchMotion: gsap.core.Timeline | undefined;
+	let searchVersion = 0;
+
+	function resultElements() {
+		return Array.from(results.querySelectorAll<HTMLElement>('[data-result-key]'));
+	}
+
+	function resetSearchMotion() {
+		searchVersion += 1;
+		searchMotion?.kill();
+		departing?.replaceChildren();
+		if (results)
+			gsap.set(resultElements(), { clearProps: 'transform,opacity,filter,transitionProperty' });
+	}
+
+	async function filterTools(value: string) {
+		if (closing || query === value) return;
+		const version = ++searchVersion;
+		searchMotion?.kill();
+		dialog.style.height = `${dialog.offsetHeight}px`;
+		const previous = new Map<string, { element: HTMLElement; rect: DOMRect; opacity: number }>();
+		for (const element of resultElements()) {
+			const key = element.dataset.resultKey!;
+			if (!previous.has(key)) {
+				previous.set(key, {
+					element,
+					rect: element.getBoundingClientRect(),
+					opacity: Number(getComputedStyle(element).opacity)
+				});
+			}
+		}
+		departing.replaceChildren();
+		gsap.set(resultElements(), { clearProps: 'transform,opacity,filter,transitionProperty' });
+		query = value;
+		await tick();
+		if (version !== searchVersion || closing || !dialog.open) return;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+		const current = resultElements();
+		const keys = new Set(current.map((element) => element.dataset.resultKey!));
+		const bounds = departing.getBoundingClientRect();
+		searchMotion = gsap.timeline({ onComplete: () => departing.replaceChildren() });
+		for (const [key, before] of previous) {
+			if (keys.has(key) || before.opacity === 0) continue;
+			const ghost = before.element.cloneNode(true) as HTMLElement;
+			Object.assign(ghost.style, {
+				position: 'absolute',
+				left: `${before.rect.left - bounds.left}px`,
+				top: `${before.rect.top - bounds.top}px`,
+				width: `${before.rect.width}px`,
+				height: `${before.rect.height}px`,
+				margin: '0',
+				listStyle: 'none',
+				transform: 'none',
+				opacity: String(before.opacity)
+			});
+			departing.appendChild(ghost);
+			searchMotion.to(ghost, { opacity: 0, duration: 0.07, ease: 'sine.out' }, 0);
+		}
+		for (const element of current) {
+			const before = previous.get(element.dataset.resultKey!);
+			const rect = element.getBoundingClientRect();
+			const deltaX = before ? before.rect.left - rect.left : 0;
+			const deltaY = before ? before.rect.top - rect.top : 0;
+			const x = Math.abs(deltaX) > 3 ? deltaX : 0;
+			const y = Math.abs(deltaY) > 3 ? deltaY : 0;
+			const moving = x !== 0 || y !== 0;
+			searchMotion.fromTo(
+				element,
+				{
+					...(moving
+						? { x, y, force3D: false, filter: 'blur(0.6px)', transitionProperty: 'none' }
+						: {}),
+					opacity: before?.opacity ?? 0
+				},
+				{
+					...(moving ? { x: 0, y: 0, force3D: false, filter: 'blur(0px)' } : {}),
+					opacity: 1,
+					duration: moving ? 0.22 : 0.1,
+					ease: moving ? spring : 'sine.out',
+					clearProps: moving ? 'transform,opacity,filter,transitionProperty' : 'opacity'
+				},
+				0
+			);
+		}
+	}
 
 	function spring(progress: number) {
 		const frequency = 9;
@@ -40,16 +129,13 @@
 			clipPath: `inset(${insetY}px ${insetX}px round 12px)`
 		};
 	}
-	const words = $derived(query.toLowerCase().trim().split(/\s+/).filter(Boolean));
-	const matches = (tool: CatalogTool, category = '') =>
-		words.every((word) => `${tool.label} ${category}`.toLowerCase().includes(word));
-	const shortcuts = $derived(quickTools.filter((tool) => matches(tool)));
+	const shortcuts = $derived(searchTools(quickTools, query));
 	const columns = $derived(
 		toolColumns.map((column) =>
 			column
 				.map((category) => ({
 					...category,
-					tools: category.tools.filter((tool) => matches(tool, category.name))
+					tools: searchTools(category.tools, query, category.name)
 				}))
 				.filter((category) => category.tools.length)
 		)
@@ -102,6 +188,8 @@
 
 	function restore() {
 		motion?.kill();
+		resetSearchMotion();
+		dialog.style.removeProperty('height');
 		dialog.style.removeProperty('transform');
 		dialog.style.removeProperty('opacity');
 		dialog.style.removeProperty('clip-path');
@@ -182,7 +270,8 @@
 			<IconSearch size={22} stroke={1.8} class="shrink-0" aria-hidden="true" />
 			<input
 				bind:this={search}
-				bind:value={query}
+				value={query}
+				oninput={(event) => filterTools(event.currentTarget.value)}
 				type="search"
 				aria-label="Find a tool"
 				placeholder="Find a tool..."
@@ -197,7 +286,8 @@
 			><IconX size={22} aria-hidden="true" /></button
 		>
 	</div>
-	<div class="min-h-0 sm:min-h-148">
+	<div bind:this={results} class="relative min-h-0 sm:min-h-148">
+		<span class="sr-only" role="status">{resultCount} tools found</span>
 		{#if shortcuts.length}
 			<div
 				class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 lg:gap-4"
@@ -205,8 +295,9 @@
 			>
 				{#each shortcuts as tool (tool.id)}
 					<button
+						data-result-key={`quick-${tool.id}`}
 						onclick={() => select(tool)}
-						class="flex min-h-16 items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-bold text-panel transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.98] lg:px-5 lg:text-base {tool.color}"
+						class="flex min-h-16 items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-bold text-panel transition-[filter] duration-150 hover:brightness-110 active:scale-[0.98] lg:px-5 lg:text-base {tool.color}"
 					>
 						<tool.icon size={24} stroke={1.8} class="shrink-0" aria-hidden="true" />{tool.label}
 					</button>
@@ -220,10 +311,15 @@
 						<div class="flex min-w-0 flex-col gap-6">
 							{#each column as category (category.name)}
 								<section aria-label={category.name}>
-									<h3 class="mb-2 text-lg font-semibold">{category.name}</h3>
+									<h3
+										data-result-key={`category-${category.name}`}
+										class="mb-2 text-lg font-semibold"
+									>
+										{category.name}
+									</h3>
 									<ul>
 										{#each category.tools as tool (tool.id)}
-											<li>
+											<li data-result-key={tool.id}>
 												<button
 													onclick={() => select(tool)}
 													class="group -ml-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base lg:min-h-8.5 lg:py-1 {category.color}"
@@ -244,18 +340,27 @@
 				{/each}
 			</div>
 		{:else}
-			<div class="flex min-h-64 flex-col items-center justify-center gap-3 text-center">
+			<div
+				data-result-key="empty"
+				class="flex min-h-64 flex-col items-center justify-center gap-3 text-center"
+			>
 				<p class="text-lg font-medium">No tools found</p>
 				<p class="text-muted">Try a format or action, like “JPG” or “rotate”.</p>
 				<button
 					class="mt-2 rounded-lg px-3 py-2 text-brand hover:bg-brand/10"
 					onclick={() => {
-						query = '';
+						filterTools('');
 						search.focus();
 					}}>Clear search</button
 				>
 			</div>
 		{/if}
+		<div
+			bind:this={departing}
+			class="pointer-events-none absolute inset-0"
+			aria-hidden="true"
+			inert
+		></div>
 	</div>
 </dialog>
 
@@ -263,6 +368,7 @@
 	dialog {
 		--backdrop-opacity: 0.5;
 		--content-opacity: 1;
+		scrollbar-gutter: stable;
 	}
 
 	dialog > div {
