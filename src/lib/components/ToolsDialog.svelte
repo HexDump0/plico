@@ -12,7 +12,31 @@
 	let notice = $state('');
 	let closing = false;
 	let previousOverflow: string | undefined;
-	let motion: gsap.core.Tween | undefined;
+	let motion: gsap.core.Timeline | undefined;
+	let trigger: HTMLElement | undefined;
+
+	function spring(progress: number) {
+		const frequency = 9;
+		const time = frequency * progress;
+		const settled = 1 - (1 + frequency) * Math.exp(-frequency);
+		return (1 - (1 + time) * Math.exp(-time)) / settled;
+	}
+
+	function origin() {
+		const panel = dialog.getBoundingClientRect();
+		const source = trigger?.getBoundingClientRect();
+		const width = Math.min(source?.width ?? 80, panel.width);
+		const height = Math.min(source?.height ?? 44, panel.height);
+		const insetX = (panel.width - width) / 2;
+		const insetY = (panel.height - height) / 2;
+		const left = panel.left - Number(gsap.getProperty(dialog, 'x'));
+		const top = panel.top - Number(gsap.getProperty(dialog, 'y'));
+		return {
+			x: source ? source.left + source.width / 2 - left - panel.width / 2 : 0,
+			y: source ? source.top + source.height / 2 - top - panel.height / 2 : 0,
+			clipPath: `inset(${insetY}px ${insetX}px round 12px)`
+		};
+	}
 	const words = $derived(query.toLowerCase().trim().split(/\s+/).filter(Boolean));
 	const matches = (tool: CatalogTool, category = '') =>
 		words.every((word) => `${tool.label} ${category}`.toLowerCase().includes(word));
@@ -31,8 +55,9 @@
 		shortcuts.length + columns.flat().reduce((count, category) => count + category.tools.length, 0)
 	);
 
-	export async function open() {
+	export async function open(source?: HTMLElement) {
 		if (dialog.open) return;
+		trigger = source;
 		query = '';
 		notice = '';
 		closing = false;
@@ -44,17 +69,32 @@
 		search.focus({ preventScroll: true });
 		motion?.kill();
 		if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			motion = gsap.fromTo(
-				dialog,
-				{ y: 12, opacity: 0 },
-				{
-					y: 0,
-					opacity: 1,
-					duration: 0.22,
-					ease: 'power2.out',
-					clearProps: 'transform,opacity'
-				}
-			);
+			motion = gsap
+				.timeline()
+				.fromTo(
+					dialog,
+					{ ...origin(), '--backdrop-opacity': 0, filter: 'blur(0px)' },
+					{
+						x: 0,
+						y: 0,
+						clipPath: 'inset(0px 0px round 24px)',
+						'--backdrop-opacity': 0.5,
+						duration: 0.42,
+						ease: spring,
+						clearProps: 'transform,clipPath,--backdrop-opacity'
+					}
+				)
+				.to(dialog, { filter: 'blur(1px)', duration: 0.05, ease: 'sine.out' }, 0)
+				.to(
+					dialog,
+					{
+						filter: 'blur(0px)',
+						duration: 0.37,
+						ease: 'power2.out',
+						clearProps: 'filter'
+					},
+					0.05
+				);
 		}
 	}
 
@@ -62,9 +102,14 @@
 		motion?.kill();
 		dialog.style.removeProperty('transform');
 		dialog.style.removeProperty('opacity');
+		dialog.style.removeProperty('clip-path');
+		dialog.style.removeProperty('--backdrop-opacity');
+		dialog.style.removeProperty('filter');
 		if (previousOverflow !== undefined) document.body.style.overflow = previousOverflow;
 		previousOverflow = undefined;
 		closing = false;
+		trigger?.focus({ preventScroll: true });
+		trigger = undefined;
 	}
 
 	function close() {
@@ -75,13 +120,17 @@
 			dialog.close();
 			return;
 		}
-		motion = gsap.to(dialog, {
-			y: 6,
-			opacity: 0,
-			duration: 0.14,
-			ease: 'power2.in',
-			onComplete: () => dialog.close()
-		});
+		motion = gsap
+			.timeline({ onComplete: () => dialog.close() })
+			.to(dialog, {
+				...origin(),
+				'--backdrop-opacity': 0,
+				duration: 0.38,
+				ease: spring
+			})
+			.to(dialog, { filter: 'blur(0.8px)', duration: 0.04, ease: 'sine.out' }, 0)
+			.to(dialog, { filter: 'blur(0px)', duration: 0.34, ease: 'power2.out' }, 0.04)
+			.to(dialog, { opacity: 0, duration: 0.14, ease: 'sine.inOut' }, 0.16);
 	}
 
 	function select(tool: CatalogTool) {
@@ -113,7 +162,7 @@
 <dialog
 	bind:this={dialog}
 	aria-labelledby="tools-title"
-	class="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-300 overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white backdrop:bg-black/50 sm:p-8 lg:p-12"
+	class="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-300 overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white sm:p-8 lg:p-12"
 	onclick={outside}
 	oncancel={(event) => {
 		event.preventDefault();
@@ -208,3 +257,13 @@
 		{/if}
 	</div>
 </dialog>
+
+<style>
+	dialog {
+		--backdrop-opacity: 0.5;
+	}
+
+	dialog::backdrop {
+		background: rgb(0 0 0 / var(--backdrop-opacity));
+	}
+</style>

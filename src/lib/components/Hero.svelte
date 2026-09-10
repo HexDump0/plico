@@ -106,7 +106,7 @@
 						class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap text-brand transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base"
 						style:--chip-left="11.73%"
 						style:--chip-top="87.44%"
-						onclick={() => header.openTools()}
+						onclick={(event) => header.openTools(event.currentTarget)}
 						aria-haspopup="dialog"
 						onpointerenter={() => animateConnection('more')}
 						onfocus={() => animateConnection('more')}

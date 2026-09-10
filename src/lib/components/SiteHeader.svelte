@@ -21,8 +21,8 @@
 		donate: 'Support Plico'
 	};
 
-	export function openTools() {
-		toolsDialog.open();
+	export function openTools(source?: HTMLElement) {
+		toolsDialog.open(source);
 	}
 
 	function open(view: typeof content) {
@@ -52,7 +52,7 @@
 	>
 		<button
 			class="flex min-h-11 items-center gap-1 rounded-md transition-colors hover:text-brand"
-			onclick={openTools}
+			onclick={(event) => openTools(event.currentTarget)}
 			aria-haspopup="dialog">Tools <IconChevronDown size={18} aria-hidden="true" /></button
 		>
 		<button
