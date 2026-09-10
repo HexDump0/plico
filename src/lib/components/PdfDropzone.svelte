@@ -1,14 +1,21 @@
 <script lang="ts">
 	import { IconUpload, IconFileTypePdf, IconX, IconPlus } from '@tabler/icons-svelte-runes';
-	import { tools, type ToolId } from '$lib/tools';
+	import type { CatalogTool } from '$lib/tool-catalog';
 
-	let { selectedTool = null }: { selectedTool?: ToolId | null } = $props();
+	let {
+		selectedTool = null,
+		onneedstool,
+		onmoretools
+	}: {
+		selectedTool?: CatalogTool | null;
+		onneedstool: () => void;
+		onmoretools: () => void;
+	} = $props();
 	let input: HTMLInputElement;
 	let files = $state<File[]>([]);
 	let error = $state('');
 	let dragging = $state(false);
 	let dragDepth = 0;
-	const tool = $derived(tools.find((item) => item.id === selectedTool));
 
 	function addFiles(incoming: FileList | File[]) {
 		const candidates = Array.from(incoming);
@@ -31,8 +38,10 @@
 			)
 				next.push(file);
 		}
+		const firstFiles = files.length === 0 && next.length > 0;
 		files = next;
 		input.value = '';
+		if (firstFiles && !selectedTool) onneedstool();
 	}
 
 	function drop(event: DragEvent) {
@@ -95,8 +104,8 @@
 			<span class="text-xl font-medium lg:text-lg 2xl:text-xl"
 				>{dragging
 					? 'Let go. They stay here.'
-					: tool
-						? `Drop PDFs to ${tool.label.toLowerCase()}`
+					: selectedTool
+						? `Drop PDFs for ${selectedTool.label}`
 						: 'Drop in your PDFs'}</span
 			>
 		</button>
@@ -129,7 +138,17 @@
 					</li>
 				{/each}
 			</ul>
-			<p class="mt-4 text-xs leading-relaxed text-muted"></p>
+			<div class="mt-3 text-xs leading-relaxed text-muted" role="status">
+				{#if selectedTool}
+					{selectedTool.label} selected
+				{:else}
+					Choose a tool, or browse
+					<button
+						class="rounded-sm text-brand underline decoration-brand/40 underline-offset-4 hover:decoration-brand"
+						onclick={onmoretools}>More tools</button
+					>.
+				{/if}
+			</div>
 		</div>
 	{/if}
 	<p id="file-feedback" role="status" class={error ? 'mt-3 text-xs text-convert' : 'sr-only'}>

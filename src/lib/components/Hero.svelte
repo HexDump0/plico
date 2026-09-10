@@ -1,14 +1,19 @@
 <script lang="ts">
 	import gsap from 'gsap';
+	import { onDestroy } from 'svelte';
 	import { IconPlus } from '@tabler/icons-svelte-runes';
 	import { tools, type ToolId } from '$lib/tools';
+	import type { CatalogTool } from '$lib/tool-catalog';
 	import SiteHeader from './SiteHeader.svelte';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import FeatureStrip from './FeatureStrip.svelte';
 
 	let root: HTMLDivElement;
 	let header: SiteHeader;
-	let selectedTool = $state<ToolId | null>(null);
+	let selectedTool = $state<CatalogTool | null>(null);
+	let moreToolsButton: HTMLButtonElement;
+	let toolCue: gsap.core.Tween | undefined;
+	const selectedHeroTool = $derived(selectedTool?.heroTool ?? selectedTool?.id);
 	const positions = [
 		{ left: 14.26, top: 0, path: 'M321 28C362.5 28 362.5 108 404 108' },
 		{ left: 3.94, top: 21.08, path: 'M219 122C311.5 122 311.5 173 404 173' },
@@ -17,8 +22,34 @@
 	];
 
 	function selectTool(tool: ToolId) {
-		selectedTool = selectedTool === tool ? null : tool;
+		clearToolCue();
+		selectedTool =
+			selectedHeroTool === tool ? null : (tools.find((item) => item.id === tool) ?? null);
 	}
+
+	function clearToolCue() {
+		toolCue?.kill();
+		if (root) gsap.set(root.querySelectorAll('.tool-chip'), { clearProps: 'boxShadow' });
+	}
+
+	function suggestTool() {
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		clearToolCue();
+		toolCue = gsap.fromTo(
+			root.querySelectorAll('.tool-chip'),
+			{ boxShadow: '0 0 0 0px rgb(167 139 250 / 0)' },
+			{
+				boxShadow: '0 0 0 3px rgb(167 139 250 / 0.22)',
+				duration: 0.45,
+				repeat: 1,
+				yoyo: true,
+				ease: 'sine.inOut',
+				clearProps: 'boxShadow'
+			}
+		);
+	}
+
+	onDestroy(clearToolCue);
 
 	function animateConnection(id: string) {
 		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -44,7 +75,13 @@
 			class="h-full w-full opacity-40 sm:opacity-45"
 		/>
 	</div>
-	<SiteHeader bind:this={header} onselect={(tool) => (selectedTool = tool)} />
+	<SiteHeader
+		bind:this={header}
+		onselect={(tool) => {
+			clearToolCue();
+			selectedTool = tool;
+		}}
+	/>
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"
@@ -54,7 +91,7 @@
 				<h1 id="hero-title" class="text-5xl leading-tight font-bold tracking-tight">
 					All the PDF tools<br />You would ever want
 				</h1>
-				<p class="mt-3 text-lg text-subtle font-bold">Blablabla idk what to write here</p>
+				<p class="mt-3 text-lg font-bold text-subtle">Blablabla idk what to write here</p>
 			</div>
 			<div
 				class="tool-scene relative z-10 w-full min-w-0 lg:col-span-7 lg:aspect-[989/446] lg:max-w-4xl lg:justify-self-end"
@@ -85,13 +122,13 @@
 				<div class="mb-6 flex flex-wrap gap-2 sm:gap-3 lg:contents" aria-label="Choose a PDF tool">
 					{#each tools as tool, index (tool.id)}
 						<button
-							class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base {tool.color} {selectedTool ===
+							class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base {tool.color} {selectedHeroTool ===
 							tool.id
 								? 'ring-2 ring-current'
 								: ''}"
 							style:--chip-left={`${positions[index].left}%`}
 							style:--chip-top={`${positions[index].top}%`}
-							aria-pressed={selectedTool === tool.id}
+							aria-pressed={selectedHeroTool === tool.id}
 							onclick={() => selectTool(tool.id)}
 							onpointerenter={() => animateConnection(tool.id)}
 							onfocus={() => animateConnection(tool.id)}
@@ -103,6 +140,7 @@
 						>
 					{/each}
 					<button
+						bind:this={moreToolsButton}
 						class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap text-brand transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base"
 						style:--chip-left="11.73%"
 						style:--chip-top="87.44%"
@@ -115,7 +153,11 @@
 					>
 				</div>
 				<div class="h-80 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%]">
-					<PdfDropzone {selectedTool} />
+					<PdfDropzone
+						{selectedTool}
+						onneedstool={suggestTool}
+						onmoretools={() => header.openTools(moreToolsButton)}
+					/>
 				</div>
 			</div>
 		</section>

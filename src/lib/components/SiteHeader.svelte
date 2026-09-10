@@ -7,12 +7,13 @@
 		IconX
 	} from '@tabler/icons-svelte-runes';
 	import logo from '$lib/assets/plico.svg';
-	import type { ToolId } from '$lib/tools';
+	import type { CatalogTool } from '$lib/tool-catalog';
 	import ToolsDialog from './ToolsDialog.svelte';
 	let toolsDialog: ToolsDialog;
 	import gsap from 'gsap';
 
-	let { onselect }: { onselect: (tool: ToolId) => void } = $props();
+	let { onselect }: { onselect: (tool: CatalogTool) => void } = $props();
+	let toolsButton: HTMLButtonElement;
 	let dialog: HTMLDialogElement;
 	let content = $state<'about' | 'github' | 'donate'>('about');
 	const titles = {
@@ -22,7 +23,7 @@
 	};
 
 	export function openTools(source?: HTMLElement) {
-		toolsDialog.open(source);
+		toolsDialog.open(source ?? toolsButton);
 	}
 
 	function open(view: typeof content) {
@@ -51,6 +52,7 @@
 		class="flex items-center gap-4 text-sm font-medium sm:gap-8 sm:text-base lg:gap-9 lg:justify-self-center"
 	>
 		<button
+			bind:this={toolsButton}
 			class="flex min-h-11 items-center gap-1 rounded-md transition-colors hover:text-brand"
 			onclick={(event) => openTools(event.currentTarget)}
 			aria-haspopup="dialog">Tools <IconChevronDown size={18} aria-hidden="true" /></button
@@ -133,4 +135,4 @@
 	{/if}
 </dialog>
 
-<ToolsDialog bind:this={toolsDialog} {onselect} />
+<ToolsDialog bind:this={toolsDialog} {onselect} selectionTarget={() => toolsButton} />

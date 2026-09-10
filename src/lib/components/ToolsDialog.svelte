@@ -3,13 +3,16 @@
 	import gsap from 'gsap';
 	import { IconSearch, IconX } from '@tabler/icons-svelte-runes';
 	import { quickTools, toolColumns, type CatalogTool } from '$lib/tool-catalog';
-	import type { ToolId } from '$lib/tools';
-
-	let { onselect }: { onselect: (tool: ToolId) => void } = $props();
+	let {
+		onselect,
+		selectionTarget
+	}: {
+		onselect: (tool: CatalogTool) => void;
+		selectionTarget: () => HTMLElement | undefined;
+	} = $props();
 	let dialog: HTMLDialogElement;
 	let search: HTMLInputElement;
 	let query = $state('');
-	let notice = $state('');
 	let closing = false;
 	let previousOverflow: string | undefined;
 	let motion: gsap.core.Timeline | undefined;
@@ -59,7 +62,6 @@
 		if (dialog.open) return;
 		trigger = source;
 		query = '';
-		notice = '';
 		closing = false;
 		await tick();
 		previousOverflow = document.body.style.overflow;
@@ -104,6 +106,7 @@
 		dialog.style.removeProperty('opacity');
 		dialog.style.removeProperty('clip-path');
 		dialog.style.removeProperty('--backdrop-opacity');
+		dialog.style.removeProperty('--content-opacity');
 		dialog.style.removeProperty('filter');
 		if (previousOverflow !== undefined) document.body.style.overflow = previousOverflow;
 		previousOverflow = undefined;
@@ -130,16 +133,15 @@
 			})
 			.to(dialog, { filter: 'blur(0.8px)', duration: 0.04, ease: 'sine.out' }, 0)
 			.to(dialog, { filter: 'blur(0px)', duration: 0.34, ease: 'power2.out' }, 0.04)
+			.to(dialog, { '--content-opacity': 0, duration: 0.1, ease: 'sine.inOut' }, 0.02)
 			.to(dialog, { opacity: 0, duration: 0.14, ease: 'sine.inOut' }, 0.16);
 	}
 
 	function select(tool: CatalogTool) {
-		if (tool.heroTool) {
-			onselect(tool.heroTool);
-			close();
-		} else {
-			notice = `${tool.label} is coming soon.`;
-		}
+		if (closing) return;
+		trigger = selectionTarget() ?? trigger;
+		onselect(tool);
+		close();
 	}
 
 	function outside(event: MouseEvent) {
@@ -181,7 +183,6 @@
 			<input
 				bind:this={search}
 				bind:value={query}
-				oninput={() => (notice = '')}
 				type="search"
 				aria-label="Find a tool"
 				placeholder="Find a tool..."
@@ -229,7 +230,7 @@
 												>
 													<tool.icon size={20} stroke={1.8} class="shrink-0" aria-hidden="true" />
 													<span
-														class="text-tool-label transition-colors duration-150 group-hover:text-inherit "
+														class="text-tool-label transition-colors duration-150 group-hover:text-inherit"
 														>{tool.label}</span
 													>
 												</button>
@@ -261,6 +262,11 @@
 <style>
 	dialog {
 		--backdrop-opacity: 0.5;
+		--content-opacity: 1;
+	}
+
+	dialog > div {
+		opacity: var(--content-opacity);
 	}
 
 	dialog::backdrop {
