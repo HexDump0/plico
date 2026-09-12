@@ -225,7 +225,7 @@
 	function select(tool: CatalogTool) {
 		if (closing) return;
 		trigger = selectionTarget() ?? trigger;
-		onselect(tool);
+		dialog.addEventListener('close', () => onselect(tool), { once: true });
 		close();
 	}
 

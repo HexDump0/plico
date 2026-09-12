@@ -47,7 +47,7 @@
 </svelte:head>
 
 <div class="about-shell flex min-h-svh flex-col">
-	<SiteHeader onselect={(tool) => goto(resolve(`/?tool=${encodeURIComponent(tool.id)}`))} />
+	<SiteHeader onselect={(tool) => goto(resolve('/tools/[tool]', { tool: tool.id }))} />
 	<main
 		id="main-content"
 		class="mx-auto grid w-full max-w-7xl flex-1 content-center gap-12 px-6 pt-10 pb-16 sm:px-10 sm:pt-14 sm:pb-20 lg:grid-cols-12 lg:gap-20 lg:px-16 lg:py-20"

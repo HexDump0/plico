@@ -41,6 +41,13 @@ export interface CatalogTool {
 	heroTool?: ToolId;
 }
 
+export function findTool(id: string) {
+	return [
+		...quickTools,
+		...toolColumns.flatMap((column) => column.flatMap((group) => group.tools))
+	].find((tool) => tool.id === id);
+}
+
 export const quickTools = [
 	{ id: 'merge', label: 'Merge PDF', icon: IconCopy, color: 'bg-merge', heroTool: 'merge' },
 	{

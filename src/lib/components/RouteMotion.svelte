@@ -40,7 +40,9 @@
 		finish();
 		const from = navigation.from?.route.id;
 		const to = navigation.to?.route.id;
-		const betweenPages = (from === '/' && to === '/about') || (from === '/about' && to === '/');
+		const isDetail = (route: string | null | undefined) =>
+			route === '/about' || route === '/tools/[tool]';
+		const betweenPages = (from === '/' && isDetail(to)) || (isDetail(from) && to === '/');
 		if (
 			!betweenPages ||
 			!document.startViewTransition ||
@@ -48,7 +50,7 @@
 		)
 			return;
 
-		const enteringAbout = to === '/about';
+		const enteringDetail = to !== '/';
 		const root = document.documentElement;
 		const distance = window.innerWidth;
 		const strip = document.querySelector('.feature-strip')?.getBoundingClientRect();
@@ -57,10 +59,10 @@
 			: window.innerHeight;
 		root.dataset.pageTransition = 'active';
 		gsap.set(root, {
-			'--hero-x': enteringAbout ? '0px' : `${-distance}px`,
-			'--about-x': enteringAbout ? `${distance}px` : '0px',
-			'--strip-y': enteringAbout ? '0px' : `${stripDistance}px`,
-			'--about-selection': enteringAbout ? 0 : 1
+			'--hero-x': enteringDetail ? '0px' : `${-distance}px`,
+			'--about-x': enteringDetail ? `${distance}px` : '0px',
+			'--strip-y': enteringDetail ? '0px' : `${stripDistance}px`,
+			'--about-selection': from === '/about' ? 1 : 0
 		});
 
 		return new Promise<void>((resume) => {
@@ -73,7 +75,7 @@
 				.then(() => {
 					if (active !== transition) return;
 					const incomingStrip = document.querySelector('.feature-strip')?.getBoundingClientRect();
-					if (!enteringAbout && incomingStrip) {
+					if (!enteringDetail && incomingStrip) {
 						gsap.set(root, {
 							'--strip-y': `${Math.max(incomingStrip.height, window.innerHeight - incomingStrip.top)}px`
 						});
@@ -81,14 +83,14 @@
 					motion = gsap.timeline({ onComplete: finish });
 					motion.to(
 						root,
-						{ '--about-selection': enteringAbout ? 1 : 0, duration: 0.24, ease: 'power2.out' },
+						{ '--about-selection': to === '/about' ? 1 : 0, duration: 0.24, ease: 'power2.out' },
 						0
 					);
 					motion.to(
 						root,
 						{
-							'--hero-x': enteringAbout ? `${-distance}px` : '0px',
-							'--about-x': enteringAbout ? '0px' : `${distance}px`,
+							'--hero-x': enteringDetail ? `${-distance}px` : '0px',
+							'--about-x': enteringDetail ? '0px' : `${distance}px`,
 							duration: 0.64,
 							ease: spring
 						},
@@ -97,11 +99,11 @@
 					motion.to(
 						root,
 						{
-							'--strip-y': enteringAbout ? `${stripDistance}px` : '0px',
-							duration: enteringAbout ? 0.38 : 0.5,
-							ease: enteringAbout ? 'power2.inOut' : spring
+							'--strip-y': enteringDetail ? `${stripDistance}px` : '0px',
+							duration: enteringDetail ? 0.38 : 0.5,
+							ease: enteringDetail ? 'power2.inOut' : spring
 						},
-						enteringAbout ? 0 : 0.1
+						enteringDetail ? 0 : 0.1
 					);
 				})
 				.catch(() => {
@@ -132,7 +134,8 @@
 	:global(html[data-page-transition] .hero-stage) {
 		view-transition-name: hero-content;
 	}
-	:global(html[data-page-transition] .about-shell main) {
+	:global(html[data-page-transition] .about-shell main),
+	:global(html[data-page-transition] .tool-shell main) {
 		view-transition-name: about-content;
 	}
 	:global(html[data-page-transition] .feature-strip) {

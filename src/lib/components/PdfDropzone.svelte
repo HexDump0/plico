@@ -1,121 +1,132 @@
 <script lang="ts">
-	import { onDestroy, untrack } from 'svelte';
-	import {
-		IconUpload,
-		IconFileTypePdf,
-		IconX,
-		IconPlus,
-		IconDownload,
-		IconLoader2
-	} from '@tabler/icons-svelte-runes';
+	import gsap from 'gsap';
+	import { onMount, onDestroy, tick } from 'svelte';
+	import { IconUpload, IconFileTypePdf, IconX, IconPlus } from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
-	import { processPdfs } from '$lib/pdf/processor';
-
+	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	let {
 		selectedTool = null,
-		onneedstool,
-		onmoretools
+		onneedstool = () => {},
+		onready
 	}: {
 		selectedTool?: CatalogTool | null;
-		onneedstool: () => void;
-		onmoretools: () => void;
+		onneedstool?: () => void;
+		onready?: () => void;
 	} = $props();
+	const workspace = getWorkspace();
 	let input: HTMLInputElement;
-	let files = $state<File[]>([]);
-	let selectionError = $state('');
 	let dragging = $state(false);
-	let dragDepth = 0;
-	let processing = $state(false);
-	let processingError = $state('');
-	let resultUrl = $state('');
-	let resultSize = $state(0);
-	let controller: AbortController | undefined;
-	let previousToolId: string | undefined;
-
-	$effect(() => {
-		const toolId = selectedTool?.id;
-		if (toolId === previousToolId) return;
-		previousToolId = toolId;
-		untrack(clearProcessingResult);
-	});
-
-	onDestroy(clearProcessingResult);
-
-	function clearProcessingResult() {
-		controller?.abort();
-		controller = undefined;
-		processing = false;
-		processingError = '';
-		resultSize = 0;
-		if (resultUrl) URL.revokeObjectURL(resultUrl);
-		resultUrl = '';
+	let depth = 0;
+	let transitioning = $state(false);
+	let emptyPanel = $state<HTMLButtonElement>();
+	let filePanel = $state<HTMLDivElement>();
+	let motion: gsap.core.Timeline | undefined;
+	let disposed = false;
+	let pendingRemoval: File | undefined;
+	let removalMotion: gsap.core.Timeline | undefined;
+	let removingRow: HTMLElement | undefined;
+	function finishRemoval() {
+		removalMotion?.kill();
+		removalMotion = undefined;
+		if (pendingRemoval) workspace.remove(pendingRemoval);
+		pendingRemoval = undefined;
+		if (removingRow) gsap.set(removingRow, { clearProps: 'all' });
+		removingRow = undefined;
+		if (filePanel) gsap.set(filePanel, { clearProps: 'opacity,transform' });
 	}
-
-	function addFiles(incoming: FileList | File[]) {
-		const candidates = Array.from(incoming);
-		const pdfs = candidates.filter(
-			(file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-		);
-		selectionError =
-			pdfs.length === candidates.length
-				? ''
-				: 'Please choose PDF files. Other file types were skipped.';
-		const next = [...files];
-		for (const file of pdfs) {
-			if (
-				!next.some(
-					(existing) =>
-						existing.name === file.name &&
-						existing.size === file.size &&
-						existing.lastModified === file.lastModified
-				)
-			)
-				next.push(file);
+	function remove(file: File, button: HTMLButtonElement) {
+		finishTransition();
+		finishRemoval();
+		if (!workspace.files.includes(file)) return;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			workspace.remove(file);
+			return;
 		}
-		const firstFiles = files.length === 0 && next.length > 0;
-		if (next.length !== files.length) clearProcessingResult();
-		files = next;
-		input.value = '';
-		if (firstFiles && !selectedTool) onneedstool();
-	}
-
-	function removeFile(file: File) {
-		clearProcessingResult();
-		files = files.filter((item) => item !== file);
-	}
-
-	async function mergeFiles() {
-		if (processing || files.length < 2 || selectedTool?.id !== 'merge') return;
-		clearProcessingResult();
-		processing = true;
-		controller = new AbortController();
-		try {
-			const bytes = await processPdfs('merge', files, controller.signal);
-			resultSize = bytes.byteLength;
-			resultUrl = URL.createObjectURL(
-				new Blob([bytes.slice().buffer], { type: 'application/pdf' })
-			);
-		} catch (error) {
-			if (!(error instanceof DOMException && error.name === 'AbortError')) {
-				processingError = error instanceof Error ? error.message : 'The PDFs could not be merged.';
+		pendingRemoval = file;
+		removingRow = button.closest('li')!;
+		const lastFile = workspace.files.length === 1;
+		removalMotion = gsap.timeline({
+			onComplete: async () => {
+				finishRemoval();
+				if (!lastFile) return;
+				await tick();
+				if (disposed || workspace.files.length || !emptyPanel) return;
+				motion = gsap
+					.timeline({ onComplete: finishTransition })
+					.fromTo(
+						emptyPanel,
+						{ opacity: 0, scale: 0.98 },
+						{ opacity: 1, scale: 1, duration: 0.24, ease: 'power2.out' }
+					);
 			}
-		} finally {
-			processing = false;
-			controller = undefined;
+		});
+		if (lastFile) {
+			removalMotion.to(filePanel!, { opacity: 0, y: -8, duration: 0.16, ease: 'power2.in' });
+		} else {
+			removalMotion.to(removingRow, { opacity: 0, x: 8, duration: 0.12, ease: 'power2.in' }).to(
+				removingRow,
+				{
+					height: 0,
+					paddingTop: 0,
+					paddingBottom: 0,
+					marginTop: 0,
+					marginBottom: 0,
+					overflow: 'hidden',
+					duration: 0.2,
+					ease: 'power2.inOut'
+				},
+				0.08
+			);
 		}
 	}
-
-	function drop(event: DragEvent) {
-		event.preventDefault();
-		dragging = false;
-		dragDepth = 0;
-		if (event.dataTransfer) addFiles(event.dataTransfer.files);
+	function finishTransition() {
+		motion?.kill();
+		motion = undefined;
+		if (filePanel) gsap.set(filePanel, { clearProps: 'opacity,transform' });
+		if (emptyPanel) gsap.set(emptyPanel, { clearProps: 'opacity,transform' });
+		transitioning = false;
 	}
-
-	function formatSize(bytes: number) {
-		return bytes < 1024 * 1024
-			? `${Math.max(1, Math.round(bytes / 1024))} KB`
-			: `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	onMount(() => {
+		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+		const changed = () => {
+			if (preference.matches) {
+				finishTransition();
+				finishRemoval();
+			}
+		};
+		preference.addEventListener('change', changed);
+		return () => preference.removeEventListener('change', changed);
+	});
+	onDestroy(() => {
+		disposed = true;
+		motion?.kill();
+		finishRemoval();
+	});
+	async function add(files: FileList) {
+		finishRemoval();
+		finishTransition();
+		const wasEmpty = workspace.files.length === 0;
+		workspace.add(files);
+		input.value = '';
+		if (!wasEmpty || !workspace.files.length) return;
+		if (selectedTool && onready) {
+			onready();
+			return;
+		}
+		if (!selectedTool) onneedstool();
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		transitioning = true;
+		await tick();
+		if (disposed || !transitioning || !emptyPanel || !filePanel) return;
+		motion = gsap
+			.timeline({ onComplete: finishTransition })
+			.to(emptyPanel, { opacity: 0, scale: 0.98, duration: 0.16, ease: 'power2.in' })
+			.fromTo(
+				filePanel,
+				{ opacity: 0, y: 8 },
+				{ opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' },
+				0.1
+			);
 	}
 </script>
 
@@ -126,146 +137,78 @@
 	multiple
 	class="hidden"
 	aria-label="Choose PDF files"
-	onchange={() => input.files && addFiles(input.files)}
+	onchange={() => input.files && add(input.files)}
 />
-
 <section
 	aria-label="PDF file selection"
-	class="drop-zone flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 transition-colors duration-200 sm:p-6 {dragging
+	class="flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
 		: ''}"
 	ondragenter={(event) => {
 		event.preventDefault();
-		dragDepth += 1;
+		depth++;
 		dragging = true;
 	}}
-	ondragover={(event) => {
-		event.preventDefault();
-		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-	}}
+	ondragover={(event) => event.preventDefault()}
 	ondragleave={() => {
-		dragDepth -= 1;
-		if (dragDepth <= 0) dragging = false;
+		depth--;
+		if (depth <= 0) dragging = false;
 	}}
-	ondrop={drop}
+	ondrop={(event) => {
+		event.preventDefault();
+		dragging = false;
+		depth = 0;
+		if (event.dataTransfer) add(event.dataTransfer.files);
+	}}
 >
-	{#if files.length === 0}
-		<button
-			type="button"
-			class="group flex min-h-56 w-full flex-1 flex-col items-center justify-center gap-5 rounded-2xl border-2 border-dashed border-current text-muted transition-colors duration-200 hover:bg-brand/5 hover:text-brand sm:min-h-60 lg:min-h-0"
-			onclick={() => input.click()}
-			aria-label="Choose PDFs or drop them here"
-			aria-describedby="file-feedback"
-		>
-			<IconUpload
-				class="upload-icon size-10 transition-transform duration-200 sm:size-11"
-				stroke={1.8}
-				aria-hidden="true"
-			/>
-			<span class="text-xl font-medium lg:text-lg 2xl:text-xl"
-				>{dragging
-					? 'Let go. They stay here.'
-					: selectedTool
-						? `Drop PDFs for ${selectedTool.label}`
-						: 'Drop in your PDFs'}</span
+	<div class="relative flex min-h-0 flex-1 flex-col">
+		{#if workspace.files.length === 0 || transitioning}
+			<button
+				bind:this={emptyPanel}
+				inert={transitioning}
+				class="flex min-h-52 flex-1 flex-col items-center justify-center gap-5 rounded-xl border-2 border-dashed border-muted/50 p-4 text-muted transition-colors hover:border-brand hover:bg-brand/5 hover:text-brand {transitioning
+					? 'absolute inset-0'
+					: ''}"
+				onclick={() => input.click()}
 			>
-		</button>
-	{:else}
-		<div class="flex min-h-0 flex-1 flex-col">
-			<div class="mb-4 flex items-center justify-between gap-3">
-				<h2 class="font-semibold">
-					{files.length}
-					{files.length === 1 ? 'PDF selected' : 'PDFs selected'}
-				</h2>
-				<button
-					class="flex items-center gap-1 rounded-lg p-2 text-sm text-brand hover:bg-brand/10"
-					onclick={() => input.click()}><IconPlus size={18} aria-hidden="true" /> Add files</button
+				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
+					>{dragging ? 'You can let go btw' : 'Drop in your PDFs'}</span
 				>
-			</div>
-			<ul class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-				{#each files as file (file)}
-					<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
-						<IconFileTypePdf class="shrink-0 text-brand" size={26} aria-hidden="true" />
-						<div class="min-w-0 flex-1">
-							<p class="truncate text-sm" title={file.name}>{file.name}</p>
-							<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>
-						</div>
-						<button
-							class="rounded-md p-2 text-muted hover:bg-white/5 hover:text-white"
-							aria-label={`Remove ${file.name}`}
-							disabled={processing}
-							onclick={() => removeFile(file)}><IconX size={18} aria-hidden="true" /></button
-						>
-					</li>
-				{/each}
-			</ul>
-			<div class="mt-3 text-xs leading-relaxed text-muted" role="status">
-				{#if selectedTool}
-					{selectedTool.label} selected
-				{:else}
-					Choose a tool, or browse
+				<span class="rounded-lg bg-brand px-5 py-3 text-sm font-bold text-canvas">Choose PDFs</span>
+			</button>
+		{/if}
+		{#if workspace.files.length}
+			<div bind:this={filePanel} class="flex min-h-0 flex-1 flex-col">
+				<div class="mb-3 flex items-center justify-between gap-2">
+					<h2 class="text-sm font-semibold">
+						{workspace.files.length}
+						{workspace.files.length === 1 ? 'PDF' : 'PDFs'} added
+					</h2>
 					<button
-						class="rounded-sm text-brand underline decoration-brand/40 underline-offset-4 hover:decoration-brand"
-						onclick={onmoretools}>More tools</button
-					>.
-				{/if}
-			</div>
-			{#if selectedTool?.id === 'merge'}
-				<div class="mt-4 border-t border-white/10 pt-4">
-					{#if resultUrl}
-						<div class="flex flex-wrap items-center justify-between gap-3">
-							<p class="text-sm font-medium text-merge">
-								Merged locally · {formatSize(resultSize)}
-							</p>
-							<a
-								href={resultUrl}
-								download="plico-merged.pdf"
-								class="flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-panel transition-colors hover:bg-violet-300"
-								><IconDownload size={19} aria-hidden="true" />Download PDF</a
-							>
-						</div>
-					{:else}
-						<div class="flex flex-wrap items-center justify-between gap-3">
-							<p class="text-xs leading-relaxed text-muted">
-								{files.length < 2 ? 'Add one more PDF to merge.' : 'Ready to merge on this device.'}
-							</p>
-							{#if processing}
-								<div class="flex items-center gap-3">
-									<button
-										class="min-h-11 px-2 text-sm text-muted hover:text-white"
-										onclick={() => controller?.abort()}>Cancel</button
-									>
-									<span
-										class="flex min-h-11 items-center gap-2 rounded-xl bg-brand/80 px-4 py-2.5 text-sm font-bold text-panel"
-										><IconLoader2 class="animate-spin" size={19} aria-hidden="true" />Merging…</span
-									>
-								</div>
-							{:else}
-								<button
-									disabled={files.length < 2}
-									class="min-h-11 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-panel transition-colors hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
-									onclick={mergeFiles}>Merge PDFs</button
-								>
-							{/if}
-						</div>
-					{/if}
-					{#if processingError}<p role="alert" class="mt-3 text-xs leading-relaxed text-convert">
-							{processingError}
-						</p>{/if}
+						class="flex items-center gap-1 rounded-lg p-2 text-sm text-brand hover:bg-brand/10"
+						onclick={() => input.click()}><IconPlus size={18} /> Add files</button
+					>
 				</div>
-			{:else if selectedTool}
-				<p class="mt-4 border-t border-white/10 pt-4 text-xs leading-relaxed text-muted">
-					Merge PDF is connected to the local engine first. {selectedTool.label} is not available yet.
-				</p>
-			{/if}
-		</div>
-	{/if}
-	<p
-		id="file-feedback"
-		role="status"
-		class={selectionError ? 'mt-3 text-xs text-convert' : 'sr-only'}
-	>
-		{selectionError ||
-			(files.length ? `${files.length} PDF files selected. Nothing has been uploaded.` : '')}
-	</p>
+				<ul class="min-h-0 flex-1 space-y-2 overflow-y-auto">
+					{#each workspace.files as file (file)}
+						<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
+							<IconFileTypePdf class="shrink-0 text-brand" size={26} />
+							<div class="min-w-0 flex-1">
+								<p class="truncate text-sm" title={file.name}>{file.name}</p>
+								<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>
+							</div>
+							<button
+								class="rounded-md p-2 text-muted hover:text-white"
+								aria-label={`Remove ${file.name}`}
+								onclick={(event) => remove(file, event.currentTarget)}><IconX size={18} /></button
+							>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
+	</div>
+	{#if workspace.error}<p role="status" class="mt-3 text-center text-xs text-convert">
+			{workspace.error}
+		</p>{/if}
 </section>

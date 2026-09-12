@@ -2,6 +2,9 @@
 	import gsap from 'gsap';
 	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { getWorkspace } from '$lib/workspace.svelte';
 	import { quickTools, toolColumns } from '$lib/tool-catalog';
 	import { IconPlus } from '@tabler/icons-svelte-runes';
 	import { tools, type ToolId } from '$lib/tools';
@@ -11,9 +14,16 @@
 	import FeatureStrip from './FeatureStrip.svelte';
 
 	let root: HTMLDivElement;
+	const workspace = getWorkspace();
+	function openTool(id: string) {
+		if (id === 'convert') {
+			header.openTools();
+			return;
+		}
+		void goto(resolve('/tools/[tool]', { tool: id }));
+	}
 	let header: SiteHeader;
 	let selectedTool = $state<CatalogTool | null>(null);
-	let moreToolsButton: HTMLButtonElement;
 	let toolCue: gsap.core.Tween | undefined;
 	onMount(() => {
 		const toolId = page.url.searchParams.get('tool');
@@ -34,6 +44,10 @@
 
 	function selectTool(tool: ToolId) {
 		clearToolCue();
+		if (workspace.files.length || tool === 'convert') {
+			openTool(tool);
+			return;
+		}
 		selectedTool =
 			selectedHeroTool === tool ? null : (tools.find((item) => item.id === tool) ?? null);
 	}
@@ -50,7 +64,7 @@
 			root.querySelectorAll('.tool-chip'),
 			{ boxShadow: '0 0 0 0px rgb(167 139 250 / 0)' },
 			{
-				boxShadow: '0 0 0 3px rgb(167 139 250 / 0.22)',
+				boxShadow: '0 0 0 2px rgb(167 139 250 / 0.35)',
 				duration: 0.45,
 				repeat: 1,
 				yoyo: true,
@@ -90,7 +104,7 @@
 		bind:this={header}
 		onselect={(tool) => {
 			clearToolCue();
-			selectedTool = tool;
+			openTool(tool.id);
 		}}
 	/>
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
@@ -102,7 +116,6 @@
 				<h1 id="hero-title" class="text-5xl leading-tight font-bold tracking-tight">
 					All the PDF tools<br />You would ever want
 				</h1>
-				<p class="mt-3 text-lg font-bold text-subtle">Blablabla idk what to write here</p>
 			</div>
 			<div
 				class="tool-scene relative z-10 w-full min-w-0 lg:col-span-7 lg:aspect-[989/446] lg:max-w-4xl lg:justify-self-end"
@@ -151,7 +164,6 @@
 						>
 					{/each}
 					<button
-						bind:this={moreToolsButton}
 						class="tool-chip flex min-h-11 items-center justify-center gap-2 rounded-xl bg-panel px-4 py-3 text-sm font-bold whitespace-nowrap text-brand transition-all duration-200 hover:-translate-y-0.5 hover:bg-panel-hover sm:gap-3 sm:px-5 sm:text-base lg:absolute lg:h-[12.556%] lg:min-h-10 lg:w-[18.2%] lg:gap-1 lg:px-0 lg:py-0 lg:text-sm xl:gap-3 xl:text-base"
 						style:--chip-left="11.73%"
 						style:--chip-top="87.44%"
@@ -166,8 +178,8 @@
 				<div class="h-80 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%]">
 					<PdfDropzone
 						{selectedTool}
+						onready={() => selectedTool && openTool(selectedTool.id)}
 						onneedstool={suggestTool}
-						onmoretools={() => header.openTools(moreToolsButton)}
 					/>
 				</div>
 			</div>
