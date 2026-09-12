@@ -45,6 +45,12 @@
 		outline-offset: 6px;
 	}
 
+	input:not([type='checkbox']):not([type='radio']):focus-visible,
+	textarea:focus-visible {
+		outline: 1px solid rgb(255 255 255 / 0.28);
+		outline-offset: 1px;
+	}
+
 	::selection {
 		background: var(--color-brand);
 		color: var(--color-canvas);

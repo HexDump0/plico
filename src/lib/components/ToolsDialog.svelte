@@ -262,7 +262,7 @@
 	>
 		<h2 id="tools-title" class="text-3xl font-semibold tracking-tight">Tools</h2>
 		<label
-			class="order-3 col-span-2 flex h-12 min-w-0 items-center gap-3 rounded-xl bg-canvas px-4 text-muted focus-within:ring-2 focus-within:ring-brand sm:order-none sm:col-span-1"
+			class="order-3 col-span-2 flex h-12 min-w-0 items-center gap-3 rounded-xl border border-transparent bg-canvas px-4 text-muted focus-within:border-white/25 sm:order-none sm:col-span-1"
 		>
 			<IconSearch size={22} stroke={1.8} class="shrink-0" aria-hidden="true" />
 			<input

@@ -174,7 +174,6 @@
 				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
 					>{dragging ? 'You can let go btw' : 'Drop in your PDFs'}</span
 				>
-				<span class="rounded-lg bg-brand px-5 py-3 text-sm font-bold text-canvas">Choose PDFs</span>
 			</button>
 		{/if}
 		{#if workspace.files.length}

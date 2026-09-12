@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onDestroy, untrack } from 'svelte';
-	import { resolve } from '$app/paths';
+	import { onDestroy, onMount, untrack } from 'svelte';
+	import { flip } from 'svelte/animate';
 	import {
 		IconArrowLeft,
 		IconArrowRight,
@@ -24,6 +24,17 @@
 	const accent = $derived(isMerge ? 'text-merge' : isSplit ? 'text-split' : 'text-brand');
 	let input = $state<HTMLInputElement>();
 	let dragged = $state(-1);
+	let dropTarget = $state(-1);
+	let reducedMotion = $state(false);
+	onMount(() => {
+		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+		const update = () => {
+			reducedMotion = preference.matches;
+		};
+		update();
+		preference.addEventListener('change', update);
+		return () => preference.removeEventListener('change', update);
+	});
 	let activeFile = $state<File | null>(null);
 	let pageNumber = $state(1);
 	let pageCount = $state(0);
@@ -36,7 +47,6 @@
 	const currentFile = $derived(
 		activeFile && workspace.files.includes(activeFile) ? activeFile : workspace.files[0]
 	);
-	const totalSize = $derived(workspace.files.reduce((sum, file) => sum + file.size, 0));
 	$effect(() => {
 		void workspace.files;
 		untrack(clearResult);
@@ -82,29 +92,13 @@
 	}
 </script>
 
-<main id="main-content" class="flex flex-1 flex-col border-t border-white/10">
+<main id="main-content" class="flex flex-1 flex-col">
 	<div
-		class="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-6 py-5 sm:px-10 lg:px-16"
+		class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]"
 	>
-		<div class="flex items-center gap-4">
-			<a
-				href={resolve('/')}
-				aria-label="Back to home"
-				class="rounded-xl border border-white/10 p-2.5 text-muted hover:bg-panel hover:text-white"
-				><IconArrowLeft size={20} /></a
-			>
-			<div class="flex items-center gap-3">
-				<span class="rounded-xl bg-panel p-3 {accent}"><tool.icon size={24} stroke={1.7} /></span>
-				<div>
-					<h1 class="text-xl font-semibold tracking-tight sm:text-2xl">{tool.label}</h1>
-				</div>
-			</div>
-		</div>
-	</div>
-	<div class="grid flex-1 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]">
 		<section
 			aria-label="Documents"
-			class="min-w-0 bg-panel/20 p-6 sm:p-10 lg:p-12"
+			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 pb-12 sm:px-10 lg:px-16 lg:pt-10 lg:pb-20"
 			ondragover={(event) => {
 				if (dragged < 0) event.preventDefault();
 			}}
@@ -115,8 +109,31 @@
 				}
 			}}
 		>
+			<img
+				src="/hero-contours.svg"
+				alt=""
+				aria-hidden="true"
+				class="pointer-events-none absolute -right-48 -bottom-48 -z-10 w-240 max-w-none opacity-[0.07] select-none"
+			/>
+			<div class="flex flex-wrap items-center justify-end gap-4">
+				{#if isMerge && workspace.files.length > 1}
+					<button
+						disabled={processing}
+						class="flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs text-muted transition-colors hover:text-merge disabled:opacity-40"
+						onclick={() =>
+							(workspace.files = [...workspace.files].sort((a, b) =>
+								a.name.localeCompare(b.name, undefined, { numeric: true })
+							))}><IconArrowsSort size={17} />Sort by filename</button
+					>
+				{:else if isSplit && workspace.files.length}
+					<button
+						class="flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs text-muted hover:text-split"
+						onclick={() => input?.click()}><IconPlus size={17} />Add PDFs</button
+					>
+				{/if}
+			</div>
 			{#if workspace.files.length === 0}
-				<div class="mx-auto flex h-full max-w-xl flex-col justify-center py-8 lg:py-16">
+				<div class="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center py-12 lg:py-20">
 					<div class="h-80"><PdfDropzone selectedTool={tool} /></div>
 				</div>
 			{:else}
@@ -129,25 +146,8 @@
 					aria-label="Add PDF files"
 					onchange={() => input?.files && add(input.files)}
 				/>
-				<div class="mb-7 flex flex-wrap items-center justify-between gap-3">
-					<div>
-						<h2 class="text-sm font-semibold">
-							Documents <span class="ml-2 rounded-md bg-white/5 px-2 py-1 text-xs text-muted"
-								>{workspace.files.length}</span
-							>
-						</h2>
-						{#if isMerge}<p class="mt-2 text-xs text-muted">
-								Drag to reorder, or use the arrows.
-							</p>{/if}
-					</div>
-					<button
-						disabled={processing}
-						class="flex items-center gap-2 rounded-xl border border-white/10 bg-panel px-4 py-3 text-xs font-semibold hover:border-brand/50 disabled:opacity-40"
-						onclick={() => input?.click()}><IconPlus size={17} />Add PDFs</button
-					>
-				</div>
 				{#if isSplit && currentFile}
-					<label class="mb-6 block text-xs text-muted"
+					<label class="mt-10 mb-6 block text-xs text-muted"
 						>Document<select
 							class="mt-2 block w-full max-w-md truncate rounded-xl border border-white/10 bg-panel p-3 text-sm text-white"
 							value={workspace.files.indexOf(currentFile)}
@@ -185,25 +185,39 @@
 						>
 					</div>
 				{:else}
-					<ol class="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,13rem)]">
+					<ol
+						aria-label="PDF order"
+						class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
+					>
 						{#each workspace.files as file, index (file)}
 							<li
+								animate:flip={{ duration: reducedMotion ? 0 : 220 }}
 								draggable={isMerge && !processing}
-								class="min-w-0 rounded-2xl border bg-panel p-3 {dragged === index
-									? 'border-brand opacity-50'
-									: 'border-white/10'}"
+								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-2xl border bg-panel p-3 shadow-xl shadow-black/20 transition-[border-color,box-shadow] sm:w-52 {dragged ===
+								index
+									? 'border-merge opacity-40'
+									: dropTarget === index
+										? 'border-merge shadow-merge/10'
+										: 'border-white/10 hover:border-white/25'}"
 								ondragstart={(event) => {
 									dragged = index;
 									event.dataTransfer?.setData('text/plain', String(index));
 								}}
-								ondragend={() => (dragged = -1)}
+								ondragend={() => {
+									dragged = -1;
+									dropTarget = -1;
+								}}
 								ondragover={(event) => {
-									if (dragged >= 0) event.preventDefault();
+									if (dragged >= 0) {
+										event.preventDefault();
+										dropTarget = index;
+									}
 								}}
 								ondrop={(event) => {
 									event.preventDefault();
 									if (!processing && dragged >= 0) workspace.move(dragged, index);
 									dragged = -1;
+									dropTarget = -1;
 								}}
 							>
 								<div class="mb-2 flex items-center justify-between">
@@ -217,7 +231,11 @@
 										onclick={() => workspace.remove(file)}><IconX size={17} /></button
 									>
 								</div>
-								<PdfPreview {file} />
+								<div
+									class="motion-safe:transition-transform motion-safe:duration-200 motion-safe:group-hover:-translate-y-1"
+								>
+									<PdfPreview {file} />
+								</div>
 								<p class="mt-3 truncate text-xs font-medium" title={file.name}>{file.name}</p>
 								<div class="mt-2 flex flex-wrap items-center justify-between gap-1">
 									<span class="text-xs text-muted">{formatSize(file.size)}</span>{#if isMerge}<div
@@ -240,6 +258,20 @@
 								</div>
 							</li>
 						{/each}
+						<li
+							class="flex w-[calc((100%-1.25rem)/2)] items-center justify-center self-stretch sm:w-52"
+						>
+							<button
+								disabled={processing}
+								onclick={() => input?.click()}
+								class="group flex min-h-52 w-full flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-merge/25 bg-canvas/40 text-merge/80 transition-colors hover:border-merge/60 hover:bg-merge/5 hover:text-merge disabled:opacity-40 sm:min-h-64"
+							>
+								<span
+									class="flex size-12 items-center justify-center rounded-full bg-merge/10 motion-safe:transition-transform motion-safe:group-hover:scale-110"
+									><IconPlus size={24} stroke={1.5} /></span
+								><span class="text-sm font-medium">Add PDFs</span>
+							</button>
+						</li>
 					</ol>
 				{/if}
 				{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
@@ -249,27 +281,17 @@
 		</section>
 		<aside
 			aria-label={`${tool.label} settings`}
-			class="flex flex-col border-t border-white/10 bg-panel/40 lg:border-t-0 lg:border-l"
+			class="m-6 flex flex-col rounded-2xl bg-panel lg:sticky lg:top-6 lg:ml-0 lg:h-[calc(100svh-9rem)] lg:self-start lg:overflow-y-auto"
 		>
 			<div class="flex-1 space-y-7 p-6 sm:p-8">
-				<div>
-					<h2 class="text-lg font-semibold">
-						{isMerge ? 'Merge settings' : isSplit ? 'Split settings' : tool.label}
-					</h2>
-				</div>
+				<h1 class="flex items-center gap-3 text-xl font-semibold tracking-tight">
+					<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
+				</h1>
 				{#if isMerge}
-					<button
-						disabled={processing || workspace.files.length < 2}
-						class="flex w-full items-center justify-between rounded-xl border border-white/10 p-3 text-sm text-muted hover:bg-panel disabled:opacity-40"
-						onclick={() =>
-							(workspace.files = [...workspace.files].sort((a, b) =>
-								a.name.localeCompare(b.name, undefined, { numeric: true })
-							))}>Sort by filename<IconArrowsSort size={18} /></button
-					>
 					<label class="block text-sm font-medium"
 						>Output filename
 						<div
-							class="mt-3 flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-brand"
+							class="mt-3 flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-white/25"
 						>
 							<input
 								bind:value={filename}
@@ -279,24 +301,11 @@
 							/><span class="text-xs text-muted">.pdf</span>
 						</div></label
 					>
-					<div class="space-y-3 border-t border-white/10 pt-5 text-xs">
-						<div class="flex justify-between text-muted">
-							<span>Documents</span><span class="text-white">{workspace.files.length}</span>
-						</div>
-						<div class="flex justify-between text-muted">
-							<span>Total input size</span><span class="text-white">{formatSize(totalSize)}</span>
-						</div>
-						<div class="flex justify-between text-muted">
-							<span>Result</span><span class="text-merge">One PDF</span>
-						</div>
-					</div>
 				{:else if isSplit}
 					{#key currentFile}<SplitSettings {pageCount} />{/key}
-				{:else}
-					<p class="text-sm leading-relaxed text-muted">This tool is not available yet.</p>
 				{/if}
 			</div>
-			<div class="space-y-4 border-t border-white/10 p-6 sm:p-8" aria-live="polite">
+			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
 				{#if result}<div class="flex items-center gap-2 text-sm text-merge">
 						<IconCheck size={19} />Your PDF is ready · {formatSize(resultSize)}
 					</div>
@@ -307,15 +316,7 @@
 						class="flex min-h-14 items-center justify-center gap-3 rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas hover:bg-violet-300"
 						><IconDownload size={20} />Download PDF</a
 					>
-				{:else}<p class="text-xs leading-relaxed text-muted">
-						{isMerge
-							? workspace.files.length < 2
-								? 'Add at least two PDFs.'
-								: ''
-							: isSplit
-								? 'Split processing is not available yet.'
-								: ''}
-					</p>
+				{:else}
 					<button
 						disabled={!isMerge || workspace.files.length < 2 || processing}
 						onclick={merge}
