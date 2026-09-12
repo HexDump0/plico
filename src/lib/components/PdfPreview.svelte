@@ -49,7 +49,9 @@
 </script>
 
 <div
-	class="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg bg-canvas/60 p-4"
+	class="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden {status
+		? 'bg-canvas/60 p-4'
+		: 'bg-white'}"
 >
 	<canvas
 		bind:this={canvas}

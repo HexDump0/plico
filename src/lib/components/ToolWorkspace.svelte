@@ -6,7 +6,8 @@
 		IconArrowRight,
 		IconPlus,
 		IconX,
-		IconArrowsSort,
+		IconSortAscendingLetters,
+		IconSortDescendingLetters,
 		IconDownload,
 		IconCheck,
 		IconLoader2
@@ -25,6 +26,7 @@
 	let input = $state<HTMLInputElement>();
 	let dragged = $state(-1);
 	let dropTarget = $state(-1);
+	let sortAscending = $state(true);
 	let reducedMotion = $state(false);
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -90,6 +92,13 @@
 		workspace.add(files);
 		if (input) input.value = '';
 	}
+	function sortByFilename() {
+		const direction = sortAscending ? 1 : -1;
+		workspace.files = [...workspace.files].sort(
+			(a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) * direction
+		);
+		sortAscending = !sortAscending;
+	}
 </script>
 
 <main id="main-content" class="flex flex-1 flex-col">
@@ -119,11 +128,13 @@
 				{#if isMerge && workspace.files.length > 1}
 					<button
 						disabled={processing}
-						class="flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs text-muted transition-colors hover:text-merge disabled:opacity-40"
-						onclick={() =>
-							(workspace.files = [...workspace.files].sort((a, b) =>
-								a.name.localeCompare(b.name, undefined, { numeric: true })
-							))}><IconArrowsSort size={17} />Sort by filename</button
+						class="flex size-11 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+						aria-label={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
+						title={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
+						onclick={sortByFilename}
+						>{#if sortAscending}<IconSortAscendingLetters
+								size={20}
+							/>{:else}<IconSortDescendingLetters size={20} />{/if}</button
 					>
 				{:else if isSplit && workspace.files.length}
 					<button
@@ -168,14 +179,14 @@
 							<button
 								aria-label="Previous page"
 								disabled={pageNumber <= 1}
-								class="rounded-lg border border-white/10 p-2 disabled:opacity-30"
+								class="rounded-lg border-2 border-white/10 p-2 disabled:opacity-30"
 								onclick={() => pageNumber--}><IconArrowLeft size={18} /></button
 							><span class="text-xs text-muted"
 								>Page {pageNumber} {pageCount ? `of ${pageCount}` : ''}</span
 							><button
 								aria-label="Next page"
 								disabled={pageNumber >= pageCount}
-								class="rounded-lg border border-white/10 p-2 disabled:opacity-30"
+								class="rounded-lg border-2 border-white/10 p-2 disabled:opacity-30"
 								onclick={() => pageNumber++}><IconArrowRight size={18} /></button
 							>
 						</div>
@@ -193,12 +204,11 @@
 							<li
 								animate:flip={{ duration: reducedMotion ? 0 : 220 }}
 								draggable={isMerge && !processing}
-								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-2xl border bg-panel p-3 shadow-xl shadow-black/20 transition-[border-color,box-shadow] sm:w-52 {dragged ===
-								index
-									? 'border-merge opacity-40'
+								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 sm:w-52 {dragged === index
+									? 'opacity-40'
 									: dropTarget === index
-										? 'border-merge shadow-merge/10'
-										: 'border-white/10 hover:border-white/25'}"
+										? 'scale-[1.02]'
+										: ''}"
 								ondragstart={(event) => {
 									dragged = index;
 									event.dataTransfer?.setData('text/plain', String(index));
@@ -220,56 +230,39 @@
 									dropTarget = -1;
 								}}
 							>
-								<div class="mb-2 flex items-center justify-between">
+								<div
+									class="relative overflow-hidden rounded-xl border-2 border-white/10 bg-panel shadow-lg shadow-black/20"
+								>
+									<PdfPreview {file} />
 									<span
-										class="flex size-6 items-center justify-center rounded-md bg-white/5 text-xs {accent}"
+										class="absolute top-3 left-3 text-xs font-bold text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)]"
 										>{index + 1}</span
 									><button
 										disabled={processing}
-										class="rounded-lg p-1.5 text-muted hover:text-convert"
+										class="absolute top-2 right-2 flex size-8 items-center justify-center text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)] transition-colors hover:text-convert"
 										aria-label={`Remove ${file.name}`}
-										onclick={() => workspace.remove(file)}><IconX size={17} /></button
+										onclick={() => workspace.remove(file)}><IconX size={18} stroke={2.5} /></button
+									>
+									<span
+										class="absolute right-3 bottom-3 text-[11px] font-semibold text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)]"
+										>{formatSize(file.size)}</span
 									>
 								</div>
-								<div
-									class="motion-safe:transition-transform motion-safe:duration-200 motion-safe:group-hover:-translate-y-1"
-								>
-									<PdfPreview {file} />
-								</div>
-								<p class="mt-3 truncate text-xs font-medium" title={file.name}>{file.name}</p>
-								<div class="mt-2 flex flex-wrap items-center justify-between gap-1">
-									<span class="text-xs text-muted">{formatSize(file.size)}</span>{#if isMerge}<div
-											class="flex"
-										>
-											<button
-												disabled={index === 0 || processing}
-												aria-label={`Move ${file.name} earlier`}
-												class="rounded-lg p-2 text-muted hover:bg-white/5 hover:text-white disabled:opacity-20"
-												onclick={() => workspace.move(index, index - 1)}
-												><IconArrowLeft size={16} /></button
-											><button
-												disabled={index === workspace.files.length - 1 || processing}
-												aria-label={`Move ${file.name} later`}
-												class="rounded-lg p-2 text-muted hover:bg-white/5 hover:text-white disabled:opacity-20"
-												onclick={() => workspace.move(index, index + 1)}
-												><IconArrowRight size={16} /></button
-											>
-										</div>{/if}
-								</div>
+								<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>{file.name}</p>
 							</li>
 						{/each}
 						<li
-							class="flex w-[calc((100%-1.25rem)/2)] items-center justify-center self-stretch sm:w-52"
+							class="flex w-[calc((100%-1.25rem)/2)] items-center justify-start self-stretch sm:w-52"
 						>
 							<button
 								disabled={processing}
 								onclick={() => input?.click()}
-								class="group flex min-h-52 w-full flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-merge/25 bg-canvas/40 text-merge/80 transition-colors hover:border-merge/60 hover:bg-merge/5 hover:text-merge disabled:opacity-40 sm:min-h-64"
+								class="group flex flex-col items-center justify-center gap-4 px-6 py-8 text-merge/80 transition-colors hover:text-merge disabled:opacity-40"
 							>
 								<span
 									class="flex size-12 items-center justify-center rounded-full bg-merge/10 motion-safe:transition-transform motion-safe:group-hover:scale-110"
 									><IconPlus size={24} stroke={1.5} /></span
-								><span class="text-sm font-medium">Add PDFs</span>
+								>
 							</button>
 						</li>
 					</ol>

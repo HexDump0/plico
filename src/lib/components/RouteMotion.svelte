@@ -5,7 +5,14 @@
 
 	let active: ViewTransition | undefined;
 	let motion: gsap.core.Timeline | undefined;
-	const properties = ['--hero-x', '--about-x', '--strip-y', '--about-selection'];
+	const properties = [
+		'--hero-x',
+		'--about-x',
+		'--strip-y',
+		'--about-selection',
+		'--detail-old-x',
+		'--detail-new-x'
+	];
 
 	function spring(progress: number) {
 		const frequency = 8;
@@ -43,8 +50,11 @@
 		const isDetail = (route: string | null | undefined) =>
 			route === '/about' || route === '/tools/[tool]';
 		const betweenPages = (from === '/' && isDetail(to)) || (isDetail(from) && to === '/');
+		const betweenToolAndAbout =
+			(from === '/tools/[tool]' && to === '/about') ||
+			(from === '/about' && to === '/tools/[tool]');
 		if (
-			!betweenPages ||
+			(!betweenPages && !betweenToolAndAbout) ||
 			!document.startViewTransition ||
 			window.matchMedia('(prefers-reduced-motion: reduce)').matches
 		)
@@ -53,16 +63,19 @@
 		const enteringDetail = to !== '/';
 		const root = document.documentElement;
 		const distance = window.innerWidth;
+		const detailDirection = to === '/about' ? 1 : -1;
 		const strip = document.querySelector('.feature-strip')?.getBoundingClientRect();
 		const stripDistance = strip
 			? Math.max(strip.height, window.innerHeight - strip.top)
 			: window.innerHeight;
-		root.dataset.pageTransition = 'active';
+		root.dataset.pageTransition = betweenToolAndAbout ? 'detail-swap' : 'home-swap';
 		gsap.set(root, {
 			'--hero-x': enteringDetail ? '0px' : `${-distance}px`,
 			'--about-x': enteringDetail ? `${distance}px` : '0px',
 			'--strip-y': enteringDetail ? '0px' : `${stripDistance}px`,
-			'--about-selection': from === '/about' ? 1 : 0
+			'--about-selection': from === '/about' ? 1 : 0,
+			'--detail-old-x': '0px',
+			'--detail-new-x': `${detailDirection * distance}px`
 		});
 
 		return new Promise<void>((resume) => {
@@ -74,6 +87,21 @@
 			void transition.ready
 				.then(() => {
 					if (active !== transition) return;
+					if (betweenToolAndAbout) {
+						motion = gsap.timeline({ onComplete: finish });
+						motion.to(
+							root,
+							{
+								'--detail-old-x': `${detailDirection * -distance}px`,
+								'--detail-new-x': '0px',
+								'--about-selection': to === '/about' ? 1 : 0,
+								duration: 0.58,
+								ease: spring
+							},
+							0
+						);
+						return;
+					}
 					const incomingStrip = document.querySelector('.feature-strip')?.getBoundingClientRect();
 					if (!enteringDetail && incomingStrip) {
 						gsap.set(root, {
@@ -131,14 +159,14 @@
 		opacity: var(--about-selection);
 		transform: scale(calc(0.94 + var(--about-selection) * 0.06));
 	}
-	:global(html[data-page-transition] .hero-stage) {
+	:global(html[data-page-transition='home-swap'] .hero-stage) {
 		view-transition-name: hero-content;
 	}
 	:global(html[data-page-transition] .about-shell main),
 	:global(html[data-page-transition] .tool-shell main) {
 		view-transition-name: about-content;
 	}
-	:global(html[data-page-transition] .feature-strip) {
+	:global(html[data-page-transition='home-swap'] .feature-strip) {
 		view-transition-name: feature-strip;
 	}
 	:global(html[data-page-transition] header) {
@@ -166,17 +194,23 @@
 	:global(html[data-page-transition]::view-transition-group(site-header)) {
 		z-index: 2;
 	}
-	:global(html[data-page-transition]::view-transition-old(hero-content)),
-	:global(html[data-page-transition]::view-transition-new(hero-content)) {
+	:global(html[data-page-transition='home-swap']::view-transition-old(hero-content)),
+	:global(html[data-page-transition='home-swap']::view-transition-new(hero-content)) {
 		transform: translateX(var(--hero-x));
 	}
-	:global(html[data-page-transition]::view-transition-old(about-content)),
-	:global(html[data-page-transition]::view-transition-new(about-content)) {
+	:global(html[data-page-transition='home-swap']::view-transition-old(about-content)),
+	:global(html[data-page-transition='home-swap']::view-transition-new(about-content)) {
 		transform: translateX(var(--about-x));
 	}
-	:global(html[data-page-transition]::view-transition-old(feature-strip)),
-	:global(html[data-page-transition]::view-transition-new(feature-strip)) {
+	:global(html[data-page-transition='home-swap']::view-transition-old(feature-strip)),
+	:global(html[data-page-transition='home-swap']::view-transition-new(feature-strip)) {
 		transform: translateY(var(--strip-y));
+	}
+	:global(html[data-page-transition='detail-swap']::view-transition-old(about-content)) {
+		transform: translateX(var(--detail-old-x));
+	}
+	:global(html[data-page-transition='detail-swap']::view-transition-new(about-content)) {
+		transform: translateX(var(--detail-new-x));
 	}
 	@keyframes -global-hold-transition {
 		from {
