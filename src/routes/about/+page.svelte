@@ -3,7 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import {
-		IconArrowUpRight,
 		IconCurrencyDollar,
 		IconHexagon,
 		IconLink,

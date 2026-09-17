@@ -6,4 +6,8 @@ resolver = "2"
 lto = true
 opt-level = "s"
 strip = true
+codegen-units = 1
+# wasm32-unknown-unknown cannot unwind, so panics already abort. Saying so drops
+# the landing pad code that would never run. Cargo ignores this for test builds.
+panic = "abort"
 
