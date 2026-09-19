@@ -1,6 +1,6 @@
 <script lang="ts">
 	import gsap from 'gsap';
-	import { flushSync, onDestroy, onMount, untrack } from 'svelte';
+	import { flushSync, onDestroy, onMount, tick, untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import {
@@ -11,9 +11,7 @@
 		IconSortAscendingLetters,
 		IconSortDescendingLetters,
 		IconDownload,
-		IconCheck,
-		IconLoader2,
-		IconGripVertical
+		IconLoader2
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
@@ -30,7 +28,6 @@
 	let dragged = $state<File | null>(null);
 	let dragOrder = $state<File[] | null>(null);
 	let dropTarget = $state<File | null>(null);
-	let keyboardPicked = $state<File | null>(null);
 	let orderAnnouncement = $state('');
 	let activePointer = -1;
 	let sortAscending = $state(true);
@@ -49,16 +46,18 @@
 	let pageNumber = $state(1);
 	let pageCount = $state(0);
 	let filename = $state('plico-merged');
+	let downloadLink: HTMLAnchorElement;
 	let processing = $state(false);
 	let error = $state('');
 	let result = $state('');
-	let resultSize = $state(0);
 	let controller: AbortController | undefined;
+	const downloadName = $derived(`${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`);
 	const currentFile = $derived(
 		activeFile && workspace.files.includes(activeFile) ? activeFile : workspace.files[0]
 	);
 	$effect(() => {
 		void workspace.files;
+		void filename;
 		untrack(clearResult);
 	});
 	$effect(() => {
@@ -77,7 +76,6 @@
 	onDestroy(clearResult);
 	async function merge() {
 		if (processing || dragged || workspace.files.length < 2) return;
-		keyboardPicked = null;
 		clearResult();
 		const job = new AbortController();
 		controller = job;
@@ -85,8 +83,12 @@
 		try {
 			const bytes = await processPdfs('merge', [...workspace.files], job.signal);
 			if (job.signal.aborted) return;
-			resultSize = bytes.byteLength;
-			result = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: 'application/pdf' }));
+			const url = URL.createObjectURL(
+				new Blob([bytes.slice().buffer], { type: 'application/pdf' })
+			);
+			result = url;
+			await tick();
+			if (!job.signal.aborted && result === url) downloadLink?.click();
 		} catch (cause) {
 			if (!job.signal.aborted)
 				error = cause instanceof Error ? cause.message : 'Could not merge these PDFs.';
@@ -107,34 +109,6 @@
 			(a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) * direction
 		);
 		sortAscending = !sortAscending;
-	}
-	function toggleKeyboardPick(file: File) {
-		keyboardPicked = keyboardPicked === file ? null : file;
-		orderAnnouncement = keyboardPicked
-			? `${file.name} picked up. Use arrow keys to move it, then press Enter to place it.`
-			: `${file.name} placed.`;
-	}
-	function keyboardMove(event: KeyboardEvent, file: File) {
-		if (event.key === 'Escape' && keyboardPicked === file) {
-			event.preventDefault();
-			keyboardPicked = null;
-			orderAnnouncement = `${file.name} placed.`;
-			return;
-		}
-		if (keyboardPicked !== file) return;
-		const step =
-			event.key === 'ArrowRight' || event.key === 'ArrowDown'
-				? 1
-				: event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-					? -1
-					: 0;
-		if (!step) return;
-		event.preventDefault();
-		const from = workspace.files.indexOf(file);
-		const to = Math.max(0, Math.min(workspace.files.length - 1, from + step));
-		if (from < 0 || to === from) return;
-		workspace.move(from, to);
-		orderAnnouncement = `${file.name} moved to position ${to + 1} of ${workspace.files.length}.`;
 	}
 	function cardFlip(
 		node: Element,
@@ -475,7 +449,7 @@
 												: 'border-white/10 group-hover:border-white/25'}"
 									>
 										<PdfPreview {file} />
-										{#if isMerge}{:else}<span
+										{#if !isMerge}<span
 												class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
 												>{index + 1}</span
 											>{/if}<button
@@ -544,30 +518,43 @@
 				{/if}
 			</div>
 			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
-				{#if result}<div class="flex items-center gap-2 text-sm text-merge">
-						<IconCheck size={19} />Your PDF is ready · {formatSize(resultSize)}
-					</div>
-					<a
-						href={result}
-						rel="external"
-						download={`${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`}
-						class="flex min-h-14 items-center justify-center gap-3 rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas hover:bg-violet-300"
-						><IconDownload size={20} />Download PDF</a
-					>
-				{:else}
-					<button
-						disabled={!isMerge || workspace.files.length < 2 || processing || !!dragged}
-						onclick={merge}
-						class="flex min-h-14 w-full items-center justify-center gap-3 rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
-						>{#if processing}<IconLoader2
-								class="animate-spin"
-								size={20}
-							/>Merging…{:else}{tool.label}<IconArrowRight size={20} />{/if}</button
-					>{/if}
-				{#if processing}<button
-						class="w-full rounded-lg py-2 text-sm text-muted hover:text-white"
-						onclick={clearResult}>Cancel</button
-					>{/if}
+				<a
+					bind:this={downloadLink}
+					href={result}
+					rel="external"
+					download={downloadName}
+					class="hidden"
+					tabindex="-1"
+					aria-hidden="true">Download PDF</a
+				>
+				<button
+					disabled={!isMerge || workspace.files.length < 2 || processing || !!dragged}
+					onclick={() => (result ? downloadLink?.click() : void merge())}
+					aria-label={result ? 'Download PDF again' : processing ? 'Merging PDF' : tool.label}
+					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,opacity,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40 motion-safe:enabled:active:scale-[0.985]"
+					><span
+						class="pointer-events-none absolute inset-0 origin-left bg-merge motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
+							? 'scale-x-100'
+							: 'scale-x-0'}"
+						aria-hidden="true"
+					></span>
+					<span class="relative z-10 grid place-items-center">
+						<span
+							aria-hidden={!!result}
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
+								? '-translate-y-2 opacity-0'
+								: 'translate-y-0 opacity-100'}"
+							>{#if processing}<IconLoader2 class="animate-spin" size={20} />Merging…{:else}
+								{tool.label}<IconArrowRight size={20} />{/if}</span
+						>
+						<span
+							aria-hidden={!result}
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
+								? 'translate-y-0 opacity-100 motion-safe:delay-100'
+								: 'translate-y-2 opacity-0'}"><IconDownload size={20} />Download PDF</span
+						>
+					</span></button
+				>
 				{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
 			</div>
 		</aside>
