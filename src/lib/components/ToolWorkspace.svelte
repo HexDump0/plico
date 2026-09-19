@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount, untrack } from 'svelte';
+	import gsap from 'gsap';
+	import { flushSync, onDestroy, onMount, untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
+	import { cubicOut } from 'svelte/easing';
 	import {
 		IconArrowLeft,
 		IconArrowRight,
@@ -10,7 +12,8 @@
 		IconSortDescendingLetters,
 		IconDownload,
 		IconCheck,
-		IconLoader2
+		IconLoader2,
+		IconGripVertical
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
@@ -24,10 +27,15 @@
 	const isSplit = $derived(tool.id === 'split');
 	const accent = $derived(isMerge ? 'text-merge' : isSplit ? 'text-split' : 'text-brand');
 	let input = $state<HTMLInputElement>();
-	let dragged = $state(-1);
-	let dropTarget = $state(-1);
+	let dragged = $state<File | null>(null);
+	let dragOrder = $state<File[] | null>(null);
+	let dropTarget = $state<File | null>(null);
+	let keyboardPicked = $state<File | null>(null);
+	let orderAnnouncement = $state('');
+	let activePointer = -1;
 	let sortAscending = $state(true);
 	let reducedMotion = $state(false);
+	const visibleFiles = $derived(dragOrder ?? workspace.files);
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
 		const update = () => {
@@ -68,7 +76,8 @@
 	}
 	onDestroy(clearResult);
 	async function merge() {
-		if (processing || workspace.files.length < 2) return;
+		if (processing || dragged || workspace.files.length < 2) return;
+		keyboardPicked = null;
 		clearResult();
 		const job = new AbortController();
 		controller = job;
@@ -99,6 +108,250 @@
 		);
 		sortAscending = !sortAscending;
 	}
+	function toggleKeyboardPick(file: File) {
+		keyboardPicked = keyboardPicked === file ? null : file;
+		orderAnnouncement = keyboardPicked
+			? `${file.name} picked up. Use arrow keys to move it, then press Enter to place it.`
+			: `${file.name} placed.`;
+	}
+	function keyboardMove(event: KeyboardEvent, file: File) {
+		if (event.key === 'Escape' && keyboardPicked === file) {
+			event.preventDefault();
+			keyboardPicked = null;
+			orderAnnouncement = `${file.name} placed.`;
+			return;
+		}
+		if (keyboardPicked !== file) return;
+		const step =
+			event.key === 'ArrowRight' || event.key === 'ArrowDown'
+				? 1
+				: event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+					? -1
+					: 0;
+		if (!step) return;
+		event.preventDefault();
+		const from = workspace.files.indexOf(file);
+		const to = Math.max(0, Math.min(workspace.files.length - 1, from + step));
+		if (from < 0 || to === from) return;
+		workspace.move(from, to);
+		orderAnnouncement = `${file.name} moved to position ${to + 1} of ${workspace.files.length}.`;
+	}
+	function cardFlip(
+		node: Element,
+		positions: { from: DOMRect; to: DOMRect },
+		{ file }: { file: File }
+	) {
+		return dragged === file || reducedMotion
+			? { duration: 0 }
+			: flip(node, positions, { duration: 300, easing: cubicOut });
+	}
+	function dragCard(node: HTMLElement, file: File) {
+		const surface = node.querySelector<HTMLElement>('[data-drag-surface]')!;
+		let pointerId = -1;
+		let downX = 0;
+		let downY = 0;
+		let baseX = 0;
+		let baseY = 0;
+		let targetX = 0;
+		let targetY = 0;
+		let x = 0;
+		let y = 0;
+		let vx = 0;
+		let vy = 0;
+		let angle = 0;
+		let angularVelocity = 0;
+		let lastFrame = 0;
+		let frameId = 0;
+		let active = false;
+		let movingSlot = false;
+		let startIndex = -1;
+		const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
+		function layoutPosition(card: HTMLElement) {
+			const parent = card.offsetParent;
+			const bounds = parent?.getBoundingClientRect();
+			return {
+				left: (bounds?.left ?? 0) + card.offsetLeft,
+				top: (bounds?.top ?? 0) + card.offsetTop
+			};
+		}
+		function animate(time: number) {
+			if (reducedMotion) {
+				gsap.set(surface, { x: targetX, y: targetY, rotation: 0, scale: 1 });
+				frameId = requestAnimationFrame(animate);
+				return;
+			}
+			const dt = Math.min((time - lastFrame) / 1000, 0.032);
+			lastFrame = time;
+			vx += ((targetX - x) * 380 - vx * 28) * dt;
+			vy += ((targetY - y) * 380 - vy * 28) * dt;
+			x += vx * dt;
+			y += vy * dt;
+			const targetAngle = clamp((targetX - x) * 0.11 + vx * 0.012, 9);
+			angularVelocity += ((targetAngle - angle) * 220 - angularVelocity * 18) * dt;
+			angle += angularVelocity * dt;
+			gsap.set(surface, { x, y, rotation: angle, scale: 1.025 });
+			frameId = requestAnimationFrame(animate);
+		}
+		function nearestCard(clientX: number, clientY: number) {
+			const list = node.parentElement;
+			if (!list) return null;
+			const bounds = list.getBoundingClientRect();
+			if (
+				clientX < bounds.left - 48 ||
+				clientX > bounds.right + 48 ||
+				clientY < bounds.top - 48 ||
+				clientY > bounds.bottom + 48
+			)
+				return null;
+			let nearest = -1;
+			let distance = Infinity;
+			for (const [index, card] of Array.from(
+				list.querySelectorAll<HTMLElement>('[data-pdf-card]')
+			).entries()) {
+				const position = layoutPosition(card);
+				const dx = (clientX - position.left - card.offsetWidth / 2) / card.offsetWidth;
+				const dy = (clientY - position.top - card.offsetHeight / 2) / card.offsetHeight;
+				const score = dx * dx + dy * dy;
+				if (score < distance) {
+					distance = score;
+					nearest = index;
+				}
+			}
+			return visibleFiles[nearest] ?? null;
+		}
+		function moveSlot(to: number) {
+			const from = visibleFiles.indexOf(file);
+			if (from < 0 || to < 0 || from === to) return;
+			const before = layoutPosition(node);
+			movingSlot = true;
+			const next = [...visibleFiles];
+			const [moved] = next.splice(from, 1);
+			next.splice(to, 0, moved);
+			flushSync(() => (dragOrder = next));
+			const after = layoutPosition(node);
+			const dx = after.left - before.left;
+			const dy = after.top - before.top;
+			baseX -= dx;
+			baseY -= dy;
+			targetX -= dx;
+			targetY -= dy;
+			x -= dx;
+			y -= dy;
+			gsap.set(surface, { x, y, rotation: angle, scale: reducedMotion ? 1 : 1.025 });
+			if (pointerId >= 0 && !node.hasPointerCapture(pointerId)) node.setPointerCapture(pointerId);
+			movingSlot = false;
+		}
+		function finish(commit: boolean) {
+			if (pointerId < 0) return;
+			const id = pointerId;
+			pointerId = -1;
+			if (activePointer === id) activePointer = -1;
+			if (node.hasPointerCapture(id)) node.releasePointerCapture(id);
+			if (!active) return;
+			active = false;
+			cancelAnimationFrame(frameId);
+			const from = visibleFiles.indexOf(file);
+			if ((!commit || !dropTarget || processing) && from >= 0) moveSlot(startIndex);
+			const finalIndex = visibleFiles.indexOf(file);
+			const shouldCommit = commit && !!dropTarget && !processing && finalIndex !== startIndex;
+			flushSync(() => {
+				if (shouldCommit && dragOrder) workspace.files = [...dragOrder];
+				dragOrder = null;
+				dragged = null;
+				dropTarget = null;
+			});
+			if (finalIndex >= 0 && finalIndex !== startIndex) {
+				orderAnnouncement = `${file.name} moved to position ${finalIndex + 1} of ${workspace.files.length}.`;
+			}
+			if (reducedMotion) {
+				gsap.set(surface, { clearProps: 'transform' });
+			} else {
+				gsap.to(surface, {
+					x: 0,
+					y: 0,
+					rotation: 0,
+					scale: 1,
+					duration: 0.48,
+					ease: 'elastic.out(1, 0.58)',
+					overwrite: true,
+					onComplete: () => gsap.set(surface, { clearProps: 'transform' })
+				});
+			}
+		}
+		function pointerDown(event: PointerEvent) {
+			if (
+				!isMerge ||
+				processing ||
+				workspace.files.length < 2 ||
+				pointerId >= 0 ||
+				activePointer >= 0 ||
+				(event.pointerType === 'mouse' && event.button !== 0) ||
+				(event.target instanceof Element && event.target.closest('button'))
+			)
+				return;
+			pointerId = event.pointerId;
+			activePointer = pointerId;
+			downX = event.clientX;
+			downY = event.clientY;
+			node.setPointerCapture(pointerId);
+		}
+		function pointerMove(event: PointerEvent) {
+			if (event.pointerId !== pointerId) return;
+			const dx = event.clientX - downX;
+			const dy = event.clientY - downY;
+			if (!active) {
+				if (Math.hypot(dx, dy) < 6) return;
+				active = true;
+				startIndex = visibleFiles.indexOf(file);
+				dragOrder = [...workspace.files];
+				dragged = file;
+				gsap.killTweensOf(surface);
+				baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
+				baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
+				angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
+				vx = vy = angularVelocity = 0;
+				lastFrame = performance.now();
+				frameId = requestAnimationFrame(animate);
+			}
+			targetX = baseX + dx;
+			targetY = baseY + dy;
+			const position = layoutPosition(node);
+			const nearest = nearestCard(
+				position.left + targetX + node.offsetWidth / 2,
+				position.top + targetY + node.offsetHeight / 2
+			);
+			dropTarget = nearest;
+			if (nearest && nearest !== file) {
+				moveSlot(visibleFiles.indexOf(nearest));
+				dropTarget = file;
+			}
+		}
+		function pointerUp(event: PointerEvent) {
+			if (event.pointerId === pointerId) finish(true);
+		}
+		function pointerCancel(event: PointerEvent) {
+			if (event.pointerId === pointerId) finish(false);
+		}
+		node.addEventListener('pointerdown', pointerDown);
+		node.addEventListener('pointermove', pointerMove);
+		node.addEventListener('pointerup', pointerUp);
+		node.addEventListener('pointercancel', pointerCancel);
+		node.addEventListener('lostpointercapture', () => {
+			if (!movingSlot && pointerId >= 0 && !node.hasPointerCapture(pointerId)) finish(false);
+		});
+		return {
+			destroy() {
+				if (activePointer === pointerId) activePointer = -1;
+				cancelAnimationFrame(frameId);
+				gsap.killTweensOf(surface);
+				if (dragged === file) {
+					dragOrder = null;
+					dragged = null;
+				}
+				if (dropTarget === file) dropTarget = null;
+			}
+		};
+	}
 </script>
 
 <main id="main-content" class="flex flex-1 flex-col">
@@ -108,11 +361,9 @@
 		<section
 			aria-label="Documents"
 			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 pb-12 sm:px-10 lg:px-16 lg:pt-10 lg:pb-20"
-			ondragover={(event) => {
-				if (dragged < 0) event.preventDefault();
-			}}
+			ondragover={(event) => event.preventDefault()}
 			ondrop={(event) => {
-				if (dragged < 0 && event.dataTransfer?.files.length) {
+				if (!dragged && event.dataTransfer?.files.length) {
 					event.preventDefault();
 					if (!processing) workspace.add(event.dataTransfer.files);
 				}
@@ -127,7 +378,7 @@
 			<div class="flex flex-wrap items-center justify-end gap-4">
 				{#if isMerge && workspace.files.length > 1}
 					<button
-						disabled={processing}
+						disabled={processing || !!dragged}
 						class="flex size-11 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
 						aria-label={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
 						title={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
@@ -200,72 +451,66 @@
 						aria-label="PDF order"
 						class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
 					>
-						{#each workspace.files as file, index (file)}
+						{#each visibleFiles as file, index (file)}
 							<li
-								animate:flip={{ duration: reducedMotion ? 0 : 220 }}
-								draggable={isMerge && !processing}
-								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 sm:w-52 {dragged === index
-									? 'opacity-40'
-									: dropTarget === index
-										? 'scale-[1.02]'
-										: ''}"
-								ondragstart={(event) => {
-									dragged = index;
-									event.dataTransfer?.setData('text/plain', String(index));
-								}}
-								ondragend={() => {
-									dragged = -1;
-									dropTarget = -1;
-								}}
-								ondragover={(event) => {
-									if (dragged >= 0) {
-										event.preventDefault();
-										dropTarget = index;
-									}
-								}}
-								ondrop={(event) => {
-									event.preventDefault();
-									if (!processing && dragged >= 0) workspace.move(dragged, index);
-									dragged = -1;
-									dropTarget = -1;
-								}}
+								use:dragCard={file}
+								data-pdf-card
+								animate:cardFlip={{ file }}
+								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {isMerge &&
+								!processing &&
+								visibleFiles.length > 1
+									? 'cursor-grab touch-none select-none active:cursor-grabbing'
+									: ''} {dragged === file ? 'z-20' : ''}"
 							>
-								<div
-									class="relative overflow-hidden rounded-xl border-2 border-white/10 bg-panel shadow-lg shadow-black/20"
-								>
-									<PdfPreview {file} />
-									<span
-										class="absolute top-3 left-3 text-xs font-bold text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)]"
-										>{index + 1}</span
-									><button
-										disabled={processing}
-										class="absolute top-2 right-2 flex size-8 items-center justify-center text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)] transition-colors hover:text-convert"
-										aria-label={`Remove ${file.name}`}
-										onclick={() => workspace.remove(file)}><IconX size={18} stroke={2.5} /></button
+								{#if dragged === file}<div
+										class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed border-merge/35 bg-merge/5"
+									></div>{/if}
+								<div data-drag-surface class="relative origin-[50%_12%]">
+									<div
+										class="relative overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 {dragged ===
+										file
+											? 'border-merge/70 shadow-2xl shadow-black/60'
+											: dropTarget === file && dragged
+												? 'border-merge/70 shadow-lg shadow-merge/10'
+												: 'border-white/10 group-hover:border-white/25'}"
 									>
-									<span
-										class="absolute right-3 bottom-3 text-[11px] font-semibold text-canvas drop-shadow-[0_0_1px_rgba(255,255,255,0.85)]"
-										>{formatSize(file.size)}</span
-									>
+										<PdfPreview {file} />
+										{#if isMerge}{:else}<span
+												class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
+												>{index + 1}</span
+											>{/if}<button
+											disabled={processing || !!dragged}
+											class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+											aria-label={`Remove ${file.name}`}
+											onclick={() => workspace.remove(file)}
+											><IconX size={18} stroke={2.5} /></button
+										>
+										<span
+											class="absolute right-2 bottom-2 rounded-md bg-canvas/80 px-1.5 py-1 text-[10px] font-semibold text-white backdrop-blur-sm"
+											>{formatSize(file.size)}</span
+										>
+									</div>
+									<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>
+										{file.name}
+									</p>
 								</div>
-								<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>{file.name}</p>
 							</li>
 						{/each}
-						<li
-							class="flex w-[calc((100%-1.25rem)/2)] items-center justify-start self-stretch sm:w-52"
-						>
+						<li class="w-[calc((100%-1.25rem)/2)] min-w-0 sm:w-52">
 							<button
-								disabled={processing}
+								disabled={processing || !!dragged}
 								onclick={() => input?.click()}
-								class="group flex flex-col items-center justify-center gap-4 px-6 py-8 text-merge/80 transition-colors hover:text-merge disabled:opacity-40"
+								class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-merge/25 bg-merge/[0.03] text-merge/75 transition-[border-color,background-color,color] hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge disabled:opacity-40"
 							>
 								<span
 									class="flex size-12 items-center justify-center rounded-full bg-merge/10 motion-safe:transition-transform motion-safe:group-hover:scale-110"
 									><IconPlus size={24} stroke={1.5} /></span
 								>
+								<span class="text-xs font-medium">Add PDFs</span>
 							</button>
 						</li>
 					</ol>
+					{#if isMerge}<p class="sr-only" aria-live="polite">{orderAnnouncement}</p>{/if}
 				{/if}
 				{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
 						{workspace.error}
@@ -311,7 +556,7 @@
 					>
 				{:else}
 					<button
-						disabled={!isMerge || workspace.files.length < 2 || processing}
+						disabled={!isMerge || workspace.files.length < 2 || processing || !!dragged}
 						onclick={merge}
 						class="flex min-h-14 w-full items-center justify-center gap-3 rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
 						>{#if processing}<IconLoader2
