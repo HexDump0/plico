@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 25 unit tests against
+Evidence comes from two places. `cargo test` runs 30 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -245,7 +245,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Three tools exist, the catalogue advertises about forty
+### Five tools exist, the catalogue advertises about forty
 
 Merge and Split now share the engine's page selection and page-tree rebuilding
 path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
@@ -260,8 +260,9 @@ Compress now repacks object streams, recompresses Flate streams, re-encodes
 eligible JPEGs, and converts large 8-bit Flate RGB/grayscale images to JPEG
 when that saves bytes. Its strongest setting also downsizes eligible images.
 The pdf.js corpus compress check covers 924 files with unchanged page counts
-and decoded page content. Strong output is 71.0% of input size (previous
-implementation: 73.8%); 860 files rebuild smaller and 64 pass through.
+and decoded page content. Strong output is 67.2% of input size; 919 files rebuild
+smaller and 5 pass through. The same figures were measured from a clean checkout
+of the pre-refactor commit and after the 2026-09-20 module split.
 Metadata and thumbnail removal are optional because a rewrite that guarantees
 their removal can make an already compact PDF larger.
 This is structural evidence, not a rendered image comparison. JPXDecode,

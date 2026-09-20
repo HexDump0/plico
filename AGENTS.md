@@ -10,8 +10,17 @@ fixed and why, and which fixes exist only because a specific real file broke.
 ## Layout
 
 ```
-rust/plico-engine/src/lib.rs      the whole engine, plus unit tests
+rust/plico-engine/src/lib.rs      public engine API and module map
+rust/plico-engine/src/documents.rs page selection, assembly, and safe renumbering
+rust/plico-engine/src/compression.rs compression pipeline and stream packing
+rust/plico-engine/src/compression/image_transcode.rs image recompression
+rust/plico-engine/src/images.rs   image-to-PDF input
+rust/plico-engine/src/bindings.rs browser/wasm entry points
+rust/plico-engine/src/tests.rs    generated-fixture unit tests
 rust/plico-engine/tests/corpus.rs structural checks over a real PDF corpus
+src/lib/components/ToolWorkspace.svelte tool layout and settings
+src/lib/components/DocumentCards.svelte card previews, ordering, and removal
+src/lib/pdf/download-job.svelte.ts result and cancellation lifecycle
 src/lib/pdf/processor.ts          main-thread side, owns the worker
 src/lib/pdf/worker.ts             worker side, calls into wasm
 src/lib/pdf/wasm/                 generated, gitignored, never edit
