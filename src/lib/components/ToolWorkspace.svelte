@@ -88,6 +88,7 @@
 			const url = URL.createObjectURL(
 				new Blob([bytes.slice().buffer], { type: 'application/pdf' })
 			);
+			processing = false;
 			result = url;
 			await tick();
 			if (!job.signal.aborted && result === url) downloadLink?.click();
@@ -515,6 +516,7 @@
 				{:else if isSplit}
 					{#key currentFile}<SplitSettings
 							{pageCount}
+							{reducedMotion}
 							bind:ranges={splitRanges}
 							bind:mode={splitMode}
 							bind:interval={splitInterval}
@@ -535,27 +537,27 @@
 					disabled={!isMerge || workspace.files.length < 2 || processing || !!dragged}
 					onclick={() => (result ? downloadLink?.click() : void merge())}
 					aria-label={result ? 'Download PDF again' : processing ? 'Merging PDF' : tool.label}
-					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,opacity,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40 motion-safe:enabled:active:scale-[0.985]"
-					><span
-						class="pointer-events-none absolute inset-0 origin-left bg-merge motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
-							? 'scale-x-100'
-							: 'scale-x-0'}"
-						aria-hidden="true"
-					></span>
+					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {workspace
+						.files.length < 2 || dragged
+						? 'opacity-40'
+						: ''} {result
+						? 'bg-merge enabled:hover:bg-merge/90'
+						: 'bg-brand enabled:hover:bg-violet-300'}"
+				>
 					<span class="relative z-10 grid place-items-center">
 						<span
 							aria-hidden={!!result}
-							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
-								? '-translate-y-2 opacity-0'
-								: 'translate-y-0 opacity-100'}"
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
+								? 'opacity-0'
+								: 'opacity-100'}"
 							>{#if processing}<IconLoader2 class="animate-spin" size={20} />Merging…{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span
 							aria-hidden={!result}
-							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
-								? 'translate-y-0 opacity-100 motion-safe:delay-100'
-								: 'translate-y-2 opacity-0'}"><IconDownload size={20} />Download PDF</span
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
+								? 'opacity-100'
+								: 'opacity-0'}"><IconDownload size={20} />Download PDF</span
 						>
 					</span></button
 				>

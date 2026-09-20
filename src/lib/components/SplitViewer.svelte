@@ -1,9 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
+	import { cubicOut } from 'svelte/easing';
 	import { slide } from 'svelte/transition';
 	import { IconArrowRight, IconX } from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { SplitRange } from '$lib/split-ranges';
+	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	import SplitThumbnail from './SplitThumbnail.svelte';
 
 	let {
@@ -30,6 +33,10 @@
 	let reducedMotion = $state(false);
 	let hasPagesBefore = $state(false);
 	let hasPagesAfter = $state(false);
+	let rangeGrid = $state<HTMLDivElement>();
+	let previousRangeCount = 0;
+	let previousMode: 'ranges' | 'fixed' | null = null;
+	const positionAnimations = new SvelteMap<HTMLElement, Animation>();
 	const pageStripMask = $derived(
 		`linear-gradient(to right, ${hasPagesBefore ? 'transparent 0%, black 2rem' : 'black 0%, black 2rem'}, black calc(100% - 2rem), ${hasPagesAfter ? 'transparent 100%' : 'black 100%'})`
 	);
@@ -50,10 +57,33 @@
 
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
-		const update = () => (reducedMotion = preference.matches);
+		const update = () => {
+			reducedMotion = preference.matches;
+			if (reducedMotion) {
+				for (const animation of positionAnimations.values()) animation.cancel();
+				positionAnimations.clear();
+			}
+		};
 		update();
 		preference.addEventListener('change', update);
 		return () => preference.removeEventListener('change', update);
+	});
+
+	$effect.pre(() => {
+		const count = visibleRanges.length;
+		const currentMode = mode;
+		if (
+			count > previousRangeCount &&
+			previousMode === currentMode &&
+			currentMode === 'ranges' &&
+			!reducedMotion &&
+			rangeGrid
+		) {
+			const before = untrack(measureRangePositions);
+			void tick().then(() => animateRangePositions(before));
+		}
+		previousRangeCount = count;
+		previousMode = currentMode;
 	});
 
 	$effect(() => {
@@ -150,6 +180,47 @@
 			}
 		};
 	}
+
+	function measureRangePositions(exclude?: HTMLElement) {
+		return Array.from(rangeGrid?.querySelectorAll<HTMLElement>('[data-range-content]') ?? [])
+			.filter((element) => !exclude?.contains(element))
+			.map((element) => {
+				const rect = element.getBoundingClientRect();
+				positionAnimations.get(element)?.cancel();
+				positionAnimations.delete(element);
+				return { element, rect };
+			});
+	}
+
+	function animateRangePositions(before: ReturnType<typeof measureRangePositions>) {
+		if (reducedMotion) return;
+		requestAnimationFrame(() => {
+			for (const { element, rect } of before) {
+				if (!element.isConnected) continue;
+				const after = element.getBoundingClientRect();
+				const x = rect.left - after.left;
+				const y = rect.top - after.top;
+				if (Math.abs(x) < 1 && Math.abs(y) < 1) continue;
+				const animation = element.animate(
+					[{ transform: `translate(${x}px, ${y}px)` }, { transform: 'translate(0, 0)' }],
+					{ duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+				);
+				positionAnimations.set(element, animation);
+				animation.addEventListener('finish', () => {
+					if (positionAnimations.get(element) === animation) positionAnimations.delete(element);
+				});
+			}
+		});
+	}
+
+	function settleAfterRemoval(node: HTMLDivElement) {
+		const onOutroEnd = () => {
+			if (reducedMotion) return;
+			animateRangePositions(measureRangePositions(node));
+		};
+		node.addEventListener('outroend', onOutroEnd);
+		return { destroy: () => node.removeEventListener('outroend', onOutroEnd) };
+	}
 </script>
 
 <section aria-label="Split preview" class="mx-auto w-full max-w-7xl space-y-8">
@@ -168,42 +239,49 @@
 	</div>
 
 	{#if pdf && visibleRanges.length}
-		<div class="grid grid-cols-1 gap-x-12 gap-y-12 min-[1700px]:grid-cols-2">
+		<div bind:this={rangeGrid} class="grid grid-cols-1 gap-x-12 gap-y-12 min-[1700px]:grid-cols-2">
 			{#each visibleRanges as range, index (range.id)}
-				<div class="min-w-0 {visibleRanges.length === 1 ? 'min-[1700px]:col-span-2' : ''}">
-					<div class="mx-auto flex w-fit max-w-full items-start gap-2 sm:gap-3">
+				<div
+					use:settleAfterRemoval
+					in:rangeReveal={{ reducedMotion, preview: mode === 'ranges' }}
+					out:rangeCollapse={{ reducedMotion, preview: mode === 'ranges' }}
+					class="min-w-0 min-[1700px]:only:col-span-2"
+				>
+					<div data-range-content class="mx-auto flex w-fit max-w-full items-start gap-2 sm:gap-3">
 						<span
 							class="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg bg-split/10 text-xs font-bold text-split"
 							aria-label={`${mode === 'ranges' ? 'Range' : 'Part'} ${index + 1}`}>{index + 1}</span
 						>
 						<div class="flex items-center gap-2 sm:gap-3">
 							{#if Number.isInteger(range.from) && range.from >= 1 && range.from <= pageCount}
-								{#key range.from}<SplitThumbnail
-										{pdf}
-										number={range.from}
-										variant="range"
-										caption="From"
-										active={picker?.id === range.id && picker.edge === 'from'}
-										selected={false}
-										disabled={mode === 'fixed'}
-										onselect={() => (picker = { id: range.id, edge: 'from' })}
-									/>{/key}
+								<SplitThumbnail
+									{pdf}
+									{reducedMotion}
+									number={range.from}
+									variant="range"
+									caption="From"
+									active={picker?.id === range.id && picker.edge === 'from'}
+									selected={false}
+									disabled={mode === 'fixed'}
+									onselect={() => (picker = { id: range.id, edge: 'from' })}
+								/>
 							{:else}<span
 									class="flex aspect-[2/3] w-24 items-center justify-center text-center text-xs text-muted"
 									>Invalid start page</span
 								>{/if}
 							<IconArrowRight size={18} stroke={1.5} class="shrink-0 text-muted" />
 							{#if Number.isInteger(range.to) && range.to >= 1 && range.to <= pageCount}
-								{#key range.to}<SplitThumbnail
-										{pdf}
-										number={range.to}
-										variant="range"
-										caption="To"
-										active={picker?.id === range.id && picker.edge === 'to'}
-										selected={false}
-										disabled={mode === 'fixed'}
-										onselect={() => (picker = { id: range.id, edge: 'to' })}
-									/>{/key}
+								<SplitThumbnail
+									{pdf}
+									{reducedMotion}
+									number={range.to}
+									variant="range"
+									caption="To"
+									active={picker?.id === range.id && picker.edge === 'to'}
+									selected={false}
+									disabled={mode === 'fixed'}
+									onselect={() => (picker = { id: range.id, edge: 'to' })}
+								/>
 							{:else}<span
 									class="flex aspect-[2/3] w-24 items-center justify-center text-center text-xs text-muted"
 									>Invalid end page</span
@@ -223,7 +301,10 @@
 	{/if}
 
 	{#if pdf && picker && pickedRange && mode === 'ranges'}
-		<div transition:slide={{ duration: reducedMotion ? 0 : 180 }} class="mx-auto w-full max-w-2xl">
+		<div
+			transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+			class="mx-auto w-full max-w-2xl"
+		>
 			<div class="mb-3 flex items-center justify-between gap-3">
 				<div class="flex items-center gap-2">
 					<span
@@ -252,6 +333,7 @@
 					{#each Array.from({ length: pageCount }, (_, index) => index + 1) as number (number)}
 						<SplitThumbnail
 							{pdf}
+							{reducedMotion}
 							{number}
 							variant="picker"
 							active={number === pickedRange[picker.edge]}

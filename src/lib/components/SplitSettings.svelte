@@ -1,16 +1,19 @@
 <script lang="ts">
 	import { IconPlus, IconX } from '@tabler/icons-svelte-runes';
 	import type { SplitRange } from '$lib/split-ranges';
+	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	let {
 		pageCount,
 		ranges = $bindable<SplitRange[]>(),
 		mode = $bindable<'ranges' | 'fixed'>(),
-		interval = $bindable<number>()
+		interval = $bindable<number>(),
+		reducedMotion
 	}: {
 		pageCount: number;
 		ranges: SplitRange[];
 		mode: 'ranges' | 'fixed';
 		interval: number;
+		reducedMotion: boolean;
 	} = $props();
 	let nextId = 1;
 	let combine = $state(false);
@@ -34,14 +37,22 @@
 	<div>
 		<h2 class="mb-3 text-sm font-semibold">Split by</h2>
 		<div
-			class="grid grid-cols-2 gap-2 rounded-xl bg-canvas p-1"
+			class="relative grid grid-cols-2 gap-2 rounded-xl bg-canvas p-1"
 			role="group"
 			aria-label="Split mode"
 		>
+			<span
+				aria-hidden="true"
+				class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1rem)/2)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {mode ===
+				'fixed'
+					? 'translate-x-[calc(100%+0.5rem)]'
+					: ''}"
+			></span>
 			{#each modes as option (option.id)}<button
 					aria-pressed={mode === option.id}
-					class="rounded-lg px-2 py-3 text-xs font-semibold {mode === option.id
-						? 'bg-panel-hover text-split'
+					class="relative z-10 rounded-lg px-2 py-3 text-xs font-semibold motion-safe:transition-colors {mode ===
+					option.id
+						? 'text-split'
 						: 'text-muted hover:text-white'}"
 					onclick={() => (mode = option.id)}>{option.label}</button
 				>{/each}
@@ -52,6 +63,8 @@
 			{#each ranges as range, index (range.id)}<div
 					role="group"
 					aria-label={`Range ${index + 1}`}
+					in:rangeReveal={{ reducedMotion }}
+					out:rangeCollapse={{ reducedMotion }}
 					class="grid items-center gap-2 {ranges.length > 1
 						? 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_2rem]'
 						: 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)]'}"
@@ -89,7 +102,7 @@
 				</div>{/each}
 		</div>
 		<button
-			class="flex w-full items-center justify-center gap-2 rounded-xl border border-split/30 py-3 text-sm text-split hover:bg-split/5"
+			class="flex w-full items-center justify-center gap-2 rounded-xl border border-split/30 py-3 text-sm text-split hover:bg-split/5 motion-safe:transition-colors motion-safe:duration-150"
 			onclick={() => (ranges = [...ranges, { id: nextId++, from: 1, to: pageCount || 1 }])}
 			><IconPlus size={18} />Add range</button
 		>
