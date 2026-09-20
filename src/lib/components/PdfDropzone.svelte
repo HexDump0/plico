@@ -6,10 +6,12 @@
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	let {
 		selectedTool = null,
+		emptyOnly = false,
 		onneedstool = () => {},
 		onready
 	}: {
 		selectedTool?: CatalogTool | null;
+		emptyOnly?: boolean;
 		onneedstool?: () => void;
 		onready?: () => void;
 	} = $props();
@@ -114,6 +116,7 @@
 			: undefined;
 		workspace.add(firstPdf ? [firstPdf] : files);
 		input.value = '';
+		if (emptyOnly) return;
 		if (!wasEmpty || !workspace.files.length) return;
 		if (selectedTool && onready) {
 			onready();
@@ -168,7 +171,7 @@
 	}}
 >
 	<div class="relative flex min-h-0 flex-1 flex-col">
-		{#if workspace.files.length === 0 || transitioning}
+		{#if emptyOnly || workspace.files.length === 0 || transitioning}
 			<button
 				bind:this={emptyPanel}
 				inert={transitioning}
@@ -178,11 +181,11 @@
 				onclick={() => input.click()}
 			>
 				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
-					>{dragging ? 'You can let go btw' : single ? 'Drop in a PDF' : 'Drop in your PDFs'}</span
+					>{dragging ? 'You can let go btw' : 'Drop in your PDFs'}</span
 				>
 			</button>
 		{/if}
-		{#if workspace.files.length}
+		{#if !emptyOnly && workspace.files.length}
 			<div bind:this={filePanel} class="flex min-h-0 flex-1 flex-col">
 				<div class="mb-3 flex items-center justify-between gap-2">
 					<h2 class="text-sm font-semibold">

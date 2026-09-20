@@ -2,7 +2,7 @@
 	import gsap from 'gsap';
 	import { flushSync, onDestroy, onMount, tick, untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
-	import { cubicOut } from 'svelte/easing';
+	import { cubicIn, cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
 	import {
 		IconArrowRight,
@@ -44,6 +44,7 @@
 	let sortAscending = $state(true);
 	let reducedMotion = $state(false);
 	const visibleFiles = $derived(dragOrder ?? workspace.files);
+	const cards = $derived([...visibleFiles, null]);
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
 		const update = () => {
@@ -269,13 +270,15 @@
 	function cardFlip(
 		node: Element,
 		positions: { from: DOMRect; to: DOMRect },
-		{ file }: { file: File }
+		{ file }: { file: File | null }
 	) {
-		return dragged === file || reducedMotion
+		return (file !== null && dragged === file) || reducedMotion
 			? { duration: 0 }
 			: flip(node, positions, { duration: 300, easing: cubicOut });
 	}
-	function dragCard(node: HTMLElement, file: File) {
+	function dragCard(node: HTMLElement, item: File | null) {
+		if (!item) return;
+		const file = item;
 		const surface = node.querySelector<HTMLElement>('[data-drag-surface]')!;
 		let pointerId = -1;
 		let downX = 0;
@@ -568,120 +571,134 @@
 						/>{:else}<IconSortDescendingLetters size={20} />{/if}</button
 				>
 			{/if}
-			{#if workspace.files.length === 0}
-				<div class="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center py-12 lg:py-20">
-					<div class="h-80"><PdfDropzone selectedTool={tool} /></div>
-				</div>
-			{:else}
-				{#if !isSplit}<input
-						bind:this={input}
-						type="file"
-						accept="application/pdf,.pdf"
-						multiple
-						class="hidden"
-						aria-label="Add PDF files"
-						onchange={() => input?.files && add(input.files)}
-					/>{/if}
-				{#if isSplit && currentFile}
-					<div class="my-auto w-full py-6 lg:py-10">
-						{#key currentFile}<SplitViewer
-								file={currentFile}
-								ranges={splitRanges}
-								mode={splitMode}
-								interval={splitInterval}
-								onrangechange={(id, from, to) =>
-									(splitRanges = splitRanges.map((range) =>
-										range.id === id ? { ...range, from, to } : range
-									))}
-								onload={(count) => {
-									pageCount = count;
-									if (
-										splitRanges.length === 1 &&
-										splitRanges[0].from === 1 &&
-										splitRanges[0].to === 1
-									)
-										splitRanges[0].to = count;
-								}}
-								onremove={() => workspace.remove(currentFile)}
-							/>{/key}
+			<div class="grid min-h-0 flex-1">
+				{#if workspace.files.length === 0}
+					<div
+						in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}
+						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
+						class="col-start-1 row-start-1 mx-auto flex w-full max-w-xl flex-col justify-center py-12 lg:py-20"
+					>
+						<div class="h-80"><PdfDropzone selectedTool={tool} emptyOnly /></div>
 					</div>
 				{:else}
-					<ol
-						aria-label="PDF order"
-						class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
+					<div
+						in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}
+						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
+						class="col-start-1 row-start-1 flex min-w-0 flex-col"
 					>
-						{#each visibleFiles as file, index (file)}
-							<li
-								use:dragCard={file}
-								data-pdf-card
-								animate:cardFlip={{ file }}
-								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {canOrder &&
-								!processing
-									? 'cursor-grab touch-none select-none active:cursor-grabbing'
-									: ''} {dragged === file ? 'z-20' : ''}"
+						{#if !isSplit}<input
+								bind:this={input}
+								type="file"
+								accept="application/pdf,.pdf"
+								multiple
+								class="hidden"
+								aria-label="Add PDF files"
+								onchange={() => input?.files && add(input.files)}
+							/>{/if}
+						{#if isSplit && currentFile}
+							<div class="my-auto w-full py-6 lg:py-10">
+								{#key currentFile}<SplitViewer
+										file={currentFile}
+										ranges={splitRanges}
+										mode={splitMode}
+										interval={splitInterval}
+										onrangechange={(id, from, to) =>
+											(splitRanges = splitRanges.map((range) =>
+												range.id === id ? { ...range, from, to } : range
+											))}
+										onload={(count) => {
+											pageCount = count;
+											if (
+												splitRanges.length === 1 &&
+												splitRanges[0].from === 1 &&
+												splitRanges[0].to === 1
+											)
+												splitRanges[0].to = count;
+										}}
+										onremove={() => workspace.remove(currentFile)}
+									/>{/key}
+							</div>
+						{:else}
+							<ol
+								aria-label="PDF order"
+								class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
 							>
-								{#if dragged === file}<div
-										class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed {isCompress
-											? 'border-compress/35 bg-compress/5'
-											: 'border-merge/35 bg-merge/5'}"
-									></div>{/if}
-								<div data-drag-surface class="relative origin-[50%_12%]">
-									<div
-										class="relative overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 {dragged ===
-										file
-											? isCompress
-												? 'border-compress/70 shadow-2xl shadow-black/60'
-												: 'border-merge/70 shadow-2xl shadow-black/60'
-											: dropTarget === file && dragged
-												? isCompress
-													? 'border-compress/70 shadow-lg shadow-compress/10'
-													: 'border-merge/70 shadow-lg shadow-merge/10'
-												: 'border-white/10 group-hover:border-white/25'}"
+								{#each cards as file, index (file ?? 'add')}
+									<li
+										use:dragCard={file}
+										data-pdf-card={file ? '' : undefined}
+										animate:cardFlip={{ file }}
+										class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {file &&
+										canOrder &&
+										!processing
+											? 'cursor-grab touch-none select-none active:cursor-grabbing'
+											: ''} {file && dragged === file ? 'z-20' : ''}"
 									>
-										<PdfPreview {file} />
-										{#if !isMerge}<span
-												class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
-												>{index + 1}</span
-											>{/if}<button
-											disabled={processing || !!dragged}
-											class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
-											aria-label={`Remove ${file.name}`}
-											onclick={() => workspace.remove(file)}
-											><IconX size={18} stroke={2.5} /></button
-										>
-										<span
-											class="absolute right-2 bottom-2 rounded-md bg-canvas/80 px-1.5 py-1 text-[10px] font-semibold text-white backdrop-blur-sm"
-											>{formatSize(file.size)}</span
-										>
-									</div>
-									<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>
-										{file.name}
-									</p>
-								</div>
-							</li>
-						{/each}
-						<li class="w-[calc((100%-1.25rem)/2)] min-w-0 sm:w-52">
-							<button
-								disabled={processing || !!dragged}
-								onclick={() => input?.click()}
-								class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed transition-[border-color,background-color,color] disabled:opacity-40 {isCompress
-									? 'border-compress/25 bg-compress/[0.03] text-compress/75 hover:border-compress/60 hover:bg-compress/[0.07] hover:text-compress'
-									: 'border-merge/25 bg-merge/[0.03] text-merge/75 hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge'}"
-							>
-								<span
-									class="flex size-12 items-center justify-center rounded-full motion-safe:transition-transform motion-safe:group-hover:scale-110 {isCompress
-										? 'bg-compress/10'
-										: 'bg-merge/10'}"><IconPlus size={24} stroke={1.5} /></span
-								>
-							</button>
-						</li>
-					</ol>
-					{#if canOrder}<p class="sr-only" aria-live="polite">{orderAnnouncement}</p>{/if}
+										{#if file}
+											{#if dragged === file}<div
+													class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed {isCompress
+														? 'border-compress/35 bg-compress/5'
+														: 'border-merge/35 bg-merge/5'}"
+												></div>{/if}
+											<div data-drag-surface class="relative origin-[50%_12%]">
+												<div
+													class="relative overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 {dragged ===
+													file
+														? isCompress
+															? 'border-compress/70 shadow-2xl shadow-black/60'
+															: 'border-merge/70 shadow-2xl shadow-black/60'
+														: dropTarget === file && dragged
+															? isCompress
+																? 'border-compress/70 shadow-lg shadow-compress/10'
+																: 'border-merge/70 shadow-lg shadow-merge/10'
+															: 'border-white/10 group-hover:border-white/25'}"
+												>
+													<PdfPreview {file} />
+													{#if !isMerge}<span
+															class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
+															>{index + 1}</span
+														>{/if}<button
+														disabled={processing || !!dragged}
+														class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+														aria-label={`Remove ${file.name}`}
+														onclick={() => workspace.remove(file)}
+														><IconX size={18} stroke={2.5} /></button
+													>
+													<span
+														class="absolute right-2 bottom-2 rounded-md bg-canvas/80 px-1.5 py-1 text-[10px] font-semibold text-white backdrop-blur-sm"
+														>{formatSize(file.size)}</span
+													>
+												</div>
+												<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>
+													{file.name}
+												</p>
+											</div>
+										{:else}
+											<button
+												disabled={processing || !!dragged}
+												onclick={() => input?.click()}
+												class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed transition-[border-color,background-color,color] disabled:opacity-40 {isCompress
+													? 'border-compress/25 bg-compress/[0.03] text-compress/75 hover:border-compress/60 hover:bg-compress/[0.07] hover:text-compress'
+													: 'border-merge/25 bg-merge/[0.03] text-merge/75 hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge'}"
+											>
+												<span
+													class="flex size-12 items-center justify-center rounded-full motion-safe:transition-transform motion-safe:group-hover:scale-110 {isCompress
+														? 'bg-compress/10'
+														: 'bg-merge/10'}"><IconPlus size={24} stroke={1.5} /></span
+												>
+											</button>
+										{/if}
+									</li>
+								{/each}
+							</ol>
+							{#if canOrder}<p class="sr-only" aria-live="polite">{orderAnnouncement}</p>{/if}
+						{/if}
+						{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
+								{workspace.error}
+							</p>{/if}
+					</div>
 				{/if}
-				{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
-						{workspace.error}
-					</p>{/if}
-			{/if}
+			</div>
 		</section>
 		<aside
 			aria-label={`${tool.label} settings`}
@@ -759,18 +776,22 @@
 									? 'Compressing PDF'
 									: 'Merging PDF'
 							: tool.label}
-					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
+					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
 						? 'opacity-40'
-						: ''} {result
-						? 'bg-merge enabled:hover:bg-merge/90'
-						: 'bg-brand enabled:hover:bg-violet-300'}"
+						: ''}"
 				>
+					<span
+						class="pointer-events-none absolute inset-0 origin-left bg-merge motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
+							? 'scale-x-100'
+							: 'scale-x-0'}"
+						aria-hidden="true"
+					></span>
 					<span class="relative z-10 grid place-items-center">
 						<span
 							aria-hidden={!!result}
-							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
-								? 'opacity-0'
-								: 'opacity-100'}"
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
+								? '-translate-y-2 opacity-0'
+								: 'translate-y-0 opacity-100'}"
 							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isSplit
 									? 'Splitting…'
 									: isCompress
@@ -780,9 +801,9 @@
 						>
 						<span
 							aria-hidden={!result}
-							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
-								? 'opacity-100'
-								: 'opacity-0'}"
+							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
+								? 'translate-y-0 opacity-100 motion-safe:delay-100'
+								: 'translate-y-2 opacity-0'}"
 							><IconDownload size={20} />Download {resultFormat.toUpperCase()}</span
 						>
 					</span></button
