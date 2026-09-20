@@ -750,10 +750,17 @@
 					aria-hidden="true">Download PDF</a
 				>
 				{#if isCompress && result && resultInputSize > 0}
-					<p class="text-center text-xs text-muted">
-						{formatSize(resultInputSize)} → {formatSize(resultSize)}
+					<p
+						class="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-center text-xs text-muted"
+					>
+						<span class="inline-flex items-center gap-1.5">
+							<span>{formatSize(resultInputSize)}</span>
+							<span class="sr-only">to</span>
+							<IconArrowRight size={14} stroke={1.75} aria-hidden="true" />
+							<span>{formatSize(resultSize)}</span>
+						</span>
 						{#if resultSize < resultInputSize}
-							· {Math.round((1 - resultSize / resultInputSize) * 100)}% smaller
+							<span>({Math.round((1 - resultSize / resultInputSize) * 100)}% smaller)</span>
 						{/if}
 					</p>
 				{/if}
@@ -793,10 +800,10 @@
 								? '-translate-y-2 opacity-0'
 								: 'translate-y-0 opacity-100'}"
 							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isSplit
-									? 'Splitting…'
+									? 'Splitting...'
 									: isCompress
-										? 'Compressing…'
-										: 'Merging…'}{:else}
+										? 'Compressing...'
+										: 'Merging...'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

@@ -28,7 +28,7 @@
 	} = $props();
 
 	let pdf = $state<PDFDocumentProxy | null>(null);
-	let status = $state('Loading PDF…');
+	let status = $state('Loading PDF...');
 	let picker = $state<{ id: number; edge: 'from' | 'to' } | null>(null);
 	let reducedMotion = $state(false);
 	let hasPagesBefore = $state(false);
@@ -96,7 +96,7 @@
 		let cancelled = false;
 		let loadingTask: PDFDocumentLoadingTask | undefined;
 		pdf = null;
-		status = 'Loading PDF…';
+		status = 'Loading PDF...';
 		async function load() {
 			try {
 				const pdfjs = await import('pdfjs-dist');

@@ -6,13 +6,13 @@
 		onload = () => {}
 	}: { file: File; pageNumber?: number; onload?: (count: number) => void } = $props();
 	let canvas: HTMLCanvasElement;
-	let status = $state('Loading preview…');
+	let status = $state('Loading preview...');
 	$effect(() => {
 		const source = file;
 		const number = pageNumber;
 		let cancelled = false;
 		let task: import('pdfjs-dist').PDFDocumentLoadingTask | undefined;
-		status = 'Loading preview…';
+		status = 'Loading preview...';
 		async function render() {
 			try {
 				const pdfjs = await import('pdfjs-dist');

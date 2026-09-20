@@ -342,7 +342,7 @@
 				class="flex min-h-64 flex-col items-center justify-center gap-3 text-center"
 			>
 				<p class="text-lg font-medium">No tools found</p>
-				<p class="text-muted">Try a format or action, like “JPG” or “rotate”.</p>
+				<p class="text-muted">Try a format or action, like "JPG" or "rotate".</p>
 				<button
 					class="mt-2 rounded-lg px-3 py-2 text-brand hover:bg-brand/10"
 					onclick={() => {

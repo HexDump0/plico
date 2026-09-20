@@ -149,7 +149,7 @@
 		</p>
 	{:else}
 		<p class="leading-relaxed text-muted">
-			Thanks for wanting to support Plico. Donations aren’t set up yet.
+			Thanks for wanting to support Plico. Donations aren't set up yet.
 		</p>
 	{/if}
 </dialog>

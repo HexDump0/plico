@@ -22,7 +22,7 @@
 		{
 			id: 'local',
 			title: 'Your files stay yours.',
-			body: 'We’re building Plico around local processing. The idea is simple: work on your documents right on your device, without handing them over to a server.'
+			body: "We're building Plico around local processing. The idea is simple: work on your documents right on your device, without handing them over to a server."
 		},
 		{
 			id: 'open',
@@ -32,13 +32,13 @@
 		{
 			id: 'simple',
 			title: 'Less between you and done.',
-			body: 'Choose your files, pick a tool, save the result. We’re keeping the interface focused on those everyday tasks, with clear controls and fewer interruptions.'
+			body: "Choose your files, pick a tool, save the result. We're keeping the interface focused on those everyday tasks, with clear controls and fewer interruptions."
 		}
 	];
 </script>
 
 <svelte:head>
-	<title>About — Plico</title>
+	<title>About - Plico</title>
 	<meta
 		name="description"
 		content="Meet the people behind Plico, an open-source PDF toolbox being built for simple, private, local document processing."
@@ -103,7 +103,7 @@
 									aria-label={`${creator.name} website (not configured)`}
 									title="Website link not configured"
 									onclick={() =>
-										(linkNotice = `${creator.name}’s website link hasn’t been added yet.`)}
+										(linkNotice = `${creator.name}'s website link hasn't been added yet.`)}
 									><span class="flex"><IconLink size={24} aria-hidden="true" /></span></button
 								>
 								<button
@@ -112,7 +112,7 @@
 									class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:text-brand focus-visible:text-brand"
 									aria-label={`${creator.name} on X (not configured)`}
 									title="X link not configured"
-									onclick={() => (linkNotice = `${creator.name}’s X link hasn’t been added yet.`)}
+									onclick={() => (linkNotice = `${creator.name}'s X link hasn't been added yet.`)}
 									><span class="flex"><IconBrandX size={24} aria-hidden="true" /></span></button
 								>
 							</div>
@@ -147,7 +147,7 @@
 					{/each}
 				</div>
 				<p class="mt-4 text-sm leading-6 text-muted">
-					Donation details will appear here when they’re ready.
+					Donation details will appear here when they're ready.
 				</p>
 			</section>
 		</div>
