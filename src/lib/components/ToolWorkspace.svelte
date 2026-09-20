@@ -18,20 +18,41 @@
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { SplitOptions } from '$lib/pdf/types';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
-	import { processCompressPdf, processPdfs, processSplitPdf } from '$lib/pdf/processor';
+	import {
+		processCompressPdf,
+		processPdfToImages,
+		processPdfs,
+		processSplitPdf
+	} from '$lib/pdf/processor';
+	import type { PdfImageOptions } from '$lib/pdf/types';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 	import CompressSettings from './CompressSettings.svelte';
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
+	import PdfToImageSettings from './PdfToImageSettings.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(tool.id === 'merge');
 	const isSplit = $derived(tool.id === 'split');
 	const isCompress = $derived(tool.id === 'compress');
+	const isPdfToImage = $derived(
+		tool.id === 'pdf-to-jpg' ||
+			tool.id === 'pdf-to-png' ||
+			tool.id === 'pdf-to-image' ||
+			tool.id === 'pdf-to-images'
+	);
 	const canOrder = $derived(isMerge || isCompress);
 	const accent = $derived(
-		isMerge ? 'text-merge' : isSplit ? 'text-split' : isCompress ? 'text-compress' : 'text-brand'
+		isMerge
+			? 'text-merge'
+			: isSplit
+				? 'text-split'
+				: isCompress
+					? 'text-compress'
+					: isPdfToImage
+						? 'text-split'
+						: 'text-brand'
 	);
 	let input = $state<HTMLInputElement>();
 	let dragged = $state<File | null>(null);
@@ -44,7 +65,10 @@
 	let sortAscending = $state(true);
 	let reducedMotion = $state(false);
 	const visibleFiles = $derived(dragOrder ?? workspace.files);
-	const cards = $derived([...visibleFiles, null]);
+	const currentFile = $derived(workspace.files[0]);
+	const cards = $derived(
+		isPdfToImage ? (currentFile ? [currentFile] : []) : [...visibleFiles, null]
+	);
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
 		const update = () => {
@@ -67,11 +91,16 @@
 	let processing = $state(false);
 	let error = $state('');
 	let result = $state('');
-	let resultFormat = $state<'pdf' | 'zip'>('pdf');
+	let pdfToImageFormat = $state<'jpg' | 'png'>(
+		untrack(() => (tool.id === 'pdf-to-png' ? 'png' : 'jpg'))
+	);
+	let pdfToImageDpi = $state(150);
+	let pdfToImageQuality = $state(80);
+	let pdfToImagePageRange = $state('');
+	let resultFormat = $state<'pdf' | 'zip' | 'jpg' | 'png'>('pdf');
 	let resultSize = $state(0);
 	let resultInputSize = $state(0);
 	let controller: AbortController | undefined;
-	const currentFile = $derived(workspace.files[0]);
 	const splitSignature = $derived(
 		JSON.stringify({
 			mode: splitMode,
@@ -82,6 +111,9 @@
 	);
 	const compressSignature = $derived(
 		JSON.stringify([compressLevel, compressRemoveMetadata, compressRemoveThumbnails])
+	);
+	const pdfToImageSignature = $derived(
+		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
 	const compressOptions = $derived({
 		imageQuality: compressLevel === 'light' ? 0 : compressLevel === 'balanced' ? 80 : 50,
@@ -104,6 +136,7 @@
 					)
 				: Number.isInteger(splitInterval) && splitInterval > 0)
 	);
+	const pdfToImageValid = $derived(!!currentFile);
 	const actionDisabled = $derived(
 		isMerge
 			? workspace.files.length < 2 || processing || !!dragged
@@ -111,7 +144,9 @@
 				? !splitValid || processing
 				: isCompress
 					? workspace.files.length === 0 || processing || !!dragged
-					: true
+					: isPdfToImage
+						? !pdfToImageValid || processing
+						: true
 	);
 	const actionUnavailable = $derived(
 		isMerge
@@ -120,20 +155,25 @@
 				? !splitValid
 				: isCompress
 					? workspace.files.length === 0 || !!dragged
-					: true
+					: isPdfToImage
+						? !pdfToImageValid
+						: true
 	);
 	const downloadName = $derived(
 		isSplit
 			? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
 			: isCompress
 				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
-				: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+				: isPdfToImage
+					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
+					: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
 	$effect(() => {
 		void workspace.files;
 		void filename;
 		void splitSignature;
 		void compressSignature;
+		void pdfToImageSignature;
 		untrack(clearResult);
 	});
 	$effect(() => {
@@ -143,6 +183,7 @@
 		splitMode = 'ranges';
 		splitInterval = 1;
 		splitCombine = false;
+		pdfToImagePageRange = '';
 	});
 	function clearResult() {
 		controller?.abort();
@@ -237,6 +278,69 @@
 		} catch (cause) {
 			if (!job.signal.aborted)
 				error = cause instanceof Error ? cause.message : 'Could not compress these PDFs.';
+		} finally {
+			if (controller === job) {
+				processing = false;
+				controller = undefined;
+			}
+		}
+	}
+	function parsePageRange(input: string, maxPages: number): number[] | undefined {
+		if (!input.trim() || maxPages <= 0) return undefined;
+		const pages: number[] = [];
+		for (const part of input.split(',')) {
+			const trimmed = part.trim();
+			if (!trimmed) continue;
+			if (trimmed.includes('-')) {
+				const [startStr, endStr] = trimmed.split('-');
+				const start = parseInt(startStr?.trim() ?? '', 10);
+				const end = parseInt(endStr?.trim() ?? '', 10);
+				if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && end >= start) {
+					for (let p = start; p <= Math.min(end, maxPages); p++) {
+						if (!pages.includes(p)) pages.push(p);
+					}
+				}
+			} else {
+				const p = parseInt(trimmed, 10);
+				if (Number.isInteger(p) && p >= 1 && p <= maxPages) {
+					if (!pages.includes(p)) pages.push(p);
+				}
+			}
+		}
+		return pages.length > 0 ? pages.sort((a, b) => a - b) : undefined;
+	}
+
+	async function convertPdfToImage() {
+		if (processing || !pdfToImageValid || !currentFile) return;
+		clearResult();
+		const job = new AbortController();
+		controller = job;
+		processing = true;
+		const pages = parsePageRange(pdfToImagePageRange, pageCount);
+		const options: PdfImageOptions = {
+			format: pdfToImageFormat,
+			dpi: pdfToImageDpi,
+			quality: pdfToImageQuality,
+			pages
+		};
+		try {
+			const output = await processPdfToImages(currentFile, options, job.signal);
+			if (job.signal.aborted) return;
+			const mime =
+				output.format === 'zip'
+					? 'application/zip'
+					: output.format === 'jpg'
+						? 'image/jpeg'
+						: 'image/png';
+			const url = URL.createObjectURL(new Blob([output.bytes.slice().buffer], { type: mime }));
+			processing = false;
+			resultFormat = output.format;
+			result = url;
+			await tick();
+			if (!job.signal.aborted && result === url) downloadLink?.click();
+		} catch (cause) {
+			if (!job.signal.aborted)
+				error = cause instanceof Error ? cause.message : 'Could not convert this PDF to images.';
 		} finally {
 			if (controller === job) {
 				processing = false;
@@ -524,7 +628,8 @@
 	>
 		<section
 			aria-label="Documents"
-			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit
+			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
+			isPdfToImage
 				? 'pb-2 lg:pb-16'
 				: 'pb-12 lg:pb-20'}"
 			ondragover={(event) => event.preventDefault()}
@@ -532,7 +637,7 @@
 				if (!event.defaultPrevented && !dragged && event.dataTransfer?.files.length) {
 					event.preventDefault();
 					if (!processing) {
-						if (isSplit) replace(event.dataTransfer.files);
+						if (isSplit || isPdfToImage) replace(event.dataTransfer.files);
 						else workspace.add(event.dataTransfer.files);
 					}
 				}
@@ -586,7 +691,7 @@
 						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 						class="col-start-1 row-start-1 flex min-w-0 flex-col"
 					>
-						{#if !isSplit}<input
+						{#if !isSplit && !isPdfToImage}<input
 								bind:this={input}
 								type="file"
 								accept="application/pdf,.pdf"
@@ -653,8 +758,13 @@
 																: 'border-merge/70 shadow-lg shadow-merge/10'
 															: 'border-white/10 group-hover:border-white/25'}"
 												>
-													<PdfPreview {file} />
-													{#if !isMerge}<span
+													<PdfPreview
+														{file}
+														onload={(count) => {
+															if (!pageCount) pageCount = count;
+														}}
+													/>
+													{#if !isMerge && !isPdfToImage}<span
 															class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
 															>{index + 1}</span
 														>{/if}<button
@@ -737,6 +847,14 @@
 						bind:removeMetadata={compressRemoveMetadata}
 						bind:removeThumbnails={compressRemoveThumbnails}
 					/>
+				{:else if isPdfToImage}
+					<PdfToImageSettings
+						bind:format={pdfToImageFormat}
+						bind:dpi={pdfToImageDpi}
+						bind:quality={pdfToImageQuality}
+						bind:pageRange={pdfToImagePageRange}
+						{pageCount}
+					/>
 				{/if}
 			</div>
 			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
@@ -747,7 +865,7 @@
 					download={downloadName}
 					class="hidden"
 					tabindex="-1"
-					aria-hidden="true">Download PDF</a
+					aria-hidden="true">Download {resultFormat.toUpperCase()}</a
 				>
 				{#if isCompress && result && resultInputSize > 0}
 					<p
@@ -773,7 +891,9 @@
 								? void split()
 								: isCompress
 									? void compress()
-									: void merge()}
+									: isPdfToImage
+										? void convertPdfToImage()
+										: void merge()}
 					aria-label={result
 						? `Download ${resultFormat.toUpperCase()} again`
 						: processing
@@ -781,7 +901,9 @@
 								? 'Splitting PDF'
 								: isCompress
 									? 'Compressing PDF'
-									: 'Merging PDF'
+									: isPdfToImage
+										? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+										: 'Merging PDF'
 							: tool.label}
 					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
 						? 'opacity-40'
@@ -803,7 +925,9 @@
 									? 'Splitting...'
 									: isCompress
 										? 'Compressing...'
-										: 'Merging...'}{:else}
+										: isPdfToImage
+											? 'Converting...'
+											: 'Merging...'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

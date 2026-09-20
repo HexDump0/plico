@@ -27,6 +27,78 @@ function packageOutputs(
 	return { format: 'zip', bytes: zipSync(entries) };
 }
 
+class WorkerCanvasFactory {
+	#enableHWA = false;
+	constructor(options?: { enableHWA?: boolean }) {
+		this.#enableHWA = options?.enableHWA ?? false;
+	}
+	create(width: number, height: number) {
+		if (width <= 0 || height <= 0) throw new Error('Invalid canvas size');
+		const canvas = new OffscreenCanvas(width, height);
+		return {
+			canvas,
+			context: canvas.getContext('2d', { willReadFrequently: !this.#enableHWA })
+		};
+	}
+	reset(
+		canvasAndContext: {
+			canvas: OffscreenCanvas;
+			context: OffscreenCanvasRenderingContext2D | null;
+		},
+		width: number,
+		height: number
+	) {
+		if (!canvasAndContext?.canvas) throw new Error('Canvas is not specified');
+		if (width <= 0 || height <= 0) throw new Error('Invalid canvas size');
+		canvasAndContext.canvas.width = width;
+		canvasAndContext.canvas.height = height;
+	}
+	destroy(canvasAndContext: {
+		canvas: OffscreenCanvas | null;
+		context: OffscreenCanvasRenderingContext2D | null;
+	}) {
+		if (!canvasAndContext?.canvas) throw new Error('Canvas is not specified');
+		canvasAndContext.canvas.width = 0;
+		canvasAndContext.canvas.height = 0;
+		canvasAndContext.canvas = null;
+		canvasAndContext.context = null;
+	}
+	_createCanvas(width: number, height: number) {
+		return new OffscreenCanvas(width, height);
+	}
+}
+
+class WorkerFilterFactory {
+	addFilter() {
+		return 'none';
+	}
+	addHCMFilter() {
+		return 'none';
+	}
+	addAlphaFilter() {
+		return 'none';
+	}
+	addLuminosityFilter() {
+		return 'none';
+	}
+	addKnockoutFilter() {
+		return 'none';
+	}
+	addHighlightHCMFilter() {
+		return 'none';
+	}
+	addSelectionHCMFilter() {
+		return 'none';
+	}
+	addSelectionFilter() {
+		return 'none';
+	}
+	createSelectionStyle() {
+		return null;
+	}
+	destroy() {}
+}
+
 async function exportPdfImages(
 	input: ArrayBuffer,
 	options: PdfImageOptions
@@ -47,7 +119,15 @@ async function exportPdfImages(
 	const pdfjs = await import('pdfjs-dist');
 	const workerUrl = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
 	pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
-	const task = pdfjs.getDocument({ data: new Uint8Array(input) });
+	const task = pdfjs.getDocument({
+		data: new Uint8Array(input),
+		disableFontFace: true,
+		cMapUrl: '/pdfjs/cmaps/',
+		cMapPacked: true,
+		standardFontDataUrl: '/pdfjs/standard_fonts/',
+		CanvasFactory: WorkerCanvasFactory,
+		FilterFactory: WorkerFilterFactory
+	});
 	try {
 		const pdf = await task.promise;
 		const pages = options.pages ?? Array.from({ length: pdf.numPages }, (_, index) => index + 1);

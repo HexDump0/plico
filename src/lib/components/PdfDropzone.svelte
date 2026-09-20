@@ -16,7 +16,13 @@
 		onready?: () => void;
 	} = $props();
 	const workspace = getWorkspace();
-	const single = $derived(selectedTool?.id === 'split');
+	const single = $derived(
+		selectedTool?.id === 'split' ||
+			selectedTool?.id === 'pdf-to-jpg' ||
+			selectedTool?.id === 'pdf-to-png' ||
+			selectedTool?.id === 'pdf-to-image' ||
+			selectedTool?.id === 'pdf-to-images'
+	);
 	let input: HTMLInputElement;
 	let dragging = $state(false);
 	let depth = 0;

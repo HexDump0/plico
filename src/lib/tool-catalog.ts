@@ -42,10 +42,11 @@ export interface CatalogTool {
 }
 
 export function findTool(id: string) {
+	const normalizedId = id === 'pdf-to-image' || id === 'pdf-to-images' ? 'pdf-to-jpg' : id;
 	return [
 		...quickTools,
 		...toolColumns.flatMap((column) => column.flatMap((group) => group.tools))
-	].find((tool) => tool.id === id);
+	].find((tool) => tool.id === normalizedId);
 }
 
 export const quickTools = [

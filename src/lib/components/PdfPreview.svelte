@@ -20,8 +20,12 @@
 				if (cancelled) return;
 				pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 				const data = new Uint8Array(await source.arrayBuffer());
-				if (cancelled) return;
-				task = pdfjs.getDocument({ data });
+				task = pdfjs.getDocument({
+					data,
+					cMapUrl: '/pdfjs/cmaps/',
+					cMapPacked: true,
+					standardFontDataUrl: '/pdfjs/standard_fonts/'
+				});
 				task.onPassword = () => {
 					if (!cancelled) status = 'Password-protected PDF';
 					void task?.destroy();
