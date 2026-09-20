@@ -1,10 +1,10 @@
-import type { PdfOperation, PdfWorkerRequest, PdfWorkerResponse } from './types';
+import type { PdfOutput, PdfWorkerRequest, PdfWorkerResponse, SplitOptions } from './types';
 
 let worker: Worker | undefined;
 let requestId = 0;
 const pending = new Map<
 	number,
-	{ resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void }
+	{ resolve: (output: PdfOutput) => void; reject: (error: Error) => void }
 >();
 
 function getWorker() {
@@ -14,7 +14,8 @@ function getWorker() {
 		const request = pending.get(event.data.id);
 		if (!request) return;
 		pending.delete(event.data.id);
-		if (event.data.ok) request.resolve(new Uint8Array(event.data.bytes));
+		if (event.data.ok)
+			request.resolve({ bytes: new Uint8Array(event.data.bytes), format: event.data.format });
 		else request.reject(new Error(event.data.error));
 	};
 	worker.onerror = () => stopWorker('The local PDF engine stopped unexpectedly.');
@@ -28,28 +29,38 @@ function stopWorker(message: string) {
 	pending.clear();
 }
 
-export async function processPdfs(operation: PdfOperation, files: File[], signal?: AbortSignal) {
-	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
-	const id = ++requestId;
-	const request: PdfWorkerRequest = { id, operation, files: buffers };
-
-	return new Promise<Uint8Array>((resolve, reject) => {
+function submit(request: PdfWorkerRequest, signal?: AbortSignal) {
+	return new Promise<PdfOutput>((resolve, reject) => {
 		const abort = () => {
 			stopWorker('The operation was cancelled.');
 			reject(new DOMException('The operation was cancelled.', 'AbortError'));
 		};
 		signal?.addEventListener('abort', abort, { once: true });
-		pending.set(id, {
-			resolve: (bytes) => {
+		pending.set(request.id, {
+			resolve: (output) => {
 				signal?.removeEventListener('abort', abort);
-				resolve(bytes);
+				resolve(output);
 			},
 			reject: (error) => {
 				signal?.removeEventListener('abort', abort);
 				reject(error);
 			}
 		});
-		getWorker().postMessage(request, { transfer: buffers });
+		getWorker().postMessage(request, { transfer: request.files });
 	});
+}
+
+export async function processPdfs(operation: 'merge', files: File[], signal?: AbortSignal) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const output = await submit({ id: ++requestId, operation, files: buffers }, signal);
+	return output.bytes;
+}
+
+export async function processSplitPdf(file: File, options: SplitOptions, signal?: AbortSignal) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal);
 }

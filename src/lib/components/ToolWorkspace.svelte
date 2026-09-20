@@ -14,8 +14,9 @@
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
+	import type { SplitOptions } from '$lib/pdf/types';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
-	import { processPdfs } from '$lib/pdf/processor';
+	import { processPdfs, processSplitPdf } from '$lib/pdf/processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 	import SplitSettings from './SplitSettings.svelte';
@@ -47,17 +48,57 @@
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
 	let splitMode = $state<'ranges' | 'fixed'>('ranges');
 	let splitInterval = $state(1);
+	let splitCombine = $state(false);
 	let filename = $state('plico-merged');
 	let downloadLink: HTMLAnchorElement;
 	let processing = $state(false);
 	let error = $state('');
 	let result = $state('');
+	let resultFormat = $state<'pdf' | 'zip'>('pdf');
 	let controller: AbortController | undefined;
-	const downloadName = $derived(`${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`);
 	const currentFile = $derived(workspace.files[0]);
+	const splitSignature = $derived(
+		JSON.stringify({
+			mode: splitMode,
+			interval: splitInterval,
+			combine: splitCombine,
+			ranges: splitRanges.map(({ from, to }) => [from, to])
+		})
+	);
+	const splitValid = $derived(
+		!!currentFile &&
+			pageCount > 0 &&
+			(splitMode === 'ranges'
+				? splitRanges.length > 0 &&
+					splitRanges.every(
+						({ from, to }) =>
+							Number.isInteger(from) &&
+							Number.isInteger(to) &&
+							from >= 1 &&
+							to >= from &&
+							to <= pageCount
+					)
+				: Number.isInteger(splitInterval) && splitInterval > 0)
+	);
+	const actionDisabled = $derived(
+		isMerge
+			? workspace.files.length < 2 || processing || !!dragged
+			: isSplit
+				? !splitValid || processing
+				: true
+	);
+	const actionUnavailable = $derived(
+		isMerge ? workspace.files.length < 2 || !!dragged : isSplit ? !splitValid : true
+	);
+	const downloadName = $derived(
+		isSplit
+			? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
+			: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+	);
 	$effect(() => {
 		void workspace.files;
 		void filename;
+		void splitSignature;
 		untrack(clearResult);
 	});
 	$effect(() => {
@@ -66,6 +107,7 @@
 		splitRanges = [{ id: 0, from: 1, to: 1 }];
 		splitMode = 'ranges';
 		splitInterval = 1;
+		splitCombine = false;
 	});
 	function clearResult() {
 		controller?.abort();
@@ -74,6 +116,7 @@
 		error = '';
 		if (result) URL.revokeObjectURL(result);
 		result = '';
+		resultFormat = 'pdf';
 	}
 	onDestroy(clearResult);
 	async function merge() {
@@ -95,6 +138,40 @@
 		} catch (cause) {
 			if (!job.signal.aborted)
 				error = cause instanceof Error ? cause.message : 'Could not merge these PDFs.';
+		} finally {
+			if (controller === job) {
+				processing = false;
+				controller = undefined;
+			}
+		}
+	}
+	async function split() {
+		if (processing || !splitValid || !currentFile) return;
+		clearResult();
+		const job = new AbortController();
+		controller = job;
+		processing = true;
+		const options: SplitOptions =
+			splitMode === 'ranges'
+				? {
+						mode: 'ranges',
+						ranges: splitRanges.map(({ from, to }) => ({ from, to })),
+						combine: splitCombine
+					}
+				: { mode: 'fixed', interval: splitInterval };
+		try {
+			const output = await processSplitPdf(currentFile, options, job.signal);
+			if (job.signal.aborted) return;
+			const mime = output.format === 'zip' ? 'application/zip' : 'application/pdf';
+			const url = URL.createObjectURL(new Blob([output.bytes.slice().buffer], { type: mime }));
+			processing = false;
+			resultFormat = output.format;
+			result = url;
+			await tick();
+			if (!job.signal.aborted && result === url) downloadLink?.click();
+		} catch (cause) {
+			if (!job.signal.aborted)
+				error = cause instanceof Error ? cause.message : 'Could not split this PDF.';
 		} finally {
 			if (controller === job) {
 				processing = false;
@@ -520,6 +597,7 @@
 							bind:ranges={splitRanges}
 							bind:mode={splitMode}
 							bind:interval={splitInterval}
+							bind:combine={splitCombine}
 						/>{/key}
 				{/if}
 			</div>
@@ -534,11 +612,16 @@
 					aria-hidden="true">Download PDF</a
 				>
 				<button
-					disabled={!isMerge || workspace.files.length < 2 || processing || !!dragged}
-					onclick={() => (result ? downloadLink?.click() : void merge())}
-					aria-label={result ? 'Download PDF again' : processing ? 'Merging PDF' : tool.label}
-					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {workspace
-						.files.length < 2 || dragged
+					disabled={actionDisabled}
+					onclick={() => (result ? downloadLink?.click() : isSplit ? void split() : void merge())}
+					aria-label={result
+						? `Download ${resultFormat.toUpperCase()} again`
+						: processing
+							? isSplit
+								? 'Splitting PDF'
+								: 'Merging PDF'
+							: tool.label}
+					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
 						? 'opacity-40'
 						: ''} {result
 						? 'bg-merge enabled:hover:bg-merge/90'
@@ -550,14 +633,17 @@
 							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
 								? 'opacity-0'
 								: 'opacity-100'}"
-							>{#if processing}<IconLoader2 class="animate-spin" size={20} />Merging…{:else}
+							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isSplit
+									? 'Splitting…'
+									: 'Merging…'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span
 							aria-hidden={!result}
 							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-200 {result
 								? 'opacity-100'
-								: 'opacity-0'}"><IconDownload size={20} />Download PDF</span
+								: 'opacity-0'}"
+							><IconDownload size={20} />Download {resultFormat.toUpperCase()}</span
 						>
 					</span></button
 				>

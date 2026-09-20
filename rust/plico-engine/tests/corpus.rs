@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use lopdf::{Document, Object, Stream, dictionary};
-use plico_engine::merge_pdf_bytes;
+use plico_engine::{SplitMode, merge_pdf_bytes, split_pdf_bytes};
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
 
@@ -214,4 +214,68 @@ fn merges_every_loadable_document() {
     assert!(reload_failed.is_empty(), "merged output does not reparse");
     assert!(wrong_page_count.is_empty(), "pages lost or duplicated");
     assert!(missing_mediabox.is_empty(), "pages lost their geometry");
+}
+
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn splits_last_page_of_every_loadable_document() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+
+    let mut checked = 0usize;
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(mut source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.is_encrypted() && source.decrypt("").is_err() {
+            continue;
+        }
+        let pages = source.get_pages();
+        let Some((&last_number, &last_id)) = pages.last_key_value() else {
+            continue;
+        };
+        let original_content = source.get_page_content(last_id);
+        drop(source);
+
+        let outputs = match split_pdf_bytes(
+            &bytes,
+            SplitMode::Ranges(&[(last_number, last_number)], false),
+        ) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let Ok(mut result) = Document::load_mem(&outputs[0]) else {
+            failures.push(format!("{name}: split output would not reparse"));
+            continue;
+        };
+        let (count, complete) = describe(&result);
+        if count != 1 || !complete {
+            failures.push(format!(
+                "{name}: {count} pages, MediaBox complete: {complete}"
+            ));
+            continue;
+        }
+        if result.get_page_content(result.get_pages()[&1]) != original_content {
+            failures.push(format!("{name}: selected page content changed"));
+            continue;
+        }
+        let leaked = unreachable_count(&mut result);
+        if leaked > 0 {
+            failures.push(format!("{name}: {leaked} unreachable objects"));
+            continue;
+        }
+        checked += 1;
+    }
+
+    println!("\nsplit corpus: {checked} files checked");
+    for failure in failures.iter().take(15) {
+        println!("  {failure}");
+    }
+    assert!(failures.is_empty(), "split failed on real PDFs");
 }

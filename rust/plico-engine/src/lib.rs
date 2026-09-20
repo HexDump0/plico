@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use js_sys::{Array, Uint8Array};
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, dictionary};
 use wasm_bindgen::prelude::*;
 
@@ -48,6 +49,69 @@ pub fn merge_pdf_bytes(files: &[&[u8]]) -> Result<Vec<u8>, String> {
     write_document(merge_documents(documents)?)
 }
 
+pub enum SplitMode<'a> {
+    Ranges(&'a [(u32, u32)], bool),
+    Every(u32),
+}
+
+pub fn split_pdf_bytes(input: &[u8], mode: SplitMode<'_>) -> Result<Vec<Vec<u8>>, String> {
+    let document = load_document(input, 1)?;
+    let page_count = document.get_pages().len() as u32;
+
+    let groups = match mode {
+        SplitMode::Ranges(ranges, combine) => {
+            if ranges.is_empty() {
+                return Err("Add at least one page range.".into());
+            }
+            let mut groups = Vec::with_capacity(ranges.len());
+            for &(from, to) in ranges {
+                if from == 0 || to < from || to > page_count {
+                    return Err(format!("Page ranges must be between 1 and {page_count}."));
+                }
+                groups.push((from..=to).collect::<Vec<_>>());
+            }
+            if combine {
+                let mut seen = BTreeSet::new();
+                vec![
+                    groups
+                        .into_iter()
+                        .flatten()
+                        .filter(|page| seen.insert(*page))
+                        .collect(),
+                ]
+            } else {
+                groups
+            }
+        }
+        SplitMode::Every(interval) => {
+            if interval == 0 {
+                return Err("Choose at least one page per PDF.".into());
+            }
+            (1..=page_count)
+                .collect::<Vec<_>>()
+                .chunks(interval as usize)
+                .map(|chunk| chunk.to_vec())
+                .collect()
+        }
+    };
+
+    let mut source = Some(document);
+    let mut outputs = Vec::with_capacity(groups.len());
+    let count = groups.len();
+    for (index, pages) in groups.into_iter().enumerate() {
+        let document = if index + 1 == count {
+            source.take().unwrap()
+        } else {
+            source.as_ref().unwrap().clone()
+        };
+        outputs.push(write_document(assemble_documents(vec![(
+            document,
+            Some(pages),
+        )])?)?);
+    }
+    Ok(outputs)
+}
+
 fn load_document(bytes: &[u8], position: usize) -> Result<Document, String> {
     let options = LoadOptions {
         max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM),
@@ -64,7 +128,7 @@ fn load_document(bytes: &[u8], position: usize) -> Result<Document, String> {
     // is derived from each object's number and generation.
     if document.is_encrypted() {
         document.decrypt("").map_err(|_| {
-            format!("PDF {position} is password protected. Unlock it before merging.")
+            format!("PDF {position} is password protected. Unlock it before continuing.")
         })?;
     }
 
@@ -76,9 +140,20 @@ fn load_document(bytes: &[u8], position: usize) -> Result<Document, String> {
 }
 
 fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
+    assemble_documents(
+        documents
+            .into_iter()
+            .map(|document| (document, None))
+            .collect(),
+    )
+}
+
+/// Rebuilds one page tree from the requested pages of each input. Merge selects
+/// every page; Split selects only the pages in its output group.
+fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Document, String> {
     let version = documents
         .iter()
-        .map(|document| document.version.as_str())
+        .map(|(document, _)| document.version.as_str())
         .max_by_key(|version| parse_version(version))
         .unwrap_or("1.5")
         .to_owned();
@@ -91,10 +166,23 @@ fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
     let mut pages: Vec<(ObjectId, Dictionary)> = Vec::new();
     let mut catalog: Option<Dictionary> = None;
 
-    for mut document in documents {
+    for (mut document, selection) in documents {
         // Page order and inherited attributes both have to be read while this
         // document's own page tree is still intact, so before any renumbering.
-        let page_order = document.get_pages().into_values().collect::<Vec<_>>();
+        let available = document.get_pages();
+        let page_order = if let Some(numbers) = selection {
+            numbers
+                .into_iter()
+                .map(|number| {
+                    available
+                        .get(&number)
+                        .copied()
+                        .ok_or_else(|| format!("Page {number} could not be read."))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            available.into_values().collect::<Vec<_>>()
+        };
         let inherited = page_order
             .iter()
             .map(|page_id| {
@@ -302,7 +390,7 @@ fn write_document(mut document: Document) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     document
         .save_to(&mut bytes)
-        .map_err(|error| format!("The merged PDF could not be created: {error}"))?;
+        .map_err(|error| format!("The PDF could not be created: {error}"))?;
     Ok(bytes)
 }
 
@@ -329,13 +417,40 @@ pub fn merge_pdfs(input: &[u8], lengths: &[u32]) -> Result<Vec<u8>, JsValue> {
     merge_pdf_bytes(&files).map_err(|error| JsValue::from_str(&error))
 }
 
+fn split_outputs_to_js(outputs: Vec<Vec<u8>>) -> Array {
+    let result = Array::new();
+    for bytes in outputs {
+        result.push(&Uint8Array::from(bytes.as_slice()));
+    }
+    result
+}
+
+#[wasm_bindgen]
+pub fn split_pdf_ranges(input: &[u8], bounds: &[u32], combine: bool) -> Result<Array, JsValue> {
+    let chunks = bounds.chunks_exact(2);
+    if !chunks.remainder().is_empty() {
+        return Err(JsValue::from_str("A page range is incomplete."));
+    }
+    let ranges = chunks.map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
+    split_pdf_bytes(input, SplitMode::Ranges(&ranges, combine))
+        .map(split_outputs_to_js)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+pub fn split_pdf_every(input: &[u8], interval: u32) -> Result<Array, JsValue> {
+    split_pdf_bytes(input, SplitMode::Every(interval))
+        .map(split_outputs_to_js)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use lopdf::{Document, Object, Stream, dictionary};
 
-    use super::{merge_pdf_bytes, parse_version};
+    use super::{SplitMode, merge_pdf_bytes, parse_version, split_pdf_bytes};
 
     fn one_page_pdf(label: &str) -> Vec<u8> {
         let mut document = Document::with_version("1.5");
@@ -401,6 +516,58 @@ mod tests {
         let mut bytes = Vec::new();
         document.save_to(&mut bytes).unwrap();
         bytes
+    }
+
+    fn numbered_pdf(count: u32) -> Vec<u8> {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+        let mut kids = Vec::new();
+        for number in 1..=count {
+            let content_id =
+                document.add_object(Stream::new(dictionary! {}, number.to_string().into_bytes()));
+            let page_id = document.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content_id,
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => kids,
+                "Count" => count,
+                "MediaBox" => vec![0.into(), 0.into(), 400.into(), 600.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn page_contents(bytes: &[u8]) -> Vec<String> {
+        let document = Document::load_mem(bytes).unwrap();
+        document
+            .get_pages()
+            .into_values()
+            .map(|page| {
+                String::from_utf8_lossy(&document.get_page_content(page))
+                    .trim()
+                    .to_owned()
+            })
+            .collect()
     }
 
     fn page_widths(document: &Document) -> Vec<i64> {
@@ -604,6 +771,78 @@ mod tests {
         let merged = merge_pdf_bytes(&refs).unwrap();
 
         assert_eq!(Document::load_mem(&merged).unwrap().get_pages().len(), 4);
+    }
+
+    #[test]
+    fn splits_ranges_into_separate_pdfs() {
+        let outputs = split_pdf_bytes(
+            &numbered_pdf(5),
+            SplitMode::Ranges(&[(2, 3), (5, 5)], false),
+        )
+        .unwrap();
+
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(page_contents(&outputs[0]), ["2", "3"]);
+        assert_eq!(page_contents(&outputs[1]), ["5"]);
+
+        let document = Document::load_mem(&outputs[0]).unwrap();
+        assert_eq!(page_widths(&document), vec![400, 400]);
+        let first = document.get_pages()[&1];
+        let resources = document
+            .get_dictionary(first)
+            .and_then(|page| page.get_deref(b"Resources", &document))
+            .and_then(Object::as_dict)
+            .unwrap();
+        assert!(resources.has(b"Font"));
+    }
+
+    #[test]
+    fn combined_ranges_keep_order_and_include_overlaps_once() {
+        let outputs =
+            split_pdf_bytes(&numbered_pdf(5), SplitMode::Ranges(&[(3, 4), (1, 3)], true)).unwrap();
+
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(page_contents(&outputs[0]), ["3", "4", "1", "2"]);
+    }
+
+    #[test]
+    fn splits_every_n_pages_with_a_short_final_part() {
+        let outputs = split_pdf_bytes(&numbered_pdf(5), SplitMode::Every(2)).unwrap();
+
+        assert_eq!(outputs.len(), 3);
+        assert_eq!(page_contents(&outputs[0]), ["1", "2"]);
+        assert_eq!(page_contents(&outputs[1]), ["3", "4"]);
+        assert_eq!(page_contents(&outputs[2]), ["5"]);
+    }
+
+    #[test]
+    fn split_rejects_invalid_ranges_and_intervals() {
+        let input = numbered_pdf(3);
+        assert!(split_pdf_bytes(&input, SplitMode::Ranges(&[], false)).is_err());
+        assert!(split_pdf_bytes(&input, SplitMode::Ranges(&[(0, 2)], false)).is_err());
+        assert!(split_pdf_bytes(&input, SplitMode::Ranges(&[(3, 2)], false)).is_err());
+        assert!(split_pdf_bytes(&input, SplitMode::Ranges(&[(1, 4)], false)).is_err());
+        assert!(split_pdf_bytes(&input, SplitMode::Every(0)).is_err());
+    }
+
+    #[test]
+    fn split_output_drops_unreachable_pages_and_objects() {
+        let outputs =
+            split_pdf_bytes(&numbered_pdf(5), SplitMode::Ranges(&[(3, 3)], false)).unwrap();
+        let mut document = Document::load_mem(&outputs[0]).unwrap();
+        let types = document
+            .objects
+            .iter()
+            .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
+            .collect::<BTreeMap<_, _>>();
+        let leaked = document
+            .prune_objects()
+            .into_iter()
+            .filter(|id| types[id] != b"XRef")
+            .collect::<Vec<_>>();
+
+        assert_eq!(page_contents(&outputs[0]), ["3"]);
+        assert!(leaked.is_empty(), "unreachable objects kept: {leaked:?}");
     }
 
     #[test]

@@ -7,16 +7,17 @@
 		ranges = $bindable<SplitRange[]>(),
 		mode = $bindable<'ranges' | 'fixed'>(),
 		interval = $bindable<number>(),
+		combine = $bindable<boolean>(),
 		reducedMotion
 	}: {
 		pageCount: number;
 		ranges: SplitRange[];
 		mode: 'ranges' | 'fixed';
 		interval: number;
+		combine: boolean;
 		reducedMotion: boolean;
 	} = $props();
 	let nextId = 1;
-	let combine = $state(false);
 	const modes = [
 		{ id: 'ranges', label: 'Page ranges' },
 		{ id: 'fixed', label: 'Every N pages' }

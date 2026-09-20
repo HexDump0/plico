@@ -3,10 +3,10 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 11 unit tests against
+Evidence comes from two places. `cargo test` runs 16 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
-test corpus (982 files) with a generated page and checks the result. Numbers
-below are from that run.
+test corpus (982 files) with a generated page, then checks a one-page split of
+every loadable file. Numbers below are from that run.
 
 ---
 
@@ -245,15 +245,16 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### One tool exists, the catalogue advertises about forty
+### Two tools exist, the catalogue advertises about forty
 
-`worker.ts:12` throws for anything but `merge`. Most of `tool-catalog.ts` is the
-same operation underneath: organise, extract, remove, rotate and split all come
-down to selecting page references and building a new page tree.
+Merge and Split now share the engine's page selection and page-tree rebuilding
+path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
+outputs are packaged into a ZIP in the worker. The new corpus check extracts the
+last page of every loadable file and checks content, page geometry, and
+reachability: 924 checked, alongside the unchanged merge baseline above.
 
-Build that shared layer before building the features. Every one of them needs
-the same inheritance flattening, the same renumbering and the same pruning, and
-doing it once means not fixing the inheritance bug six more times.
+Organise, extract, remove, and rotate can use the same path. Keep page order,
+inheritance flattening, safe renumbering, and pruning in that shared layer.
 
 Compress, convert and OCR are a different problem and want an explicit decision.
 Real compression means image transcoding inside legal PDF filters
@@ -266,9 +267,9 @@ pdfium and qpdf are permissive and both build to wasm.
 ### Error strings are product copy inside the engine
 
 `"Choose at least two PDFs to merge."` cannot be translated, and it pushes a UI
-rule into `merge_pdf_bytes`, which is the wrong place for it. A structured error
-enum would let Svelte own the wording. It also unblocks the single-document path
-that split and extract will need.
+rule into `merge_pdf_bytes`, which is the wrong place for it. Split validation
+currently returns strings too. A structured error enum would let Svelte own the
+wording across both operations.
 
 ---
 
