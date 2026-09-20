@@ -11,7 +11,8 @@
 		IconSortAscendingLetters,
 		IconSortDescendingLetters,
 		IconDownload,
-		IconLoader2
+		IconLoader2,
+		IconTrash
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
@@ -36,6 +37,8 @@
 	let dragged = $state<File | null>(null);
 	let dragOrder = $state<File[] | null>(null);
 	let dropTarget = $state<File | null>(null);
+	let trashHovered = $state(false);
+	let trashZone = $state<HTMLDivElement>();
 	let orderAnnouncement = $state('');
 	let activePointer = -1;
 	let sortAscending = $state(true);
@@ -368,7 +371,18 @@
 			if (pointerId >= 0 && !node.hasPointerCapture(pointerId)) node.setPointerCapture(pointerId);
 			movingSlot = false;
 		}
-		function finish(commit: boolean) {
+		function isOverTrash(clientX: number, clientY: number) {
+			if (!trashZone) return false;
+			const bounds = trashZone.getBoundingClientRect();
+			if (bounds.width === 0 || bounds.height === 0) return false;
+			return (
+				clientX >= bounds.left &&
+				clientX <= bounds.right &&
+				clientY >= bounds.top &&
+				clientY <= bounds.bottom
+			);
+		}
+		function finish(commit: boolean, clientX?: number, clientY?: number) {
 			if (pointerId < 0) return;
 			const id = pointerId;
 			pointerId = -1;
@@ -377,17 +391,30 @@
 			if (!active) return;
 			active = false;
 			cancelAnimationFrame(frameId);
+			const removeFile =
+				commit &&
+				!processing &&
+				clientX !== undefined &&
+				clientY !== undefined &&
+				isOverTrash(clientX, clientY);
 			const from = visibleFiles.indexOf(file);
-			if ((!commit || !dropTarget || processing) && from >= 0) moveSlot(startIndex);
+			if (!removeFile && (!commit || !dropTarget || processing) && from >= 0) moveSlot(startIndex);
 			const finalIndex = visibleFiles.indexOf(file);
-			const shouldCommit = commit && !!dropTarget && !processing && finalIndex !== startIndex;
+			const shouldCommit =
+				!removeFile && commit && !!dropTarget && !processing && finalIndex !== startIndex;
 			flushSync(() => {
-				if (shouldCommit && dragOrder) workspace.files = [...dragOrder];
+				if (removeFile) workspace.remove(file);
+				else if (shouldCommit && dragOrder) workspace.files = [...dragOrder];
 				dragOrder = null;
 				dragged = null;
 				dropTarget = null;
+				trashHovered = false;
 			});
-			if (finalIndex >= 0 && finalIndex !== startIndex) {
+			if (removeFile) {
+				orderAnnouncement = `${file.name} removed.`;
+				return;
+			}
+			if (shouldCommit) {
 				orderAnnouncement = `${file.name} moved to position ${finalIndex + 1} of ${workspace.files.length}.`;
 			}
 			if (reducedMotion) {
@@ -429,8 +456,10 @@
 				if (Math.hypot(dx, dy) < 6) return;
 				active = true;
 				startIndex = visibleFiles.indexOf(file);
-				dragOrder = [...workspace.files];
-				dragged = file;
+				flushSync(() => {
+					dragOrder = [...workspace.files];
+					dragged = file;
+				});
 				gsap.killTweensOf(surface);
 				baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
 				baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
@@ -441,6 +470,11 @@
 			}
 			targetX = baseX + dx;
 			targetY = baseY + dy;
+			trashHovered = isOverTrash(event.clientX, event.clientY);
+			if (trashHovered) {
+				dropTarget = null;
+				return;
+			}
 			const position = layoutPosition(node);
 			const nearest = nearestCard(
 				position.left + targetX + node.offsetWidth / 2,
@@ -453,7 +487,7 @@
 			}
 		}
 		function pointerUp(event: PointerEvent) {
-			if (event.pointerId === pointerId) finish(true);
+			if (event.pointerId === pointerId) finish(true, event.clientX, event.clientY);
 		}
 		function pointerCancel(event: PointerEvent) {
 			if (event.pointerId === pointerId) finish(false);
@@ -473,6 +507,7 @@
 				if (dragged === file) {
 					dragOrder = null;
 					dragged = null;
+					trashHovered = false;
 				}
 				if (dropTarget === file) dropTarget = null;
 			}
@@ -506,6 +541,18 @@
 				aria-hidden="true"
 				class="pointer-events-none absolute -right-48 -bottom-48 -z-10 w-240 max-w-none opacity-[0.07] select-none"
 			/>
+			{#if dragged}
+				<div
+					bind:this={trashZone}
+					transition:fade={{ duration: reducedMotion ? 0 : 160 }}
+					aria-hidden="true"
+					class="pointer-events-none absolute top-10 bottom-10 -left-6 z-10 hidden w-32 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed text-center text-xs font-semibold transition-colors lg:flex {trashHovered
+						? 'border-red-400 bg-red-500/25 text-red-100'
+						: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
+				>
+					<IconTrash size={30} stroke={1.8} />
+				</div>
+			{/if}
 			{#if canOrder && workspace.files.length > 1}
 				<button
 					transition:fade={{ duration: reducedMotion ? 0 : 100 }}
