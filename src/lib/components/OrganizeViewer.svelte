@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import {
 		IconPlus,
 		IconRefresh,
@@ -231,7 +232,11 @@
 				aria-label="PDFs in this project"
 			>
 				{#each sources as source, index (source.key)}
-					<li class="flex min-w-0 items-center gap-2 text-sm">
+					<li
+						in:fade={{ duration: reducedMotion ? 0 : 240 }}
+						out:fade={{ duration: reducedMotion ? 0 : 140 }}
+						class="flex min-w-0 items-center gap-2 text-sm"
+					>
 						<span class="{sourceColor(index).dot} size-2.5 shrink-0 rounded-full" aria-hidden="true"
 						></span>
 						<span class="max-w-40 truncate font-medium" title={source.file.name}

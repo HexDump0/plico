@@ -378,7 +378,7 @@
 			bind:this={trashZone}
 			transition:fade={{ duration: reducedMotion ? 0 : 160 }}
 			aria-hidden="true"
-			class="pointer-events-none fixed inset-y-0 left-0 z-30 flex w-24 flex-col items-center justify-center gap-3 rounded-r-2xl border-2 border-l-0 border-dashed text-center text-xs font-semibold transition-colors sm:w-28 {trashHovered
+			class="pointer-events-none fixed inset-y-0 left-0 top-36 bottom-2 z-30 flex w-24 flex-col items-center justify-center gap-3 rounded-r-2xl border-2 border-l-0 border-dashed text-center text-xs font-semibold transition-colors sm:w-28 {trashHovered
 				? 'border-red-400 bg-red-500/25 text-red-100'
 				: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
 		>
