@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{Cursor, Write};
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use jpeg_encoder::{ChromaSubsamplingMethod, ColorType, Encoder as JpegEncoder};
 use js_sys::{Array, Uint8Array};
-use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, SaveOptions, dictionary};
+use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, SaveOptions, Stream, dictionary};
 use wasm_bindgen::prelude::*;
 use zune_core::bytestream::ZCursor;
 use zune_jpeg::{JpegDecoder, zune_core::colorspace::ColorSpace};
@@ -41,6 +41,312 @@ const MAX_DECOMPRESSED_STREAM: usize = 256 * 1024 * 1024;
 /// Matches lopdf's own page tree traversal limit. Guards against a /Parent cycle
 /// in a malformed file.
 const MAX_PAGE_TREE_DEPTH: usize = 256;
+
+const MAX_DECODED_IMAGE: usize = 128 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+pub struct ImagePdfOptions {
+    pub page_width: f32,
+    pub page_height: f32,
+    pub margin: f32,
+}
+
+struct PreparedImage {
+    stream: Stream,
+    mask: Option<Stream>,
+    width: u32,
+    height: u32,
+    orientation: u8,
+}
+
+pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result<Vec<u8>, String> {
+    if images.is_empty() {
+        return Err("Choose at least one JPG or PNG image.".into());
+    }
+    if !options.page_width.is_finite()
+        || !options.page_height.is_finite()
+        || !options.margin.is_finite()
+        || options.page_width <= 0.0
+        || options.page_height <= 0.0
+        || options.margin < 0.0
+        || options.margin * 2.0 >= options.page_width.min(options.page_height)
+        || options.page_width.max(options.page_height) > 14_400.0
+    {
+        return Err("Choose a valid page size and margin.".into());
+    }
+
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let mut kids = Vec::with_capacity(images.len());
+
+    for (index, bytes) in images.iter().enumerate() {
+        let mut image = prepare_image(bytes)
+            .map_err(|error| format!("Image {} could not be added: {error}", index + 1))?;
+        let landscape = matches!(image.orientation, 5..=8)
+            .then_some(image.height > image.width)
+            .unwrap_or(image.width > image.height);
+        let (page_width, page_height) = if landscape {
+            (options.page_height, options.page_width)
+        } else {
+            (options.page_width, options.page_height)
+        };
+
+        if let Some(mask) = image.mask.take() {
+            let mask_id = document.add_object(mask);
+            image.stream.dict.set("SMask", mask_id);
+        }
+        let image_id = document.add_object(image.stream);
+        let (logical_width, logical_height) = if matches!(image.orientation, 5..=8) {
+            (image.height as f32, image.width as f32)
+        } else {
+            (image.width as f32, image.height as f32)
+        };
+        let scale = ((page_width - 2.0 * options.margin) / logical_width)
+            .min((page_height - 2.0 * options.margin) / logical_height);
+        let draw_width = logical_width * scale;
+        let draw_height = logical_height * scale;
+        let x = (page_width - draw_width) / 2.0;
+        let y = (page_height - draw_height) / 2.0;
+        let [a, b, c, d, e, f] = image_matrix(image.orientation, x, y, draw_width, draw_height);
+        let content = format!("q\n{a:.4} {b:.4} {c:.4} {d:.4} {e:.4} {f:.4} cm\n/Im0 Do\nQ\n");
+        let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Real(page_width), Object::Real(page_height)],
+            "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } },
+            "Contents" => content_id,
+        });
+        kids.push(Object::Reference(page_id));
+    }
+
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => images.len() as i64,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    document.compress();
+    write_compressed(document)
+}
+
+fn image_matrix(orientation: u8, x: f32, y: f32, width: f32, height: f32) -> [f32; 6] {
+    match orientation {
+        2 => [-width, 0.0, 0.0, height, x + width, y],
+        3 => [-width, 0.0, 0.0, -height, x + width, y + height],
+        4 => [width, 0.0, 0.0, -height, x, y + height],
+        5 => [0.0, -height, -width, 0.0, x + width, y + height],
+        6 => [0.0, -height, width, 0.0, x, y + height],
+        7 => [0.0, height, width, 0.0, x, y],
+        8 => [0.0, height, -width, 0.0, x + width, y],
+        _ => [width, 0.0, 0.0, height, x, y],
+    }
+}
+
+fn prepare_image(bytes: &[u8]) -> Result<PreparedImage, String> {
+    if bytes.starts_with(b"\xFF\xD8") {
+        prepare_jpeg(bytes)
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        prepare_png(bytes)
+    } else {
+        Err("Only JPG and PNG images are supported.".into())
+    }
+}
+
+fn prepare_jpeg(bytes: &[u8]) -> Result<PreparedImage, String> {
+    let mut decoder = JpegDecoder::new(ZCursor::new(bytes));
+    decoder
+        .decode_headers()
+        .map_err(|_| "The JPG header is invalid.")?;
+    let info = decoder.info().ok_or("The JPG has no image data.")?;
+    if info.width == 0 || info.height == 0 {
+        return Err("The JPG has no image data.".into());
+    }
+    let (content, colorspace) = match info.components {
+        1 => (bytes.to_vec(), "DeviceGray"),
+        3 => (bytes.to_vec(), "DeviceRGB"),
+        4 => {
+            decoder.set_options(decoder.options().jpeg_set_out_colorspace(ColorSpace::RGB));
+            if decoder.output_buffer_size().unwrap_or(usize::MAX) > MAX_DECODED_IMAGE {
+                return Err("The JPG is too large to decode safely.".into());
+            }
+            let pixels = decoder
+                .decode()
+                .map_err(|_| "The JPG could not be decoded.")?;
+            let encoded = encode_jpeg(&pixels, info.width, info.height, PixelColors::Rgb, 95)
+                .ok_or("The JPG could not be converted to RGB.")?;
+            (encoded, "DeviceRGB")
+        }
+        _ => return Err("The JPG color format is unsupported.".into()),
+    };
+    Ok(PreparedImage {
+        stream: Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => info.width as i64,
+                "Height" => info.height as i64,
+                "ColorSpace" => colorspace,
+                "BitsPerComponent" => 8,
+                "Filter" => "DCTDecode",
+            },
+            content,
+        ),
+        mask: None,
+        width: info.width.into(),
+        height: info.height.into(),
+        orientation: jpeg_orientation(bytes),
+    })
+}
+
+fn prepare_png(bytes: &[u8]) -> Result<PreparedImage, String> {
+    let mut decoder = png::Decoder::new_with_limits(
+        Cursor::new(bytes),
+        png::Limits {
+            bytes: MAX_DECODED_IMAGE,
+        },
+    );
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|_| "The PNG is invalid.")?;
+    let size = reader
+        .output_buffer_size()
+        .filter(|size| *size <= MAX_DECODED_IMAGE)
+        .ok_or("The PNG is too large to decode safely.")?;
+    let mut pixels = vec![0; size];
+    let frame = reader
+        .next_frame(&mut pixels)
+        .map_err(|_| "The PNG could not be decoded.")?;
+    let pixels = &pixels[..frame.buffer_size()];
+    let (colorspace, components, alpha) = match frame.color_type {
+        png::ColorType::Grayscale => ("DeviceGray", 1, false),
+        png::ColorType::Rgb => ("DeviceRGB", 3, false),
+        png::ColorType::GrayscaleAlpha => ("DeviceGray", 1, true),
+        png::ColorType::Rgba => ("DeviceRGB", 3, true),
+        png::ColorType::Indexed => return Err("The PNG palette could not be expanded.".into()),
+    };
+    let (image_pixels, mask) = if alpha {
+        let mut image_pixels = Vec::with_capacity(pixels.len() / (components + 1) * components);
+        let mut mask = Vec::with_capacity(pixels.len() / (components + 1));
+        for pixel in pixels.chunks_exact(components + 1) {
+            image_pixels.extend_from_slice(&pixel[..components]);
+            mask.push(pixel[components]);
+        }
+        let mask = mask.iter().any(|alpha| *alpha != 255).then_some(mask);
+        (image_pixels, mask)
+    } else {
+        (pixels.to_vec(), None)
+    };
+    let mask = mask
+        .map(|bytes| flate_image_stream(bytes, frame.width, frame.height, "DeviceGray", true))
+        .transpose()?;
+    Ok(PreparedImage {
+        stream: flate_image_stream(image_pixels, frame.width, frame.height, colorspace, false)?,
+        mask,
+        width: frame.width,
+        height: frame.height,
+        orientation: 1,
+    })
+}
+
+fn flate_image_stream(
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    colorspace: &str,
+    mask: bool,
+) -> Result<Stream, String> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(&pixels)
+        .map_err(|_| "The PNG could not be compressed.")?;
+    let compressed = encoder
+        .finish()
+        .map_err(|_| "The PNG could not be compressed.")?;
+    let mut dict = dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => width as i64,
+        "Height" => height as i64,
+        "ColorSpace" => colorspace,
+        "BitsPerComponent" => 8,
+        "Filter" => "FlateDecode",
+    };
+    if mask {
+        dict.set("Decode", vec![Object::Integer(0), Object::Integer(1)]);
+    }
+    Ok(Stream::new(dict, compressed))
+}
+
+fn jpeg_orientation(bytes: &[u8]) -> u8 {
+    let mut offset = 2;
+    while offset + 4 <= bytes.len() && bytes[offset] == 0xFF {
+        let marker = bytes[offset + 1];
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        if marker == 0x00 || marker == 0xFF {
+            offset += 1;
+            continue;
+        }
+        let length = u16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
+        if length < 2 || offset + 2 + length > bytes.len() {
+            break;
+        }
+        if marker == 0xE1 {
+            let segment = &bytes[offset + 4..offset + 2 + length];
+            if let Some(orientation) = exif_orientation(segment) {
+                return orientation;
+            }
+        }
+        offset += 2 + length;
+    }
+    1
+}
+
+fn exif_orientation(segment: &[u8]) -> Option<u8> {
+    let tiff = segment.strip_prefix(b"Exif\0\0")?;
+    let little_endian = match tiff.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let read_u16 = |offset: usize| {
+        let bytes: [u8; 2] = tiff.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
+        Some(if little_endian {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        })
+    };
+    let read_u32 = |offset: usize| {
+        let bytes: [u8; 4] = tiff.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+        Some(if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        })
+    };
+    if read_u16(2)? != 42 {
+        return None;
+    }
+    let ifd = usize::try_from(read_u32(4)?).ok()?;
+    let count = usize::from(read_u16(ifd)?);
+    for index in 0..count {
+        let entry = ifd.checked_add(2)?.checked_add(index.checked_mul(12)?)?;
+        if read_u16(entry)? == 0x0112 && read_u16(entry + 2)? == 3 && read_u32(entry + 4)? == 1 {
+            let value = read_u16(entry + 8)?;
+            return (1..=8).contains(&value).then_some(value as u8);
+        }
+    }
+    None
+}
 
 pub fn merge_pdf_bytes(files: &[&[u8]]) -> Result<Vec<u8>, String> {
     if files.len() < 2 {
@@ -164,6 +470,8 @@ pub fn compress_pdf_bytes(input: &[u8], options: CompressOptions) -> Result<Vec<
             options.max_image_dimension,
         );
     }
+    deduplicate_streams(&mut document);
+    document.prune_objects();
 
     let output = write_compressed(document)?;
     // A rewrite that only repacks bytes should not make a file larger. When a
@@ -185,13 +493,16 @@ fn write_compressed(mut document: Document) -> Result<Vec<u8>, String> {
     let modern = SaveOptions::builder()
         .use_object_streams(true)
         .use_xref_streams(true)
+        .max_objects_per_stream(200)
+        .compression_level(9)
         .build();
 
     let mut packed = Vec::new();
     let mut plain = Vec::new();
+    let mut doc_plain = document.clone();
     document
         .save_with_options(&mut packed, modern)
-        .and_then(|_| document.save_to(&mut plain))
+        .and_then(|_| doc_plain.save_to(&mut plain))
         .map_err(|error| format!("The PDF could not be created: {error}"))?;
     Ok(if packed.len() <= plain.len() {
         packed
@@ -227,8 +538,10 @@ fn strip_thumbnails(document: &mut Document) -> bool {
 }
 
 /// Re-deflates streams that are already FlateDecode-compressed, keeping the
-/// result only when it is smaller. Streams with predictors are skipped: their
-/// decoded bytes need the predictor reapplied to stay a legal re-encoding.
+/// result only when it is smaller. Standard zlib decoding unpacks only the
+/// outer compression layer without undoing any internal predictor filtering,
+/// so streams with DecodeParms predictors can be safely recompressed without
+/// altering their decoded pixel representation.
 fn recompress_flate_streams(document: &mut Document) {
     let candidates: Vec<ObjectId> = document
         .objects
@@ -245,10 +558,10 @@ fn recompress_flate_streams(document: &mut Document) {
         let Some(Object::Stream(stream)) = document.objects.get_mut(&id) else {
             continue;
         };
-        if !stream.allows_compression || stream.content.len() < 1024 {
+        if !stream.allows_compression || stream.content.len() < 64 {
             continue;
         }
-        let Ok(decoded) = stream.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM) else {
+        let Ok(decoded) = decompress_zlib_stream(&stream.content, MAX_DECOMPRESSED_STREAM) else {
             continue;
         };
         let Ok(packed) = deflate_best(&decoded) else {
@@ -260,6 +573,25 @@ fn recompress_flate_streams(document: &mut Document) {
     }
 }
 
+fn decompress_zlib_stream(compressed: &[u8], limit: usize) -> Result<Vec<u8>, ()> {
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+
+    if compressed.is_empty() {
+        return Err(());
+    }
+
+    let mut output = Vec::new();
+    let decoder = ZlibDecoder::new(compressed);
+    let read_result = decoder.take((limit as u64) + 1).read_to_end(&mut output);
+
+    if read_result.is_ok() && output.len() <= limit && !output.is_empty() {
+        return Ok(output);
+    }
+
+    Err(())
+}
+
 fn deflate_best(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
     encoder
@@ -269,7 +601,7 @@ fn deflate_best(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn is_single_flate(dict: &Dictionary) -> bool {
-    filter_matches(dict, b"FlateDecode") && !dict.has(b"DecodeParms")
+    filter_matches(dict, b"FlateDecode")
 }
 
 /// Matches /Filter when it names the filter directly or lists it alone.
@@ -283,11 +615,156 @@ fn filter_matches(dict: &Dictionary, name: &[u8]) -> bool {
     }
 }
 
+/// Finds stream objects with identical dictionary attributes (ignoring /Length)
+/// and identical content bytes, replacing references to redundant copies with
+/// a single canonical object id.
+fn deduplicate_streams(document: &mut Document) -> usize {
+    let stream_ids: Vec<ObjectId> = document
+        .objects
+        .iter()
+        .filter_map(|(id, object)| {
+            let Object::Stream(stream) = object else {
+                return None;
+            };
+            if stream
+                .dict
+                .get(b"Type")
+                .and_then(Object::as_name)
+                .is_ok_and(|name| name == b"ObjStm" || name == b"XRef")
+            {
+                return None;
+            }
+            Some(*id)
+        })
+        .collect();
+
+    let mut by_len: BTreeMap<usize, Vec<ObjectId>> = BTreeMap::new();
+    for id in stream_ids {
+        if let Some(Object::Stream(stream)) = document.objects.get(&id) {
+            by_len.entry(stream.content.len()).or_default().push(id);
+        }
+    }
+
+    let mut replacements: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
+    for (_len, group) in by_len {
+        if group.len() < 2 {
+            continue;
+        }
+        let mut canonical: Vec<ObjectId> = Vec::new();
+        for id in group {
+            let Some(Object::Stream(current)) = document.objects.get(&id) else {
+                continue;
+            };
+            let mut found_canon = None;
+            for &canon_id in &canonical {
+                let Some(Object::Stream(canon)) = document.objects.get(&canon_id) else {
+                    continue;
+                };
+                if current.content == canon.content
+                    && stream_dicts_match(&current.dict, &canon.dict)
+                {
+                    found_canon = Some(canon_id);
+                    break;
+                }
+            }
+            if let Some(target) = found_canon {
+                replacements.insert(id, target);
+            } else {
+                canonical.push(id);
+            }
+        }
+    }
+
+    if replacements.is_empty() {
+        return 0;
+    }
+
+    let count = replacements.len();
+    for object in document.objects.values_mut() {
+        replace_references(object, &replacements);
+    }
+    replace_references_in_dict(&mut document.trailer, &replacements);
+
+    for id in replacements.keys() {
+        document.objects.remove(id);
+    }
+
+    count
+}
+
+fn stream_dicts_match(a: &Dictionary, b: &Dictionary) -> bool {
+    let a_keys: BTreeSet<_> = a
+        .iter()
+        .map(|(k, _)| k.as_slice())
+        .filter(|k| *k != b"Length")
+        .collect();
+    let b_keys: BTreeSet<_> = b
+        .iter()
+        .map(|(k, _)| k.as_slice())
+        .filter(|k| *k != b"Length")
+        .collect();
+    if a_keys != b_keys {
+        return false;
+    }
+    for key in a_keys {
+        if a.get(key).ok() != b.get(key).ok() {
+            return false;
+        }
+    }
+    true
+}
+
+fn replace_references(object: &mut Object, replacements: &BTreeMap<ObjectId, ObjectId>) {
+    match object {
+        Object::Reference(id) => {
+            if let Some(target) = replacements.get(id) {
+                *id = *target;
+            }
+        }
+        Object::Array(items) => {
+            for item in items {
+                replace_references(item, replacements);
+            }
+        }
+        Object::Dictionary(dict) => replace_references_in_dict(dict, replacements),
+        Object::Stream(stream) => replace_references_in_dict(&mut stream.dict, replacements),
+        _ => {}
+    }
+}
+
+fn replace_references_in_dict(dict: &mut Dictionary, replacements: &BTreeMap<ObjectId, ObjectId>) {
+    for (_, value) in dict.iter_mut() {
+        replace_references(value, replacements);
+    }
+}
+
+fn collect_mask_ids(document: &Document) -> BTreeSet<ObjectId> {
+    document
+        .objects
+        .values()
+        .filter_map(|obj| {
+            let Object::Stream(stream) = obj else {
+                return None;
+            };
+            let smask = stream
+                .dict
+                .get(b"SMask")
+                .and_then(Object::as_reference)
+                .ok();
+            let mask = stream.dict.get(b"Mask").and_then(Object::as_reference).ok();
+            Some([smask, mask])
+        })
+        .flatten()
+        .flatten()
+        .collect()
+}
+
 /// DCTDecode sources are plain JPEG files, so they can be decoded, re-encoded
 /// at a chosen quality and swapped back in without touching page content.
 /// Anything else (CMYK, inverted /Decode values, predictor chains) is left as
 /// it is; a wrong guess here would shift colours, not just sizes.
 fn transcode_jpeg_images(document: &mut Document, quality: u8, max_dimension: u32) {
+    let mask_ids = collect_mask_ids(document);
     let candidates: Vec<(ObjectId, PixelColors)> = document
         .objects
         .iter()
@@ -315,11 +792,12 @@ fn transcode_jpeg_images(document: &mut Document, quality: u8, max_dimension: u3
             continue;
         };
         // A separately sized mask must stay aligned with its image.
-        let image_max_dimension = if stream.dict.has(b"SMask") || stream.dict.has(b"Mask") {
-            0
-        } else {
-            max_dimension
-        };
+        let image_max_dimension =
+            if stream.dict.has(b"SMask") || stream.dict.has(b"Mask") || mask_ids.contains(&id) {
+                0
+            } else {
+                max_dimension
+            };
         if let Some((encoded, width, height)) = transcode_jpeg(
             &stream.content,
             colors,
@@ -341,6 +819,7 @@ fn transcode_jpeg_images(document: &mut Document, quality: u8, max_dimension: u3
 /// when it beats the original stream. Other bit depths, masks and colour
 /// transforms need separate handling to preserve their appearance.
 fn transcode_flate_images(document: &mut Document, quality: u8, max_dimension: u32) {
+    let mask_ids = collect_mask_ids(document);
     let candidates: Vec<(ObjectId, PixelColors)> = document
         .objects
         .iter()
@@ -348,7 +827,10 @@ fn transcode_flate_images(document: &mut Document, quality: u8, max_dimension: u
             let Object::Stream(stream) = object else {
                 return None;
             };
-            (is_flate_image(&stream.dict) && stream.content.len() >= MIN_TRANSCODE_JPEG)
+            (!mask_ids.contains(id)
+                && is_flate_image(&stream.dict)
+                && supports_flate_image_decompression(&stream.dict, document)
+                && stream.content.len() >= MIN_TRANSCODE_JPEG)
                 .then_some(*id)
                 .zip(pixel_colors(document, &stream.dict))
         })
@@ -413,6 +895,25 @@ fn transcode_flate_images(document: &mut Document, quality: u8, max_dimension: u
             stream.dict.set("Height", i64::from(new_height));
         }
     }
+}
+
+fn supports_flate_image_decompression(dict: &Dictionary, document: &Document) -> bool {
+    let Ok(params) = dict.get(b"DecodeParms") else {
+        return true;
+    };
+    let params_dict = match params {
+        Object::Dictionary(d) => Some(d),
+        Object::Reference(id) => document
+            .get_object(*id)
+            .ok()
+            .and_then(|obj| obj.as_dict().ok()),
+        _ => None,
+    };
+    let Some(d) = params_dict else {
+        return false;
+    };
+    let predictor = d.get(b"Predictor").and_then(Object::as_i64).unwrap_or(1);
+    predictor == 1 || (10..=15).contains(&predictor)
 }
 
 #[derive(Clone, Copy)]
@@ -560,6 +1061,7 @@ fn encode_jpeg(
     let mut encoded = Vec::new();
     let mut encoder = JpegEncoder::new(&mut encoded, quality.clamp(1, 100));
     encoder.set_chroma_subsampling_method(ChromaSubsamplingMethod::Average);
+    encoder.set_optimized_huffman_tables(true);
     encoder
         .encode(
             pixels,
@@ -918,6 +1420,41 @@ pub fn merge_pdfs(input: &[u8], lengths: &[u32]) -> Result<Vec<u8>, JsValue> {
     merge_pdf_bytes(&files).map_err(|error| JsValue::from_str(&error))
 }
 
+#[wasm_bindgen]
+pub fn images_to_pdf(
+    input: &[u8],
+    lengths: &[u32],
+    page_width: f32,
+    page_height: f32,
+    margin: f32,
+) -> Result<Vec<u8>, JsValue> {
+    let expected_length = lengths
+        .iter()
+        .try_fold(0usize, |total, length| total.checked_add(*length as usize));
+    if expected_length != Some(input.len()) {
+        return Err(JsValue::from_str("The image input was incomplete."));
+    }
+    let mut offset = 0;
+    let images = lengths
+        .iter()
+        .map(|length| {
+            let end = offset + *length as usize;
+            let bytes = &input[offset..end];
+            offset = end;
+            bytes
+        })
+        .collect::<Vec<_>>();
+    images_to_pdf_bytes(
+        &images,
+        ImagePdfOptions {
+            page_width,
+            page_height,
+            margin,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
 fn split_outputs_to_js(outputs: Vec<Vec<u8>>) -> Array {
     let result = Array::new();
     for bytes in outputs {
@@ -973,9 +1510,109 @@ mod tests {
     use lopdf::{Document, Object, Stream, dictionary};
 
     use super::{
-        CompressOptions, SplitMode, compress_pdf_bytes, filter_matches, is_jpeg_image,
-        merge_pdf_bytes, parse_version, split_pdf_bytes,
+        CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, deflate_best,
+        filter_matches, images_to_pdf_bytes, is_jpeg_image, jpeg_orientation, merge_pdf_bytes,
+        parse_version, split_pdf_bytes,
     };
+
+    fn image_pdf_options() -> ImagePdfOptions {
+        ImagePdfOptions {
+            page_width: 595.0,
+            page_height: 842.0,
+            margin: 18.0,
+        }
+    }
+
+    fn rgba_png() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[255, 0, 0, 255, 0, 0, 255, 0])
+                .unwrap();
+        }
+        bytes
+    }
+
+    #[test]
+    fn image_pdf_keeps_jpeg_bytes_and_input_order() {
+        let first = jpeg_bytes(3, 2, 90);
+        let second = jpeg_bytes(2, 3, 90);
+        let output = images_to_pdf_bytes(&[&first, &second], image_pdf_options()).unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        let pages = document.get_pages();
+        assert_eq!(pages.len(), 2);
+        for (page, original) in pages.into_values().zip([first, second]) {
+            let xobjects = document.get_page_resources(page).unwrap().0.unwrap();
+            let id = xobjects
+                .get(b"XObject")
+                .and_then(Object::as_dict)
+                .unwrap()
+                .get(b"Im0")
+                .and_then(Object::as_reference)
+                .unwrap();
+            let image = document.get_object(id).and_then(Object::as_stream).unwrap();
+            assert_eq!(image.content, original);
+            assert_eq!(
+                image.dict.get(b"Filter").and_then(Object::as_name).unwrap(),
+                b"DCTDecode"
+            );
+        }
+    }
+
+    #[test]
+    fn image_pdf_preserves_png_alpha_as_soft_mask() {
+        let png = rgba_png();
+        let output = images_to_pdf_bytes(&[&png], image_pdf_options()).unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        let image = document
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .find(|stream| stream.dict.get(b"SMask").is_ok())
+            .unwrap();
+        assert_eq!(
+            image.decompressed_content().unwrap(),
+            [255, 0, 0, 0, 0, 255]
+        );
+        let mask_id = image
+            .dict
+            .get(b"SMask")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let mask = document
+            .get_object(mask_id)
+            .and_then(Object::as_stream)
+            .unwrap();
+        assert_eq!(mask.decompressed_content().unwrap(), [255, 0]);
+    }
+
+    #[test]
+    fn image_pdf_honors_exif_orientation() {
+        let jpeg = jpeg_bytes(3, 2, 90);
+        let mut oriented = jpeg[..2].to_vec();
+        oriented.extend_from_slice(&[
+            0xff, 0xe1, 0, 34, b'E', b'x', b'i', b'f', 0, 0, b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0,
+            0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        oriented.extend_from_slice(&jpeg[2..]);
+        assert_eq!(jpeg_orientation(&oriented), 6);
+        let output = images_to_pdf_bytes(&[&oriented], image_pdf_options()).unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        let page = *document.get_pages().values().next().unwrap();
+        let media_box = document
+            .get_dictionary(page)
+            .unwrap()
+            .get(b"MediaBox")
+            .and_then(Object::as_array)
+            .unwrap();
+        assert_eq!(media_box[2].as_float().unwrap(), 595.0);
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        assert!(content.contains("0.0000 -"));
+    }
 
     fn one_page_pdf(label: &str) -> Vec<u8> {
         let mut document = Document::with_version("1.5");
@@ -1686,6 +2323,162 @@ mod tests {
         let error =
             compress_pdf_bytes(b"not a pdf", compress_options(0, 0, false, false)).unwrap_err();
         assert!(error.starts_with("PDF 1 could not be read:"));
+    }
+
+    #[test]
+    fn compress_deduplicates_identical_streams() {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+
+        let stream_bytes = b"q /F1 12 Tf (Duplicate watermarked logo text) Tj Q ".repeat(20);
+        let stream1_id = document.add_object(Stream::new(
+            dictionary! { "Filter" => "FlateDecode" },
+            deflate_best(&stream_bytes).unwrap(),
+        ));
+        let stream2_id = document.add_object(Stream::new(
+            dictionary! { "Filter" => "FlateDecode" },
+            deflate_best(&stream_bytes).unwrap(),
+        ));
+        assert_ne!(stream1_id, stream2_id);
+
+        let page1_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => stream1_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        let page2_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => stream2_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page1_id.into(), page2_id.into()],
+                "Count" => 2,
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut input = Vec::new();
+        document.save_to(&mut input).unwrap();
+
+        let compressed = compress_pdf_bytes(&input, compress_options(0, 0, false, false)).unwrap();
+        let output = Document::load_mem(&compressed).unwrap();
+        let pages = output.get_pages();
+        assert_eq!(pages.len(), 2);
+        let expected_content = format!("{}\n", String::from_utf8_lossy(&stream_bytes)).into_bytes();
+        let p1_content = output.get_page_content(pages[&1]);
+        let p2_content = output.get_page_content(pages[&2]);
+        assert_eq!(p1_content, expected_content);
+        assert_eq!(p2_content, expected_content);
+
+        // Both pages must point to the same content stream now
+        let p1_contents_ref = output
+            .get_dictionary(pages[&1])
+            .unwrap()
+            .get(b"Contents")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let p2_contents_ref = output
+            .get_dictionary(pages[&2])
+            .unwrap()
+            .get(b"Contents")
+            .and_then(Object::as_reference)
+            .unwrap();
+        assert_eq!(p1_contents_ref, p2_contents_ref);
+    }
+
+    #[test]
+    fn compress_recompresses_flate_stream_with_png_predictor() {
+        use flate2::Compression;
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        // Raw predictor stream: 1 byte filter prefix (0 = None) + 10 pixels of grayscale
+        let raw_predictor_data = [0u8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].repeat(500);
+        // Encode loosely with fast compression (level 1)
+        let mut fast_encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        fast_encoder.write_all(&raw_predictor_data).unwrap();
+        let fast_compressed = fast_encoder.finish().unwrap();
+
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let image_id = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 10,
+                "Height" => 500,
+                "ColorSpace" => "DeviceGray",
+                "BitsPerComponent" => 8,
+                "Filter" => "FlateDecode",
+                "DecodeParms" => dictionary! {
+                    "Predictor" => 15,
+                    "Columns" => 10,
+                    "Colors" => 1,
+                    "BitsPerComponent" => 8,
+                },
+            },
+            fast_compressed.clone(),
+        ));
+        let content_id = document.add_object(Stream::new(
+            dictionary! {},
+            b"q 100 0 0 100 0 0 cm /Im0 Do Q".to_vec(),
+        ));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "MediaBox" => vec![0.into(), 0.into(), 100.into(), 100.into()],
+            "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } },
+        });
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut input = Vec::new();
+        document.save_to(&mut input).unwrap();
+
+        // Compress with lossless reflate
+        let compressed = compress_pdf_bytes(&input, compress_options(0, 0, false, false)).unwrap();
+        let result = Document::load_mem(&compressed).unwrap();
+        let page = result.get_pages()[&1];
+        let result_image = result
+            .get_dictionary(page)
+            .and_then(|p| p.get_deref(b"Resources", &result))
+            .and_then(|r| r.as_dict())
+            .and_then(|r| r.get_deref(b"XObject", &result))
+            .and_then(|x| x.as_dict())
+            .and_then(|x| x.get_deref(b"Im0", &result))
+            .and_then(|o| o.as_stream())
+            .unwrap();
+
+        assert!(
+            result_image.content.len() < fast_compressed.len(),
+            "flate stream with predictor did not shrink"
+        );
+        assert!(result_image.dict.has(b"DecodeParms"));
+        // The decompressed pixels must still be bit-for-bit identical
+        let pixels = result_image.decompressed_content().unwrap();
+        assert_eq!(pixels.len(), 10 * 500);
+        assert_eq!(&pixels[..10], &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
     }
 
     #[test]

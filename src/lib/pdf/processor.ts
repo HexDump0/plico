@@ -1,6 +1,8 @@
 import type {
 	CompressOptions,
+	ImagePdfOptions,
 	PdfOutput,
+	PdfImageOptions,
 	PdfWorkerRequest,
 	PdfWorkerResponse,
 	SplitOptions
@@ -56,6 +58,13 @@ function submit(request: PdfWorkerRequest, signal?: AbortSignal) {
 	});
 }
 
+function pdfOrZip(output: PdfOutput): PdfOutput & { format: 'pdf' | 'zip' } {
+	if (output.format !== 'pdf' && output.format !== 'zip') {
+		throw new Error('The PDF engine returned an unexpected file format.');
+	}
+	return output as PdfOutput & { format: 'pdf' | 'zip' };
+}
+
 export async function processPdfs(operation: 'merge', files: File[], signal?: AbortSignal) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
@@ -68,7 +77,9 @@ export async function processSplitPdf(file: File, options: SplitOptions, signal?
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffer = await file.arrayBuffer();
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	return submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal);
+	return pdfOrZip(
+		await submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal)
+	);
 }
 
 export async function processCompressPdf(
@@ -79,14 +90,38 @@ export async function processCompressPdf(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	return submit(
-		{
-			id: ++requestId,
-			operation: 'compress',
-			files: buffers,
-			names: files.map((file) => file.name),
-			options
-		},
-		signal
+	return pdfOrZip(
+		await submit(
+			{
+				id: ++requestId,
+				operation: 'compress',
+				files: buffers,
+				names: files.map((file) => file.name),
+				options
+			},
+			signal
+		)
 	);
+}
+
+export async function processImagesToPdf(
+	files: File[],
+	options: ImagePdfOptions = { pageWidth: 595.28, pageHeight: 841.89, margin: 18 },
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit({ id: ++requestId, operation: 'images-to-pdf', files: buffers, options }, signal);
+}
+
+export async function processPdfToImages(
+	file: File,
+	options: PdfImageOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit({ id: ++requestId, operation: 'pdf-to-images', files: [buffer], options }, signal);
 }

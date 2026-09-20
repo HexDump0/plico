@@ -85,7 +85,7 @@
 	);
 	const compressOptions = $derived({
 		imageQuality: compressLevel === 'light' ? 0 : compressLevel === 'balanced' ? 80 : 50,
-		maxImageDimension: compressLevel === 'strong' ? 1600 : 0,
+		maxImageDimension: compressLevel === 'strong' ? 1600 : compressLevel === 'balanced' ? 2400 : 0,
 		removeMetadata: compressRemoveMetadata,
 		removeThumbnails: compressRemoveThumbnails
 	});

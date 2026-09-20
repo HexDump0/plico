@@ -9,6 +9,19 @@ export type CompressOptions = {
 	removeThumbnails: boolean;
 };
 
+export type ImagePdfOptions = {
+	pageWidth: number;
+	pageHeight: number;
+	margin: number;
+};
+
+export type PdfImageOptions = {
+	format: 'jpg' | 'png';
+	dpi: number;
+	quality: number;
+	pages?: number[];
+};
+
 export type PdfWorkerRequest =
 	| { id: number; operation: 'merge'; files: ArrayBuffer[] }
 	| { id: number; operation: 'split'; files: ArrayBuffer[]; options: SplitOptions }
@@ -18,9 +31,21 @@ export type PdfWorkerRequest =
 			files: ArrayBuffer[];
 			names: string[];
 			options: CompressOptions;
+	  }
+	| {
+			id: number;
+			operation: 'images-to-pdf';
+			files: ArrayBuffer[];
+			options: ImagePdfOptions;
+	  }
+	| {
+			id: number;
+			operation: 'pdf-to-images';
+			files: ArrayBuffer[];
+			options: PdfImageOptions;
 	  };
 
-export type PdfOutput = { bytes: Uint8Array; format: 'pdf' | 'zip' };
+export type PdfOutput = { bytes: Uint8Array; format: 'pdf' | 'jpg' | 'png' | 'zip' };
 
 export type PdfWorkerResponse =
 	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format'] }
