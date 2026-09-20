@@ -3,7 +3,7 @@
 	import { cubicIn, cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
 	import { IconArrowRight, IconDownload, IconLoader2 } from '@tabler/icons-svelte-runes';
-	import type { CatalogTool } from '$lib/tool-catalog';
+	import { toolCategoryColor, type CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { SplitOptions } from '$lib/pdf/types';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
@@ -17,6 +17,13 @@
 	import type { ImagePdfOptions, PdfImageOptions } from '$lib/pdf/types';
 	import { DownloadJob } from '$lib/pdf/download-job.svelte';
 	import { parsePageRange } from '$lib/pdf/page-range';
+	import {
+		officeOperation,
+		officeTools,
+		inputAccept,
+		acceptsFile
+	} from '$lib/pdf/office-conversion';
+	import { processOfficeFile } from '$lib/pdf/office-processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import DocumentCards from './DocumentCards.svelte';
 	import CompressSettings from './CompressSettings.svelte';
@@ -41,19 +48,22 @@
 			tool.id === 'image-to-pdf' ||
 			tool.id === 'images-to-pdf'
 	);
-	workspace.use(untrack(() => isImageToPdf) ? 'image' : 'pdf');
-	const accent = $derived(
-		isMerge
-			? 'text-merge'
-			: isSplit
-				? 'text-split'
-				: isCompress
-					? 'text-compress'
-					: isPdfToImage
-						? 'text-split'
-						: isImageToPdf
-							? 'text-convert'
-							: 'text-brand'
+	const officeTool = $derived(officeOperation(tool.id));
+	const inputType = $derived(
+		officeTool ? officeTools[officeTool].input : isImageToPdf ? 'image' : 'pdf'
+	);
+	workspace.use(untrack(() => inputType));
+	const accent = $derived(toolCategoryColor(tool.id));
+	const buttonColor = $derived(
+		(
+			{
+				'text-brand': 'bg-brand',
+				'text-convert': 'bg-convert',
+				'text-compress': 'bg-compress',
+				'text-merge': 'bg-merge',
+				'text-split': 'bg-split'
+			} as Record<string, string>
+		)[accent] ?? 'bg-brand'
 	);
 	const cardMode = $derived(
 		isMerge ? 'merge' : isCompress ? 'compress' : isImageToPdf ? 'image' : 'single'
@@ -136,50 +146,56 @@
 	const pdfToImageValid = $derived(!!currentFile);
 	const imagePdfValid = $derived(workspace.files.length > 0);
 	const actionDisabled = $derived(
-		isMerge
-			? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-			: isSplit
-				? !splitValid || processing
-				: isCompress
-					? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-					: isPdfToImage
-						? !pdfToImageValid || processing
-						: isImageToPdf
-							? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-							: true
+		officeTool
+			? !currentFile || processing
+			: isMerge
+				? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+				: isSplit
+					? !splitValid || processing
+					: isCompress
+						? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
+						: isPdfToImage
+							? !pdfToImageValid || processing
+							: isImageToPdf
+								? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+								: true
 	);
 	const actionUnavailable = $derived(
-		isMerge
-			? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-			: isSplit
-				? !splitValid
-				: isCompress
-					? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-					: isPdfToImage
-						? !pdfToImageValid
-						: isImageToPdf
-							? !imagePdfValid || !!dragged || !!keyboardPicked
-							: true
+		officeTool
+			? !currentFile
+			: isMerge
+				? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+				: isSplit
+					? !splitValid
+					: isCompress
+						? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+						: isPdfToImage
+							? !pdfToImageValid
+							: isImageToPdf
+								? !imagePdfValid || !!dragged || !!keyboardPicked
+								: true
 	);
 	const downloadName = $derived(
-		isSplit
-			? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
-			: isCompress
-				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
-				: isPdfToImage
-					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
-					: isImageToPdf
-						? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
-						: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+		officeTool
+			? `${currentFile?.name.replace(/\.[^.]+$/, '') || 'document'}.${officeTools[officeTool].output}`
+			: isSplit
+				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
+				: isCompress
+					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
+					: isPdfToImage
+						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
+						: isImageToPdf
+							? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
+							: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
-	let prevIsImageToPdf = $state(untrack(() => isImageToPdf));
+	let prevInputType = $state(untrack(() => inputType));
 	$effect(() => {
-		const currentIsImage = isImageToPdf;
-		if (prevIsImageToPdf !== currentIsImage) {
-			prevIsImageToPdf = currentIsImage;
+		const currentType = inputType;
+		if (prevInputType !== currentType) {
+			prevInputType = currentType;
 			keyboardPicked = null;
-			filename = currentIsImage ? 'plico-images' : 'plico-merged';
-			workspace.use(currentIsImage ? 'image' : 'pdf');
+			filename = currentType === 'image' ? 'plico-images' : 'plico-merged';
+			workspace.use(currentType);
 		}
 	});
 	$effect(() => {
@@ -267,19 +283,27 @@
 			() => downloadLink?.click()
 		);
 	}
+	async function convertOffice() {
+		if (!officeTool || !currentFile || processing) return;
+		const operation = officeTool;
+		const file = currentFile;
+		await job.run(
+			(signal) => processOfficeFile(operation, file, signal),
+			`Could not convert this ${inputType.toUpperCase()} file.`,
+			() => downloadLink?.click()
+		);
+	}
 	function add(files: FileList) {
-		workspace.add(files, isImageToPdf ? 'image' : 'pdf');
+		workspace.add(files, inputType);
 		if (input) input.value = '';
 	}
 	function replace(files: FileList) {
-		const file = Array.from(files).find(
-			(item) => item.type === 'application/pdf' || /\.pdf$/i.test(item.name)
-		);
+		const file = Array.from(files).find((item) => acceptsFile(item, inputType));
 		if (file) {
 			workspace.files = [file];
 			workspace.error = '';
 		} else if (files.length) {
-			workspace.error = 'Please choose a PDF.';
+			workspace.error = `Please choose a ${inputType.toUpperCase()} file.`;
 		}
 		if (input) input.value = '';
 	}
@@ -305,8 +329,8 @@
 				) {
 					event.preventDefault();
 					if (!processing) {
-						if (isSplit || isPdfToImage) replace(event.dataTransfer.files);
-						else workspace.add(event.dataTransfer.files, isImageToPdf ? 'image' : 'pdf');
+						if (isSplit || isPdfToImage || officeTool) replace(event.dataTransfer.files);
+						else workspace.add(event.dataTransfer.files, inputType);
 					}
 				}
 			}}
@@ -332,12 +356,10 @@
 						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 						class="col-start-1 row-start-1 flex min-w-0 flex-col"
 					>
-						{#if !isSplit && !isPdfToImage}<input
+						{#if !isSplit && !isPdfToImage && !officeTool}<input
 								bind:this={input}
 								type="file"
-								accept={isImageToPdf
-									? 'image/jpeg,image/png,.jpg,.jpeg,.png'
-									: 'application/pdf,.pdf'}
+								accept={inputAccept[inputType]}
 								multiple
 								class="hidden"
 								aria-label={isImageToPdf ? 'Add images' : 'Add PDF files'}
@@ -369,6 +391,10 @@
 						{:else}
 							<DocumentCards
 								mode={cardMode}
+								{accent}
+								officeFormat={inputType === 'docx' || inputType === 'pptx' || inputType === 'xlsx'
+									? inputType
+									: undefined}
 								{processing}
 								{reducedMotion}
 								bind:dragged
@@ -480,38 +506,38 @@
 							? downloadLink?.click()
 							: isSplit
 								? void split()
-								: isCompress
-									? void compress()
-									: isPdfToImage
-										? void convertPdfToImage()
-										: isImageToPdf
-											? void convertImagesToPdf()
-											: void merge()}
+								: officeTool
+									? void convertOffice()
+									: isCompress
+										? void compress()
+										: isPdfToImage
+											? void convertPdfToImage()
+											: isImageToPdf
+												? void convertImagesToPdf()
+												: void merge()}
 					aria-label={result
 						? `Download ${resultFormat.toUpperCase()} again`
 						: processing
 							? isSplit
 								? 'Splitting PDF'
-								: isCompress
-									? 'Compressing PDF'
-									: isPdfToImage
-										? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-										: isImageToPdf
-											? 'Converting images to PDF...'
-											: 'Merging PDF'
+								: officeTool
+									? `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
+									: isCompress
+										? 'Compressing PDF'
+										: isPdfToImage
+											? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+											: isImageToPdf
+												? 'Converting images to PDF...'
+												: 'Merging PDF'
 							: tool.label}
-					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
+					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 						? 'opacity-40'
 						: ''}"
 				>
 					<span
-						class="pointer-events-none absolute inset-0 origin-left motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {isCompress
-							? 'bg-compress'
-							: isSplit || isPdfToImage
-								? 'bg-split'
-								: isImageToPdf
-									? 'bg-convert'
-									: 'bg-merge'} {result ? 'scale-x-100' : 'scale-x-0'}"
+						class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
+							? 'scale-x-100'
+							: 'scale-x-0'}"
 						aria-hidden="true"
 					></span>
 					<span class="relative z-10 grid place-items-center">
@@ -520,15 +546,17 @@
 							class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
 								? '-translate-y-2 opacity-0'
 								: 'translate-y-0 opacity-100'}"
-							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isSplit
-									? 'Splitting...'
-									: isCompress
-										? 'Compressing...'
-										: isPdfToImage
-											? 'Converting...'
-											: isImageToPdf
+							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
+									? 'Converting...'
+									: isSplit
+										? 'Splitting...'
+										: isCompress
+											? 'Compressing...'
+											: isPdfToImage
 												? 'Converting...'
-												: 'Merging...'}{:else}
+												: isImageToPdf
+													? 'Converting...'
+													: 'Merging...'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

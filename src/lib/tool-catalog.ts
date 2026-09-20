@@ -54,6 +54,16 @@ export function findTool(id: string) {
 	].find((tool) => tool.id === normalizedId);
 }
 
+export function toolCategoryColor(id: string) {
+	const quick = quickTools.find((tool) => tool.id === id);
+	if (quick) return quick.color.replace('bg-', 'text-');
+	return (
+		toolColumns
+			.flatMap((column) => column)
+			.find((category) => category.tools.some((tool) => tool.id === id))?.color ?? 'text-brand'
+	);
+}
+
 export const quickTools = [
 	{ id: 'merge', label: 'Merge PDF', icon: IconCopy, color: 'bg-merge', heroTool: 'merge' },
 	{

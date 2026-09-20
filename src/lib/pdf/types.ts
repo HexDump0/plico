@@ -45,7 +45,10 @@ export type PdfWorkerRequest =
 			options: PdfImageOptions;
 	  };
 
-export type PdfOutput = { bytes: Uint8Array; format: 'pdf' | 'jpg' | 'png' | 'zip' };
+export type PdfOutput = {
+	bytes: Uint8Array;
+	format: 'pdf' | 'jpg' | 'png' | 'zip' | 'docx' | 'pptx' | 'xlsx';
+};
 
 export type PdfWorkerResponse =
 	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format'] }

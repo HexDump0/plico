@@ -10,6 +10,12 @@
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
+	import {
+		officeOperation,
+		officeTools,
+		inputAccept,
+		acceptsFile
+	} from '$lib/pdf/office-conversion';
 	let {
 		selectedTool = null,
 		emptyOnly = false,
@@ -28,9 +34,14 @@
 			selectedTool?.id === 'image-to-pdf' ||
 			selectedTool?.id === 'images-to-pdf'
 	);
-	$effect(() => workspace.use(isImageTool ? 'image' : 'pdf'));
+	const officeTool = $derived(officeOperation(selectedTool?.id ?? ''));
+	const inputType = $derived(
+		officeTool ? officeTools[officeTool].input : isImageTool ? 'image' : 'pdf'
+	);
+	$effect(() => workspace.use(inputType));
 	const single = $derived(
-		selectedTool?.id === 'split' ||
+		!!officeTool ||
+			selectedTool?.id === 'split' ||
 			selectedTool?.id === 'pdf-to-jpg' ||
 			selectedTool?.id === 'pdf-to-png' ||
 			selectedTool?.id === 'pdf-to-image' ||
@@ -129,13 +140,9 @@
 		finishTransition();
 		const wasEmpty = workspace.files.length === 0;
 		const firstMatch = single
-			? Array.from(files).find((file) =>
-					isImageTool
-						? file.type.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)
-						: file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-				)
+			? Array.from(files).find((file) => acceptsFile(file, inputType))
 			: undefined;
-		workspace.add(firstMatch ? [firstMatch] : files, isImageTool ? 'image' : 'pdf');
+		workspace.add(firstMatch ? [firstMatch] : files, inputType);
 		input.value = '';
 		if (emptyOnly) return;
 		if (!wasEmpty || !workspace.files.length) return;
@@ -163,20 +170,18 @@
 <input
 	bind:this={input}
 	type="file"
-	accept={isImageTool ? 'image/jpeg,image/png,.jpg,.jpeg,.png' : 'application/pdf,.pdf'}
+	accept={inputAccept[inputType]}
 	multiple={!single}
 	class="hidden"
 	aria-label={single
-		? isImageTool
-			? 'Choose an image'
-			: 'Choose a PDF'
+		? `Choose a ${inputType.toUpperCase()} file`
 		: isImageTool
 			? 'Choose image files'
 			: 'Choose PDF files'}
 	onchange={() => input.files && add(input.files)}
 />
 <section
-	aria-label={isImageTool ? 'Image file selection' : 'PDF file selection'}
+	aria-label={`${inputType.toUpperCase()} file selection`}
 	class="flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
 		: ''}"
@@ -212,7 +217,9 @@
 						? 'You can let go btw'
 						: isImageTool
 							? 'Drop in your images'
-							: 'Drop in your PDFs'}</span
+							: officeTool
+								? `Drop in your ${inputType.toUpperCase()} file`
+								: 'Drop in your PDFs'}</span
 				>
 			</button>
 		{/if}

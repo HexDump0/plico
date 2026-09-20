@@ -1,26 +1,39 @@
 import { createContext } from 'svelte';
+import { acceptsFile, type OfficeInput } from './pdf/office-conversion';
 
-export type AcceptedFileType = 'pdf' | 'image';
+export type AcceptedFileType = 'pdf' | 'image' | OfficeInput;
 
 export class Workspace {
 	private pdfFiles = $state<File[]>([]);
 	private imageFiles = $state<File[]>([]);
+	private officeFiles = $state<Record<OfficeInput, File[]>>({ docx: [], pptx: [], xlsx: [] });
 	private pdfError = $state('');
 	private imageError = $state('');
+	private officeErrors = $state<Record<OfficeInput, string>>({ docx: '', pptx: '', xlsx: '' });
 	private activeType = $state<AcceptedFileType>('pdf');
 	get files() {
-		return this.activeType === 'image' ? this.imageFiles : this.pdfFiles;
+		return this.activeType === 'image'
+			? this.imageFiles
+			: this.activeType === 'pdf'
+				? this.pdfFiles
+				: this.officeFiles[this.activeType];
 	}
 	set files(files: File[]) {
 		if (this.activeType === 'image') this.imageFiles = files;
-		else this.pdfFiles = files;
+		else if (this.activeType === 'pdf') this.pdfFiles = files;
+		else this.officeFiles[this.activeType] = files;
 	}
 	get error() {
-		return this.activeType === 'image' ? this.imageError : this.pdfError;
+		return this.activeType === 'image'
+			? this.imageError
+			: this.activeType === 'pdf'
+				? this.pdfError
+				: this.officeErrors[this.activeType];
 	}
 	set error(error: string) {
 		if (this.activeType === 'image') this.imageError = error;
-		else this.pdfError = error;
+		else if (this.activeType === 'pdf') this.pdfError = error;
+		else this.officeErrors[this.activeType] = error;
 	}
 	use(type: AcceptedFileType) {
 		this.activeType = type;
@@ -28,21 +41,11 @@ export class Workspace {
 	add(incoming: FileList | File[], accept: AcceptedFileType = 'pdf') {
 		this.use(accept);
 		const candidates = Array.from(incoming);
-		const allowed = candidates.filter((file) => {
-			const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-			const isImage =
-				file.type === 'image/jpeg' ||
-				file.type === 'image/png' ||
-				/\.(jpe?g|png)$/i.test(file.name);
-			if (accept === 'image') return isImage;
-			return isPdf;
-		});
+		const allowed = candidates.filter((file) => acceptsFile(file, accept));
 		this.error =
 			allowed.length === candidates.length
 				? ''
-				: accept === 'image'
-					? 'Please choose JPG or PNG images. Other file types were skipped.'
-					: 'Please choose PDFs. Other file types were skipped.';
+				: `Please choose ${accept === 'image' ? 'JPG or PNG images' : accept === 'pdf' ? 'PDFs' : `${accept.toUpperCase()} files`}. Other file types were skipped.`;
 		this.files = [
 			...this.files,
 			...allowed.filter(
@@ -64,6 +67,10 @@ export class Workspace {
 		if (this.pdfFiles.includes(file)) this.pdfFiles = this.pdfFiles.filter((item) => item !== file);
 		if (this.imageFiles.includes(file))
 			this.imageFiles = this.imageFiles.filter((item) => item !== file);
+		for (const format of ['docx', 'pptx', 'xlsx'] as const) {
+			if (this.officeFiles[format].includes(file))
+				this.officeFiles[format] = this.officeFiles[format].filter((item) => item !== file);
+		}
 	}
 	move(from: number, to: number) {
 		if (from < 0 || to < 0 || from >= this.files.length || to >= this.files.length) return;

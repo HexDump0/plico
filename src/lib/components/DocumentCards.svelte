@@ -11,11 +11,14 @@
 		IconSortDescendingLetters,
 		IconTrash
 	} from '@tabler/icons-svelte-runes';
+	import { IconFileTypeDocx, IconFileTypePpt, IconFileTypeXls } from '@tabler/icons-svelte-runes';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 
 	let {
 		mode,
+		accent = 'text-brand',
+		officeFormat,
 		processing,
 		reducedMotion,
 		dragged = $bindable<File | null>(null),
@@ -24,6 +27,8 @@
 		onload
 	}: {
 		mode: 'merge' | 'compress' | 'image' | 'single';
+		accent?: string;
+		officeFormat?: 'docx' | 'pptx' | 'xlsx';
 		processing: boolean;
 		reducedMotion: boolean;
 		dragged: File | null;
@@ -427,12 +432,18 @@
 											: 'border-merge/70 shadow-lg shadow-merge/10'
 									: 'border-white/10 group-hover:border-white/25'}"
 						>
-							<PdfPreview
-								{file}
-								onload={(count) => {
-									onload(count);
-								}}
-							/>
+							{#if officeFormat}<div
+									class="flex aspect-[3/4] items-center justify-center bg-canvas/50 {accent}"
+								>
+									{#if officeFormat === 'docx'}<IconFileTypeDocx size={72} stroke={1.25} />
+									{:else if officeFormat === 'pptx'}<IconFileTypePpt size={72} stroke={1.25} />
+									{:else}<IconFileTypeXls size={72} stroke={1.25} />{/if}
+								</div>{:else}<PdfPreview
+									{file}
+									onload={(count) => {
+										onload(count);
+									}}
+								/>{/if}
 							{#if canOrder}<button
 									type="button"
 									class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"

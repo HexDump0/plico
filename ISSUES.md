@@ -245,13 +245,19 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Five tools exist, the catalogue advertises about forty
+### Eleven tools exist, the catalogue advertises about forty
 
 Merge and Split now share the engine's page selection and page-tree rebuilding
 path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
 outputs are packaged into a ZIP in the worker. The new corpus check extracts the
 last page of every loadable file and checks content, page geometry, and
 reachability: 924 checked, alongside the unchanged merge baseline above.
+
+PDF to Word, PowerPoint, and Excel, plus the three reverse conversions, use
+`pdf-oxide-wasm` in a separate worker. The Office engine loads only when one
+of those tools runs. Its WASM asset is about 17.6 MB raw, so keeping it out of
+the ordinary PDF worker matters. Conversion quality on real user files still
+needs manual review, especially scanned PDFs and complex Office layouts.
 
 Organise, extract, remove, and rotate can use the same path. Keep page order,
 inheritance flattening, safe renumbering, and pruning in that shared layer.
