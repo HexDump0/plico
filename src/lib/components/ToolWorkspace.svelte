@@ -20,17 +20,19 @@
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import {
 		processCompressPdf,
+		processImagesToPdf,
 		processPdfToImages,
 		processPdfs,
 		processSplitPdf
 	} from '$lib/pdf/processor';
-	import type { PdfImageOptions } from '$lib/pdf/types';
+	import type { ImagePdfOptions, PdfImageOptions } from '$lib/pdf/types';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 	import CompressSettings from './CompressSettings.svelte';
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
 	import PdfToImageSettings from './PdfToImageSettings.svelte';
+	import ImageToPdfSettings from './ImageToPdfSettings.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(tool.id === 'merge');
@@ -42,7 +44,13 @@
 			tool.id === 'pdf-to-image' ||
 			tool.id === 'pdf-to-images'
 	);
-	const canOrder = $derived(isMerge || isCompress);
+	const isImageToPdf = $derived(
+		tool.id === 'jpg-to-pdf' ||
+			tool.id === 'png-to-pdf' ||
+			tool.id === 'image-to-pdf' ||
+			tool.id === 'images-to-pdf'
+	);
+	const canOrder = $derived(isMerge || isCompress || isImageToPdf);
 	const accent = $derived(
 		isMerge
 			? 'text-merge'
@@ -52,11 +60,14 @@
 					? 'text-compress'
 					: isPdfToImage
 						? 'text-split'
-						: 'text-brand'
+						: isImageToPdf
+							? 'text-convert'
+							: 'text-brand'
 	);
 	let input = $state<HTMLInputElement>();
 	let dragged = $state<File | null>(null);
 	let dragOrder = $state<File[] | null>(null);
+	let keyboardPicked = $state<File | null>(null);
 	let dropTarget = $state<File | null>(null);
 	let trashHovered = $state(false);
 	let trashZone = $state<HTMLDivElement>();
@@ -86,7 +97,7 @@
 	let compressLevel = $state<'light' | 'balanced' | 'strong'>('balanced');
 	let compressRemoveMetadata = $state(false);
 	let compressRemoveThumbnails = $state(false);
-	let filename = $state('plico-merged');
+	let filename = $state(untrack(() => (isImageToPdf ? 'plico-images' : 'plico-merged')));
 	let downloadLink: HTMLAnchorElement;
 	let processing = $state(false);
 	let error = $state('');
@@ -97,6 +108,8 @@
 	let pdfToImageDpi = $state(150);
 	let pdfToImageQuality = $state(80);
 	let pdfToImagePageRange = $state('');
+	let imagePdfPageSize = $state<'a4' | 'letter'>('a4');
+	let imagePdfMargin = $state(18);
 	let resultFormat = $state<'pdf' | 'zip' | 'jpg' | 'png'>('pdf');
 	let resultSize = $state(0);
 	let resultInputSize = $state(0);
@@ -115,6 +128,7 @@
 	const pdfToImageSignature = $derived(
 		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
+	const imagePdfSignature = $derived(JSON.stringify([imagePdfPageSize, imagePdfMargin]));
 	const compressOptions = $derived({
 		imageQuality: compressLevel === 'light' ? 0 : compressLevel === 'balanced' ? 80 : 50,
 		maxImageDimension: compressLevel === 'strong' ? 1600 : compressLevel === 'balanced' ? 2400 : 0,
@@ -137,27 +151,32 @@
 				: Number.isInteger(splitInterval) && splitInterval > 0)
 	);
 	const pdfToImageValid = $derived(!!currentFile);
+	const imagePdfValid = $derived(workspace.files.length > 0);
 	const actionDisabled = $derived(
 		isMerge
-			? workspace.files.length < 2 || processing || !!dragged
+			? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
 			: isSplit
 				? !splitValid || processing
 				: isCompress
-					? workspace.files.length === 0 || processing || !!dragged
+					? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
 					: isPdfToImage
 						? !pdfToImageValid || processing
-						: true
+						: isImageToPdf
+							? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+							: true
 	);
 	const actionUnavailable = $derived(
 		isMerge
-			? workspace.files.length < 2 || !!dragged
+			? workspace.files.length < 2 || !!dragged || !!keyboardPicked
 			: isSplit
 				? !splitValid
 				: isCompress
-					? workspace.files.length === 0 || !!dragged
+					? workspace.files.length === 0 || !!dragged || !!keyboardPicked
 					: isPdfToImage
 						? !pdfToImageValid
-						: true
+						: isImageToPdf
+							? !imagePdfValid || !!dragged || !!keyboardPicked
+							: true
 	);
 	const downloadName = $derived(
 		isSplit
@@ -166,14 +185,28 @@
 				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
 				: isPdfToImage
 					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
-					: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+					: isImageToPdf
+						? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
+						: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
+	let prevIsImageToPdf = $state(untrack(() => isImageToPdf));
+	$effect(() => {
+		const currentIsImage = isImageToPdf;
+		if (prevIsImageToPdf !== currentIsImage) {
+			prevIsImageToPdf = currentIsImage;
+			dragOrder = null;
+			keyboardPicked = null;
+			filename = currentIsImage ? 'plico-images' : 'plico-merged';
+			workspace.clear();
+		}
+	});
 	$effect(() => {
 		void workspace.files;
 		void filename;
 		void splitSignature;
 		void compressSignature;
 		void pdfToImageSignature;
+		void imagePdfSignature;
 		untrack(clearResult);
 	});
 	$effect(() => {
@@ -348,8 +381,42 @@
 			}
 		}
 	}
+
+	async function convertImagesToPdf() {
+		if (processing || !imagePdfValid) return;
+		clearResult();
+		const job = new AbortController();
+		controller = job;
+		processing = true;
+		const options: ImagePdfOptions = {
+			pageWidth: imagePdfPageSize === 'letter' ? 612.0 : 595.28,
+			pageHeight: imagePdfPageSize === 'letter' ? 792.0 : 841.89,
+			margin: imagePdfMargin
+		};
+		try {
+			const output = await processImagesToPdf(workspace.files, options, job.signal);
+			if (job.signal.aborted) return;
+			const url = URL.createObjectURL(
+				new Blob([output.bytes.slice().buffer], { type: 'application/pdf' })
+			);
+			processing = false;
+			resultFormat = 'pdf';
+			result = url;
+			await tick();
+			if (!job.signal.aborted && result === url) downloadLink?.click();
+		} catch (cause) {
+			if (!job.signal.aborted)
+				error = cause instanceof Error ? cause.message : 'Could not convert images to PDF.';
+		} finally {
+			if (controller === job) {
+				processing = false;
+				controller = undefined;
+			}
+		}
+	}
+
 	function add(files: FileList) {
-		workspace.add(files);
+		workspace.add(files, isImageToPdf ? 'image' : 'pdf');
 		if (input) input.value = '';
 	}
 	function replace(files: FileList) {
@@ -370,6 +437,45 @@
 			(a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) * direction
 		);
 		sortAscending = !sortAscending;
+	}
+	function toggleKeyboardOrder(file: File) {
+		if (processing || dragged) return;
+		if (keyboardPicked === file) {
+			const position = visibleFiles.indexOf(file) + 1;
+			if (dragOrder) workspace.files = [...dragOrder];
+			dragOrder = null;
+			keyboardPicked = null;
+			orderAnnouncement = `${file.name} placed at position ${position} of ${workspace.files.length}.`;
+		} else if (!keyboardPicked) {
+			dragOrder = [...workspace.files];
+			keyboardPicked = file;
+			orderAnnouncement = `${file.name} picked up. Use arrow keys to move, Enter to place, or Escape to cancel.`;
+		}
+	}
+	function handleOrderKey(event: KeyboardEvent, file: File) {
+		if (processing || dragged) return;
+		if (event.key === 'Escape' && keyboardPicked === file) {
+			event.preventDefault();
+			dragOrder = null;
+			keyboardPicked = null;
+			orderAnnouncement = `${file.name} returned to its original position.`;
+			return;
+		}
+		if (
+			keyboardPicked !== file ||
+			!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
+		)
+			return;
+		event.preventDefault();
+		const from = visibleFiles.indexOf(file);
+		const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+		const to = Math.max(0, Math.min(visibleFiles.length - 1, from + direction));
+		if (from === to) return;
+		const next = [...visibleFiles];
+		next.splice(from, 1);
+		next.splice(to, 0, file);
+		dragOrder = next;
+		orderAnnouncement = `${file.name}, position ${to + 1} of ${next.length}.`;
 	}
 	function cardFlip(
 		node: Element,
@@ -543,6 +649,7 @@
 			if (
 				!canOrder ||
 				processing ||
+				keyboardPicked ||
 				pointerId >= 0 ||
 				activePointer >= 0 ||
 				(event.pointerType === 'mouse' && event.button !== 0) ||
@@ -599,10 +706,14 @@
 		function pointerCancel(event: PointerEvent) {
 			if (event.pointerId === pointerId) finish(false);
 		}
+		function preventNativeDrag(event: DragEvent) {
+			event.preventDefault();
+		}
 		node.addEventListener('pointerdown', pointerDown);
 		node.addEventListener('pointermove', pointerMove);
 		node.addEventListener('pointerup', pointerUp);
 		node.addEventListener('pointercancel', pointerCancel);
+		node.addEventListener('dragstart', preventNativeDrag);
 		node.addEventListener('lostpointercapture', () => {
 			if (!movingSlot && pointerId >= 0 && !node.hasPointerCapture(pointerId)) finish(false);
 		});
@@ -611,6 +722,7 @@
 				if (activePointer === pointerId) activePointer = -1;
 				cancelAnimationFrame(frameId);
 				gsap.killTweensOf(surface);
+				node.removeEventListener('dragstart', preventNativeDrag);
 				if (dragged === file) {
 					dragOrder = null;
 					dragged = null;
@@ -634,11 +746,16 @@
 				: 'pb-12 lg:pb-20'}"
 			ondragover={(event) => event.preventDefault()}
 			ondrop={(event) => {
-				if (!event.defaultPrevented && !dragged && event.dataTransfer?.files.length) {
+				if (
+					!event.defaultPrevented &&
+					!dragged &&
+					!keyboardPicked &&
+					event.dataTransfer?.files.length
+				) {
 					event.preventDefault();
 					if (!processing) {
 						if (isSplit || isPdfToImage) replace(event.dataTransfer.files);
-						else workspace.add(event.dataTransfer.files);
+						else workspace.add(event.dataTransfer.files, isImageToPdf ? 'image' : 'pdf');
 					}
 				}
 			}}
@@ -654,20 +771,22 @@
 					bind:this={trashZone}
 					transition:fade={{ duration: reducedMotion ? 0 : 160 }}
 					aria-hidden="true"
-					class="pointer-events-none absolute top-10 bottom-10 -left-6 z-10 hidden w-32 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed text-center text-xs font-semibold transition-colors lg:flex {trashHovered
+					class="pointer-events-none absolute right-6 bottom-6 left-6 z-10 flex h-24 items-center justify-center gap-3 rounded-2xl border-2 border-dashed text-center text-xs font-semibold transition-colors sm:right-10 sm:left-10 lg:top-10 lg:right-auto lg:bottom-10 lg:-left-6 lg:h-auto lg:w-32 lg:flex-col {trashHovered
 						? 'border-red-400 bg-red-500/25 text-red-100'
 						: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
 				>
-					<IconTrash size={30} stroke={1.8} />
+					<IconTrash size={30} stroke={1.8} /><span>Remove</span>
 				</div>
 			{/if}
 			{#if canOrder && workspace.files.length > 1}
 				<button
 					transition:fade={{ duration: reducedMotion ? 0 : 100 }}
-					disabled={processing || !!dragged}
+					disabled={processing || !!dragged || !!keyboardPicked}
 					class="absolute top-6 right-6 z-10 flex size-11 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors disabled:opacity-40 sm:right-10 lg:top-10 lg:right-16 {isCompress
 						? 'hover:border-compress/40 hover:text-compress'
-						: 'hover:border-merge/40 hover:text-merge'}"
+						: isImageToPdf
+							? 'hover:border-convert/40 hover:text-convert'
+							: 'hover:border-merge/40 hover:text-merge'}"
 					aria-label={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
 					title={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
 					onclick={sortByFilename}
@@ -694,10 +813,12 @@
 						{#if !isSplit && !isPdfToImage}<input
 								bind:this={input}
 								type="file"
-								accept="application/pdf,.pdf"
+								accept={isImageToPdf
+									? 'image/jpeg,image/png,.jpg,.jpeg,.png'
+									: 'application/pdf,.pdf'}
 								multiple
 								class="hidden"
-								aria-label="Add PDF files"
+								aria-label={isImageToPdf ? 'Add images' : 'Add PDF files'}
 								onchange={() => input?.files && add(input.files)}
 							/>{/if}
 						{#if isSplit && currentFile}
@@ -725,7 +846,7 @@
 							</div>
 						{:else}
 							<ol
-								aria-label="PDF order"
+								aria-label={isImageToPdf ? 'Image order' : 'PDF order'}
 								class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
 							>
 								{#each cards as file, index (file ?? 'add')}
@@ -743,7 +864,9 @@
 											{#if dragged === file}<div
 													class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed {isCompress
 														? 'border-compress/35 bg-compress/5'
-														: 'border-merge/35 bg-merge/5'}"
+														: isImageToPdf
+															? 'border-convert/35 bg-convert/5'
+															: 'border-merge/35 bg-merge/5'}"
 												></div>{/if}
 											<div data-drag-surface class="relative origin-[50%_12%]">
 												<div
@@ -751,11 +874,15 @@
 													file
 														? isCompress
 															? 'border-compress/70 shadow-2xl shadow-black/60'
-															: 'border-merge/70 shadow-2xl shadow-black/60'
+															: isImageToPdf
+																? 'border-convert/70 shadow-2xl shadow-black/60'
+																: 'border-merge/70 shadow-2xl shadow-black/60'
 														: dropTarget === file && dragged
 															? isCompress
 																? 'border-compress/70 shadow-lg shadow-compress/10'
-																: 'border-merge/70 shadow-lg shadow-merge/10'
+																: isImageToPdf
+																	? 'border-convert/70 shadow-lg shadow-convert/10'
+																	: 'border-merge/70 shadow-lg shadow-merge/10'
 															: 'border-white/10 group-hover:border-white/25'}"
 												>
 													<PdfPreview
@@ -764,11 +891,21 @@
 															if (!pageCount) pageCount = count;
 														}}
 													/>
-													{#if !isMerge && !isPdfToImage}<span
+													{#if canOrder}<button
+															type="button"
+															class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+															aria-label={`Order ${index + 1}: ${file.name}. ${keyboardPicked === file ? 'Use arrow keys to move, Enter to place, or Escape to cancel.' : 'Press Enter to reorder.'}`}
+															aria-pressed={keyboardPicked === file}
+															disabled={processing ||
+																!!dragged ||
+																(!!keyboardPicked && keyboardPicked !== file)}
+															onclick={() => toggleKeyboardOrder(file)}
+															onkeydown={(event) => handleOrderKey(event, file)}>{index + 1}</button
+														>{:else if !isMerge && !isPdfToImage}<span
 															class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
 															>{index + 1}</span
 														>{/if}<button
-														disabled={processing || !!dragged}
+														disabled={processing || !!dragged || !!keyboardPicked}
 														class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
 														aria-label={`Remove ${file.name}`}
 														onclick={() => workspace.remove(file)}
@@ -785,16 +922,20 @@
 											</div>
 										{:else}
 											<button
-												disabled={processing || !!dragged}
+												disabled={processing || !!dragged || !!keyboardPicked}
 												onclick={() => input?.click()}
 												class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed transition-[border-color,background-color,color] disabled:opacity-40 {isCompress
 													? 'border-compress/25 bg-compress/[0.03] text-compress/75 hover:border-compress/60 hover:bg-compress/[0.07] hover:text-compress'
-													: 'border-merge/25 bg-merge/[0.03] text-merge/75 hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge'}"
+													: isImageToPdf
+														? 'border-convert/25 bg-convert/[0.03] text-convert/75 hover:border-convert/60 hover:bg-convert/[0.07] hover:text-convert'
+														: 'border-merge/25 bg-merge/[0.03] text-merge/75 hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge'}"
 											>
 												<span
 													class="flex size-12 items-center justify-center rounded-full motion-safe:transition-transform motion-safe:group-hover:scale-110 {isCompress
 														? 'bg-compress/10'
-														: 'bg-merge/10'}"><IconPlus size={24} stroke={1.5} /></span
+														: isImageToPdf
+															? 'bg-convert/10'
+															: 'bg-merge/10'}"><IconPlus size={24} stroke={1.5} /></span
 												>
 											</button>
 										{/if}
@@ -855,6 +996,21 @@
 						bind:pageRange={pdfToImagePageRange}
 						{pageCount}
 					/>
+				{:else if isImageToPdf}
+					<ImageToPdfSettings bind:pageSize={imagePdfPageSize} bind:margin={imagePdfMargin} />
+					<label class="block text-sm font-medium"
+						>Output filename
+						<div
+							class="mt-3 flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-white/25"
+						>
+							<input
+								bind:value={filename}
+								class="min-w-0 flex-1 bg-transparent py-3 text-sm outline-none"
+								aria-label="Output filename"
+								placeholder="plico-images"
+							/><span class="text-xs text-muted">.pdf</span>
+						</div></label
+					>
 				{/if}
 			</div>
 			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
@@ -893,7 +1049,9 @@
 									? void compress()
 									: isPdfToImage
 										? void convertPdfToImage()
-										: void merge()}
+										: isImageToPdf
+											? void convertImagesToPdf()
+											: void merge()}
 					aria-label={result
 						? `Download ${resultFormat.toUpperCase()} again`
 						: processing
@@ -903,16 +1061,22 @@
 									? 'Compressing PDF'
 									: isPdfToImage
 										? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-										: 'Merging PDF'
+										: isImageToPdf
+											? 'Converting images to PDF...'
+											: 'Merging PDF'
 							: tool.label}
 					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl bg-brand px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 enabled:hover:bg-violet-300 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
 						? 'opacity-40'
 						: ''}"
 				>
 					<span
-						class="pointer-events-none absolute inset-0 origin-left bg-merge motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
-							? 'scale-x-100'
-							: 'scale-x-0'}"
+						class="pointer-events-none absolute inset-0 origin-left motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {isCompress
+							? 'bg-compress'
+							: isSplit || isPdfToImage
+								? 'bg-split'
+								: isImageToPdf
+									? 'bg-convert'
+									: 'bg-merge'} {result ? 'scale-x-100' : 'scale-x-0'}"
 						aria-hidden="true"
 					></span>
 					<span class="relative z-10 grid place-items-center">
@@ -927,7 +1091,9 @@
 										? 'Compressing...'
 										: isPdfToImage
 											? 'Converting...'
-											: 'Merging...'}{:else}
+											: isImageToPdf
+												? 'Converting...'
+												: 'Merging...'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

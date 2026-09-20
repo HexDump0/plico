@@ -1,7 +1,13 @@
 <script lang="ts">
 	import gsap from 'gsap';
 	import { onMount, onDestroy, tick } from 'svelte';
-	import { IconUpload, IconFileTypePdf, IconX, IconPlus } from '@tabler/icons-svelte-runes';
+	import {
+		IconUpload,
+		IconFileTypePdf,
+		IconPhoto,
+		IconX,
+		IconPlus
+	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	let {
@@ -16,6 +22,12 @@
 		onready?: () => void;
 	} = $props();
 	const workspace = getWorkspace();
+	const isImageTool = $derived(
+		selectedTool?.id === 'jpg-to-pdf' ||
+			selectedTool?.id === 'png-to-pdf' ||
+			selectedTool?.id === 'image-to-pdf' ||
+			selectedTool?.id === 'images-to-pdf'
+	);
 	const single = $derived(
 		selectedTool?.id === 'split' ||
 			selectedTool?.id === 'pdf-to-jpg' ||
@@ -115,12 +127,14 @@
 		finishRemoval();
 		finishTransition();
 		const wasEmpty = workspace.files.length === 0;
-		const firstPdf = single
-			? Array.from(files).find(
-					(file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+		const firstMatch = single
+			? Array.from(files).find((file) =>
+					isImageTool
+						? file.type.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)
+						: file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
 				)
 			: undefined;
-		workspace.add(firstPdf ? [firstPdf] : files);
+		workspace.add(firstMatch ? [firstMatch] : files, isImageTool ? 'image' : 'pdf');
 		input.value = '';
 		if (emptyOnly) return;
 		if (!wasEmpty || !workspace.files.length) return;
@@ -148,14 +162,20 @@
 <input
 	bind:this={input}
 	type="file"
-	accept="application/pdf,.pdf"
+	accept={isImageTool ? 'image/jpeg,image/png,.jpg,.jpeg,.png' : 'application/pdf,.pdf'}
 	multiple={!single}
 	class="hidden"
-	aria-label={single ? 'Choose a PDF' : 'Choose PDF files'}
+	aria-label={single
+		? isImageTool
+			? 'Choose an image'
+			: 'Choose a PDF'
+		: isImageTool
+			? 'Choose image files'
+			: 'Choose PDF files'}
 	onchange={() => input.files && add(input.files)}
 />
 <section
-	aria-label="PDF file selection"
+	aria-label={isImageTool ? 'Image file selection' : 'PDF file selection'}
 	class="flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
 		: ''}"
@@ -187,7 +207,11 @@
 				onclick={() => input.click()}
 			>
 				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
-					>{dragging ? 'You can let go btw' : 'Drop in your PDFs'}</span
+					>{dragging
+						? 'You can let go btw'
+						: isImageTool
+							? 'Drop in your images'
+							: 'Drop in your PDFs'}</span
 				>
 			</button>
 		{/if}
@@ -196,7 +220,13 @@
 				<div class="mb-3 flex items-center justify-between gap-2">
 					<h2 class="text-sm font-semibold">
 						{workspace.files.length}
-						{workspace.files.length === 1 ? 'PDF' : 'PDFs'} added
+						{isImageTool
+							? workspace.files.length === 1
+								? 'image'
+								: 'images'
+							: workspace.files.length === 1
+								? 'PDF'
+								: 'PDFs'} added
 					</h2>
 					<button
 						class="flex items-center gap-1 rounded-lg p-2 text-sm text-brand hover:bg-brand/10"
@@ -206,7 +236,11 @@
 				<ul class="min-h-0 flex-1 space-y-2 overflow-y-auto">
 					{#each workspace.files as file (file)}
 						<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
-							<IconFileTypePdf class="shrink-0 text-brand" size={26} />
+							{#if isImageTool}
+								<IconPhoto class="shrink-0 text-convert" size={26} />
+							{:else}
+								<IconFileTypePdf class="shrink-0 text-brand" size={26} />
+							{/if}
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm" title={file.name}>{file.name}</p>
 								<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>

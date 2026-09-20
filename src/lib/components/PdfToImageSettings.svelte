@@ -116,10 +116,6 @@
 							aria-label="JPG image quality"
 							class="w-full cursor-pointer accent-split"
 						/>
-						<div class="flex justify-between text-[11px] text-muted">
-							<span>Smaller file</span>
-							<span>High quality</span>
-						</div>
 					</div>
 				{/if}
 

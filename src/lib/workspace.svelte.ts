@@ -1,20 +1,33 @@
 import { createContext } from 'svelte';
 
+export type AcceptedFileType = 'pdf' | 'image' | 'any';
+
 export class Workspace {
 	files = $state<File[]>([]);
 	error = $state('');
-	add(incoming: FileList | File[]) {
+	add(incoming: FileList | File[], accept: AcceptedFileType = 'pdf') {
 		const candidates = Array.from(incoming);
-		const pdfs = candidates.filter(
-			(file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-		);
+		const allowed = candidates.filter((file) => {
+			const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+			const isImage =
+				file.type === 'image/jpeg' ||
+				file.type === 'image/png' ||
+				/\.(jpe?g|png)$/i.test(file.name);
+			if (accept === 'image') return isImage;
+			if (accept === 'any') return isPdf || isImage;
+			return isPdf;
+		});
 		this.error =
-			pdfs.length === candidates.length ? '' : 'Please choose PDFs. Other file types were skipped.';
+			allowed.length === candidates.length
+				? ''
+				: accept === 'image'
+					? 'Please choose JPG or PNG images. Other file types were skipped.'
+					: 'Please choose PDFs. Other file types were skipped.';
 		this.files = [
 			...this.files,
-			...pdfs.filter(
+			...allowed.filter(
 				(file, index) =>
-					![...this.files, ...pdfs.slice(0, index)].some(
+					![...this.files, ...allowed.slice(0, index)].some(
 						(existing) =>
 							existing.name === file.name &&
 							existing.size === file.size &&
@@ -22,6 +35,10 @@ export class Workspace {
 					)
 			)
 		];
+	}
+	clear() {
+		this.files = [];
+		this.error = '';
 	}
 	remove(file: File) {
 		this.files = this.files.filter((item) => item !== file);

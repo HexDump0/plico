@@ -146,9 +146,6 @@
 						</div>
 					{/each}
 				</div>
-				<p class="mt-4 text-sm leading-6 text-muted">
-					Donation details will appear here when they're ready.
-				</p>
 			</section>
 		</div>
 	</main>
