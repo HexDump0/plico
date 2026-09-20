@@ -3,6 +3,7 @@
 	import { flushSync, onDestroy, onMount, tick, untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
+	import { fade } from 'svelte/transition';
 	import {
 		IconArrowRight,
 		IconPlus,
@@ -27,6 +28,7 @@
 	const isMerge = $derived(tool.id === 'merge');
 	const isSplit = $derived(tool.id === 'split');
 	const isCompress = $derived(tool.id === 'compress');
+	const canOrder = $derived(isMerge || isCompress);
 	const accent = $derived(
 		isMerge ? 'text-merge' : isSplit ? 'text-split' : isCompress ? 'text-compress' : 'text-brand'
 	);
@@ -104,7 +106,7 @@
 			: isSplit
 				? !splitValid || processing
 				: isCompress
-					? workspace.files.length === 0 || processing
+					? workspace.files.length === 0 || processing || !!dragged
 					: true
 	);
 	const actionUnavailable = $derived(
@@ -113,7 +115,7 @@
 			: isSplit
 				? !splitValid
 				: isCompress
-					? workspace.files.length === 0
+					? workspace.files.length === 0 || !!dragged
 					: true
 	);
 	const downloadName = $derived(
@@ -211,7 +213,7 @@
 		}
 	}
 	async function compress() {
-		if (processing || workspace.files.length === 0) return;
+		if (processing || dragged || workspace.files.length === 0) return;
 		clearResult();
 		const job = new AbortController();
 		controller = job;
@@ -405,9 +407,8 @@
 		}
 		function pointerDown(event: PointerEvent) {
 			if (
-				!isMerge ||
+				!canOrder ||
 				processing ||
-				workspace.files.length < 2 ||
 				pointerId >= 0 ||
 				activePointer >= 0 ||
 				(event.pointerType === 'mouse' && event.button !== 0) ||
@@ -505,20 +506,21 @@
 				aria-hidden="true"
 				class="pointer-events-none absolute -right-48 -bottom-48 -z-10 w-240 max-w-none opacity-[0.07] select-none"
 			/>
-			<div class="flex flex-wrap items-center justify-end gap-4">
-				{#if isMerge && workspace.files.length > 1}
-					<button
-						disabled={processing || !!dragged}
-						class="flex size-11 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
-						aria-label={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
-						title={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
-						onclick={sortByFilename}
-						>{#if sortAscending}<IconSortAscendingLetters
-								size={20}
-							/>{:else}<IconSortDescendingLetters size={20} />{/if}</button
-					>
-				{/if}
-			</div>
+			{#if canOrder && workspace.files.length > 1}
+				<button
+					transition:fade={{ duration: reducedMotion ? 0 : 100 }}
+					disabled={processing || !!dragged}
+					class="absolute top-6 right-6 z-10 flex size-11 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors disabled:opacity-40 sm:right-10 lg:top-10 lg:right-16 {isCompress
+						? 'hover:border-compress/40 hover:text-compress'
+						: 'hover:border-merge/40 hover:text-merge'}"
+					aria-label={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
+					title={`Sort filenames ${sortAscending ? 'ascending' : 'descending'}`}
+					onclick={sortByFilename}
+					>{#if sortAscending}<IconSortAscendingLetters
+							size={20}
+						/>{:else}<IconSortDescendingLetters size={20} />{/if}</button
+				>
+			{/if}
 			{#if workspace.files.length === 0}
 				<div class="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center py-12 lg:py-20">
 					<div class="h-80"><PdfDropzone selectedTool={tool} /></div>
@@ -566,22 +568,27 @@
 								use:dragCard={file}
 								data-pdf-card
 								animate:cardFlip={{ file }}
-								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {isMerge &&
-								!processing &&
-								visibleFiles.length > 1
+								class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {canOrder &&
+								!processing
 									? 'cursor-grab touch-none select-none active:cursor-grabbing'
 									: ''} {dragged === file ? 'z-20' : ''}"
 							>
 								{#if dragged === file}<div
-										class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed border-merge/35 bg-merge/5"
+										class="pointer-events-none absolute inset-x-0 top-0 aspect-[3/4] rounded-xl border-2 border-dashed {isCompress
+											? 'border-compress/35 bg-compress/5'
+											: 'border-merge/35 bg-merge/5'}"
 									></div>{/if}
 								<div data-drag-surface class="relative origin-[50%_12%]">
 									<div
 										class="relative overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 {dragged ===
 										file
-											? 'border-merge/70 shadow-2xl shadow-black/60'
+											? isCompress
+												? 'border-compress/70 shadow-2xl shadow-black/60'
+												: 'border-merge/70 shadow-2xl shadow-black/60'
 											: dropTarget === file && dragged
-												? 'border-merge/70 shadow-lg shadow-merge/10'
+												? isCompress
+													? 'border-compress/70 shadow-lg shadow-compress/10'
+													: 'border-merge/70 shadow-lg shadow-merge/10'
 												: 'border-white/10 group-hover:border-white/25'}"
 									>
 										<PdfPreview {file} />
@@ -610,17 +617,19 @@
 							<button
 								disabled={processing || !!dragged}
 								onclick={() => input?.click()}
-								class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-merge/25 bg-merge/[0.03] text-merge/75 transition-[border-color,background-color,color] hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge disabled:opacity-40"
+								class="group flex aspect-[3/4] w-full flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed transition-[border-color,background-color,color] disabled:opacity-40 {isCompress
+									? 'border-compress/25 bg-compress/[0.03] text-compress/75 hover:border-compress/60 hover:bg-compress/[0.07] hover:text-compress'
+									: 'border-merge/25 bg-merge/[0.03] text-merge/75 hover:border-merge/60 hover:bg-merge/[0.07] hover:text-merge'}"
 							>
 								<span
-									class="flex size-12 items-center justify-center rounded-full bg-merge/10 motion-safe:transition-transform motion-safe:group-hover:scale-110"
-									><IconPlus size={24} stroke={1.5} /></span
+									class="flex size-12 items-center justify-center rounded-full motion-safe:transition-transform motion-safe:group-hover:scale-110 {isCompress
+										? 'bg-compress/10'
+										: 'bg-merge/10'}"><IconPlus size={24} stroke={1.5} /></span
 								>
-								<span class="text-xs font-medium">Add PDFs</span>
 							</button>
 						</li>
 					</ol>
-					{#if isMerge}<p class="sr-only" aria-live="polite">{orderAnnouncement}</p>{/if}
+					{#if canOrder}<p class="sr-only" aria-live="polite">{orderAnnouncement}</p>{/if}
 				{/if}
 				{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
 						{workspace.error}
