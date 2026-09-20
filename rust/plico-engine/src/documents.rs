@@ -110,6 +110,55 @@ pub fn split_pdf_bytes(input: &[u8], mode: SplitMode<'_>) -> Result<Vec<Vec<u8>>
     Ok(outputs)
 }
 
+pub fn organize_pdf_bytes(input: &[u8], pages: &[(u32, i32)]) -> Result<Vec<u8>, String> {
+    let mut document = load_document(input, 1)?;
+    let available = document.get_pages();
+    if pages.is_empty() {
+        return Err("Keep at least one page in the PDF.".into());
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut order = Vec::with_capacity(pages.len());
+    for &(number, turn) in pages {
+        let Some(&page_id) = available.get(&number) else {
+            return Err(format!("Page {number} could not be read."));
+        };
+        if !seen.insert(number) {
+            return Err(format!("Page {number} was selected more than once."));
+        }
+        if !matches!(turn, 0 | 90 | 180 | 270) {
+            return Err("Page rotations must be 0, 90, 180, or 270 degrees.".into());
+        }
+        if turn != 0 {
+            let page = document
+                .get_dictionary(page_id)
+                .map_err(|error| format!("Page {number} could not be read: {error}"))?;
+            let rotation = page
+                .get_deref(b"Rotate", &document)
+                .ok()
+                .cloned()
+                .or_else(|| {
+                    inheritable_attributes(&document, page)
+                        .into_iter()
+                        .find(|(key, _)| *key == b"Rotate")
+                        .map(|(_, value)| value)
+                })
+                .and_then(|value| match value {
+                    Object::Reference(id) => document.get_object(id).ok()?.as_i64().ok(),
+                    value => value.as_i64().ok(),
+                })
+                .unwrap_or(0);
+            document
+                .get_dictionary_mut(page_id)
+                .map_err(|error| format!("Page {number} could not be read: {error}"))?
+                .set("Rotate", (rotation + i64::from(turn)).rem_euclid(360));
+        }
+        order.push(number);
+    }
+
+    write_document(assemble_documents(vec![(document, Some(order))])?)
+}
+
 /// Lossless stream recompression is always safe, so `reflate` is not optional.
 /// `image_quality` trades image fidelity for size: 0 keeps every image byte.
 /// `max_image_dimension` downscales images wider or taller than that many
@@ -151,7 +200,7 @@ fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
 }
 
 /// Rebuilds one page tree from the requested pages of each input. Merge selects
-/// every page; Split selects only the pages in its output group.
+/// every page; Split and Organize select pages in their output order.
 fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Document, String> {
     let version = documents
         .iter()

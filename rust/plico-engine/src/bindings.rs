@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes, split_pdf_bytes,
+    merge_pdf_bytes, organize_pdf_bytes, split_pdf_bytes,
 };
 
 #[wasm_bindgen]
@@ -89,6 +89,18 @@ pub fn split_pdf_every(input: &[u8], interval: u32) -> Result<Array, JsValue> {
     split_pdf_bytes(input, SplitMode::Every(interval))
         .map(split_outputs_to_js)
         .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+pub fn organize_pdf(input: &[u8], page_turns: &[u32]) -> Result<Vec<u8>, JsValue> {
+    let chunks = page_turns.chunks_exact(2);
+    if !chunks.remainder().is_empty() {
+        return Err(JsValue::from_str("A page instruction is incomplete."));
+    }
+    let pages = chunks
+        .map(|pair| (pair[0], pair[1] as i32))
+        .collect::<Vec<_>>();
+    organize_pdf_bytes(input, &pages).map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]

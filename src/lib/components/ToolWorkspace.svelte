@@ -5,11 +5,12 @@
 	import { IconArrowRight, IconDownload, IconLoader2 } from '@tabler/icons-svelte-runes';
 	import { toolCategoryColor, type CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
-	import type { SplitOptions } from '$lib/pdf/types';
+	import type { OrganizePage, SplitOptions } from '$lib/pdf/types';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import {
 		processCompressPdf,
 		processImagesToPdf,
+		processOrganizePdf,
 		processPdfToImages,
 		processPdfs,
 		processSplitPdf
@@ -29,12 +30,18 @@
 	import CompressSettings from './CompressSettings.svelte';
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
+	import OrganizeViewer from './OrganizeViewer.svelte';
 	import PdfToImageSettings from './PdfToImageSettings.svelte';
 	import ImageToPdfSettings from './ImageToPdfSettings.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(tool.id === 'merge');
 	const isSplit = $derived(tool.id === 'split');
+	const isOrganize = $derived(tool.id === 'organize');
+	const isExtract = $derived(tool.id === 'extract');
+	const isRemove = $derived(tool.id === 'remove');
+	const isRotate = $derived(tool.id === 'rotate');
+	const isPageTool = $derived(isOrganize || isExtract || isRemove || isRotate);
 	const isCompress = $derived(tool.id === 'compress');
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
@@ -83,6 +90,8 @@
 		return () => preference.removeEventListener('change', update);
 	});
 	let pageCount = $state(0);
+	let organizePages = $state<OrganizePage[]>([]);
+	let selectedPages = $state<number[]>([]);
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
 	let splitMode = $state<'ranges' | 'fixed'>('ranges');
 	let splitInterval = $state(1);
@@ -114,6 +123,18 @@
 			combine: splitCombine,
 			ranges: splitRanges.map(({ from, to }) => [from, to])
 		})
+	);
+	const organizeSignature = $derived(JSON.stringify([organizePages, selectedPages]));
+	const pageToolValid = $derived(
+		!!currentFile &&
+			organizePages.length > 0 &&
+			(isExtract
+				? selectedPages.length > 0
+				: isRemove
+					? selectedPages.length > 0 && selectedPages.length < organizePages.length
+					: isRotate
+						? organizePages.some((page) => page.rotation !== 0)
+						: true)
 	);
 	const compressSignature = $derived(
 		JSON.stringify([compressLevel, compressRemoveMetadata, compressRemoveThumbnails])
@@ -152,13 +173,15 @@
 				? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
 				: isSplit
 					? !splitValid || processing
-					: isCompress
-						? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-						: isPdfToImage
-							? !pdfToImageValid || processing
-							: isImageToPdf
-								? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-								: true
+					: isPageTool
+						? !pageToolValid || processing
+						: isCompress
+							? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
+							: isPdfToImage
+								? !pdfToImageValid || processing
+								: isImageToPdf
+									? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+									: true
 	);
 	const actionUnavailable = $derived(
 		officeTool
@@ -167,26 +190,36 @@
 				? workspace.files.length < 2 || !!dragged || !!keyboardPicked
 				: isSplit
 					? !splitValid
-					: isCompress
-						? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-						: isPdfToImage
-							? !pdfToImageValid
-							: isImageToPdf
-								? !imagePdfValid || !!dragged || !!keyboardPicked
-								: true
+					: isPageTool
+						? !pageToolValid
+						: isCompress
+							? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+							: isPdfToImage
+								? !pdfToImageValid
+								: isImageToPdf
+									? !imagePdfValid || !!dragged || !!keyboardPicked
+									: true
 	);
 	const downloadName = $derived(
 		officeTool
 			? `${currentFile?.name.replace(/\.[^.]+$/, '') || 'document'}.${officeTools[officeTool].output}`
 			: isSplit
 				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
-				: isCompress
-					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
-					: isPdfToImage
-						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
-						: isImageToPdf
-							? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
-							: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+				: isOrganize
+					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-organized.pdf`
+					: isExtract
+						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-extracted.pdf`
+						: isRemove
+							? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-pages-removed.pdf`
+							: isRotate
+								? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-rotated.pdf`
+								: isCompress
+									? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
+									: isPdfToImage
+										? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
+										: isImageToPdf
+											? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
+											: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
 	let prevInputType = $state(untrack(() => inputType));
 	$effect(() => {
@@ -202,6 +235,7 @@
 		void workspace.files;
 		void filename;
 		void splitSignature;
+		void organizeSignature;
 		void compressSignature;
 		void pdfToImageSignature;
 		void imagePdfSignature;
@@ -210,11 +244,18 @@
 	$effect(() => {
 		void currentFile;
 		pageCount = 0;
+		organizePages = [];
+		selectedPages = [];
 		splitRanges = [{ id: 0, from: 1, to: 1 }];
 		splitMode = 'ranges';
 		splitInterval = 1;
 		splitCombine = false;
 		pdfToImagePageRange = '';
+	});
+	$effect(() => {
+		void tool.id;
+		organizePages = [];
+		selectedPages = [];
 	});
 	onDestroy(() => job.clear());
 	async function merge() {
@@ -240,6 +281,21 @@
 		await job.run(
 			(signal) => processSplitPdf(file, options, signal),
 			'Could not split this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function organize() {
+		if (processing || !currentFile || !pageToolValid) return;
+		const file = currentFile;
+		const selected = new Set(selectedPages);
+		const pages = organizePages
+			.filter((page) =>
+				isExtract ? selected.has(page.number) : isRemove ? !selected.has(page.number) : true
+			)
+			.map((page) => ({ ...page }));
+		await job.run(
+			(signal) => processOrganizePdf(file, pages, signal),
+			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} this PDF.`,
 			() => downloadLink?.click()
 		);
 	}
@@ -316,7 +372,8 @@
 		<section
 			aria-label="Documents"
 			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
-			isPdfToImage
+			isPdfToImage ||
+			isPageTool
 				? 'pb-2 lg:pb-16'
 				: 'pb-12 lg:pb-20'}"
 			ondragover={(event) => event.preventDefault()}
@@ -329,7 +386,8 @@
 				) {
 					event.preventDefault();
 					if (!processing) {
-						if (isSplit || isPdfToImage || officeTool) replace(event.dataTransfer.files);
+						if (isSplit || isPageTool || isPdfToImage || officeTool)
+							replace(event.dataTransfer.files);
 						else workspace.add(event.dataTransfer.files, inputType);
 					}
 				}
@@ -356,7 +414,7 @@
 						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 						class="col-start-1 row-start-1 flex min-w-0 flex-col"
 					>
-						{#if !isSplit && !isPdfToImage && !officeTool}<input
+						{#if !isSplit && !isPageTool && !isPdfToImage && !officeTool}<input
 								bind:this={input}
 								type="file"
 								accept={inputAccept[inputType]}
@@ -385,6 +443,25 @@
 											)
 												splitRanges[0].to = count;
 										}}
+										onremove={() => workspace.remove(currentFile)}
+									/>{/key}
+							</div>
+						{:else if isPageTool && currentFile}
+							<div class="my-auto w-full py-6 lg:py-10">
+								{#key currentFile}<OrganizeViewer
+										file={currentFile}
+										pages={organizePages}
+										mode={isExtract
+											? 'extract'
+											: isRemove
+												? 'remove'
+												: isRotate
+													? 'rotate'
+													: 'organize'}
+										selected={selectedPages}
+										{processing}
+										onpageschange={(pages) => (organizePages = pages)}
+										onselectionchange={(numbers) => (selectedPages = numbers)}
 										onremove={() => workspace.remove(currentFile)}
 									/>{/key}
 							</div>
@@ -443,6 +520,22 @@
 							bind:interval={splitInterval}
 							bind:combine={splitCombine}
 						/>{/key}
+				{:else if isPageTool}
+					<div class="space-y-2 text-sm text-muted">
+						<p>
+							{isExtract
+								? 'Select the pages to keep in a new PDF.'
+								: isRemove
+									? 'Select the pages to remove from this PDF.'
+									: isRotate
+										? 'Rotate individual pages or the entire PDF.'
+										: 'Arrange the pages in the order you want. Rotate or remove pages, then save the PDF.'}
+						</p>
+						{#if organizePages.length}<p>
+								{organizePages.length}
+								{organizePages.length === 1 ? 'page' : 'pages'} loaded
+							</p>{/if}
+					</div>
 				{:else if isCompress}
 					<CompressSettings
 						bind:level={compressLevel}
@@ -506,29 +599,33 @@
 							? downloadLink?.click()
 							: isSplit
 								? void split()
-								: officeTool
-									? void convertOffice()
-									: isCompress
-										? void compress()
-										: isPdfToImage
-											? void convertPdfToImage()
-											: isImageToPdf
-												? void convertImagesToPdf()
-												: void merge()}
+								: isPageTool
+									? void organize()
+									: officeTool
+										? void convertOffice()
+										: isCompress
+											? void compress()
+											: isPdfToImage
+												? void convertPdfToImage()
+												: isImageToPdf
+													? void convertImagesToPdf()
+													: void merge()}
 					aria-label={result
 						? `Download ${resultFormat.toUpperCase()} again`
 						: processing
 							? isSplit
 								? 'Splitting PDF'
-								: officeTool
-									? `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
-									: isCompress
-										? 'Compressing PDF'
-										: isPdfToImage
-											? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-											: isImageToPdf
-												? 'Converting images to PDF...'
-												: 'Merging PDF'
+								: isPageTool
+									? `${tool.label} in progress`
+									: officeTool
+										? `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
+										: isCompress
+											? 'Compressing PDF'
+											: isPdfToImage
+												? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+												: isImageToPdf
+													? 'Converting images to PDF...'
+													: 'Merging PDF'
 							: tool.label}
 					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 						? 'opacity-40'
@@ -550,13 +647,15 @@
 									? 'Converting...'
 									: isSplit
 										? 'Splitting...'
-										: isCompress
-											? 'Compressing...'
-											: isPdfToImage
-												? 'Converting...'
-												: isImageToPdf
+										: isPageTool
+											? 'Processing...'
+											: isCompress
+												? 'Compressing...'
+												: isPdfToImage
 													? 'Converting...'
-													: 'Merging...'}{:else}
+													: isImageToPdf
+														? 'Converting...'
+														: 'Merging...'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

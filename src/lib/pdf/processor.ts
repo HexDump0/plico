@@ -1,6 +1,7 @@
 import type {
 	CompressOptions,
 	ImagePdfOptions,
+	OrganizePage,
 	PdfOutput,
 	PdfImageOptions,
 	PdfWorkerRequest,
@@ -79,6 +80,15 @@ export async function processSplitPdf(file: File, options: SplitOptions, signal?
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return pdfOrZip(
 		await submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal)
+	);
+}
+
+export async function processOrganizePdf(file: File, pages: OrganizePage[], signal?: AbortSignal) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return pdfOrZip(
+		await submit({ id: ++requestId, operation: 'organize', files: [buffer], pages }, signal)
 	);
 }
 

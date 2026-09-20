@@ -245,7 +245,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Eleven tools exist, the catalogue advertises about forty
+### Fifteen tools exist, the catalogue advertises about forty
 
 Merge and Split now share the engine's page selection and page-tree rebuilding
 path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
@@ -259,8 +259,10 @@ of those tools runs. Its WASM asset is about 17.6 MB raw, so keeping it out of
 the ordinary PDF worker matters. Conversion quality on real user files still
 needs manual review, especially scanned PDFs and complex Office layouts.
 
-Organise, extract, remove, and rotate can use the same path. Keep page order,
-inheritance flattening, safe renumbering, and pruning in that shared layer.
+Organize pages, Extract pages, Remove pages, and Rotate PDF use the same page-tree
+rebuilding path. Their UIs preview pages with pdf.js; Organize pages allows drag
+and arrow reordering. Keep page order, inheritance flattening, safe renumbering,
+and pruning in that shared layer.
 
 Compress now repacks object streams, recompresses Flate streams, re-encodes
 eligible JPEGs, and converts large 8-bit Flate RGB/grayscale images to JPEG

@@ -2,6 +2,8 @@ export type SplitOptions =
 	| { mode: 'ranges'; ranges: { from: number; to: number }[]; combine: boolean }
 	| { mode: 'fixed'; interval: number };
 
+export type OrganizePage = { number: number; rotation: 0 | 90 | 180 | 270 };
+
 export type CompressOptions = {
 	imageQuality: number;
 	maxImageDimension: number;
@@ -25,6 +27,7 @@ export type PdfImageOptions = {
 export type PdfWorkerRequest =
 	| { id: number; operation: 'merge'; files: ArrayBuffer[] }
 	| { id: number; operation: 'split'; files: ArrayBuffer[]; options: SplitOptions }
+	| { id: number; operation: 'organize'; files: ArrayBuffer[]; pages: OrganizePage[] }
 	| {
 			id: number;
 			operation: 'compress';
