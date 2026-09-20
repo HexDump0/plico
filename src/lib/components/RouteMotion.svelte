@@ -2,9 +2,14 @@
 	import { onNavigate } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import gsap from 'gsap';
+	import { quickTools, toolColumns } from '$lib/tool-catalog';
 
 	let active: ViewTransition | undefined;
 	let motion: gsap.core.Timeline | undefined;
+	const toolOrder = [
+		...quickTools,
+		...toolColumns.flatMap((column) => column.flatMap((group) => group.tools))
+	].map((tool) => tool.id);
 	const properties = [
 		'--hero-x',
 		'--about-x',
@@ -53,8 +58,12 @@
 		const betweenToolAndAbout =
 			(from === '/tools/[tool]' && to === '/about') ||
 			(from === '/about' && to === '/tools/[tool]');
+		const betweenTools =
+			from === '/tools/[tool]' &&
+			to === '/tools/[tool]' &&
+			navigation.from?.params?.tool !== navigation.to?.params?.tool;
 		if (
-			(!betweenPages && !betweenToolAndAbout) ||
+			(!betweenPages && !betweenToolAndAbout && !betweenTools) ||
 			!document.startViewTransition ||
 			window.matchMedia('(prefers-reduced-motion: reduce)').matches
 		)
@@ -63,12 +72,15 @@
 		const enteringDetail = to !== '/';
 		const root = document.documentElement;
 		const distance = window.innerWidth;
-		const detailDirection = to === '/about' ? 1 : -1;
+		const fromToolIndex = toolOrder.indexOf(navigation.from?.params?.tool ?? '');
+		const toToolIndex = toolOrder.indexOf(navigation.to?.params?.tool ?? '');
+		let detailDirection = to === '/about' ? 1 : -1;
+		if (betweenTools) detailDirection = toToolIndex < fromToolIndex ? -1 : 1;
 		const strip = document.querySelector('.feature-strip')?.getBoundingClientRect();
 		const stripDistance = strip
 			? Math.max(strip.height, window.innerHeight - strip.top)
 			: window.innerHeight;
-		root.dataset.pageTransition = betweenToolAndAbout ? 'detail-swap' : 'home-swap';
+		root.dataset.pageTransition = betweenToolAndAbout || betweenTools ? 'detail-swap' : 'home-swap';
 		gsap.set(root, {
 			'--hero-x': enteringDetail ? '0px' : `${-distance}px`,
 			'--about-x': enteringDetail ? `${distance}px` : '0px',
@@ -87,7 +99,7 @@
 			void transition.ready
 				.then(() => {
 					if (active !== transition) return;
-					if (betweenToolAndAbout) {
+					if (betweenToolAndAbout || betweenTools) {
 						motion = gsap.timeline({ onComplete: finish });
 						motion.to(
 							root,
