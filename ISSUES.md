@@ -259,10 +259,14 @@ of those tools runs. Its WASM asset is about 17.6 MB raw, so keeping it out of
 the ordinary PDF worker matters. Conversion quality on real user files still
 needs manual review, especially scanned PDFs and complex Office layouts.
 
-Organize pages, Extract pages, Remove pages, and Rotate PDF use the same page-tree
-rebuilding path. Their UIs preview pages with pdf.js; Organize pages allows drag
-and arrow reordering. Keep page order, inheritance flattening, safe renumbering,
-and pruning in that shared layer.
+Organize pages accepts several PDFs at once and mixes their pages into one
+output order, which makes it Merge plus page editing in one pass. Each input
+has its own color, shown on the page badges and the legend. It uses the PDF
+card drag interaction; its deletion zone is fixed to the left edge of the
+viewport so it stays in place while pages scroll. The order badge also supports
+keyboard reordering. Extract pages, Remove pages, and Rotate PDF stay
+single-document tools on the same page-tree rebuilding path. Keep page order,
+inheritance flattening, safe renumbering, and pruning in that shared layer.
 
 Compress now repacks object streams, recompresses Flate streams, re-encodes
 eligible JPEGs, and converts large 8-bit Flate RGB/grayscale images to JPEG

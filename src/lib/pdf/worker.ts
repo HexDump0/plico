@@ -5,7 +5,7 @@ import init, {
 	compress_pdf,
 	images_to_pdf,
 	merge_pdfs,
-	organize_pdf,
+	organize_pdfs,
 	split_pdf_every,
 	split_pdf_ranges
 } from './wasm/plico_engine.js';
@@ -245,12 +245,22 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 		}
 
 		if (request.operation === 'organize') {
-			if (request.files.length !== 1) throw new Error('Choose one PDF to organize.');
+			const { files, pages } = request;
+			const lengths = Uint32Array.from(files, (file) => file.byteLength);
+			const input = new Uint8Array(lengths.reduce((total, length) => total + length, 0));
+			let offset = 0;
+			for (const file of files) {
+				input.set(new Uint8Array(file), offset);
+				offset += file.byteLength;
+			}
 			postOutput(id, {
 				format: 'pdf',
-				bytes: organize_pdf(
-					new Uint8Array(request.files[0]),
-					Uint32Array.from(request.pages.flatMap(({ number, rotation }) => [number, rotation]))
+				bytes: organize_pdfs(
+					input,
+					lengths,
+					Uint32Array.from(
+						pages.flatMap(({ source, number, rotation }) => [source, number, rotation])
+					)
 				)
 			});
 			return;

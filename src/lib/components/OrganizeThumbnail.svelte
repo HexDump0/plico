@@ -36,7 +36,7 @@
 				if (cancelled) return;
 				const base = page.getViewport({ scale: 1, rotation: page.rotate + turn });
 				const viewport = page.getViewport({
-					scale: Math.min(180 / base.width, 240 / base.height),
+					scale: Math.min(320 / base.width, 426 / base.height),
 					rotation: page.rotate + turn
 				});
 				const scale = Math.min(window.devicePixelRatio || 1, 2);
@@ -71,7 +71,7 @@
 
 <div
 	bind:this={holder}
-	class="flex aspect-[3/4] items-center justify-center overflow-hidden rounded-md bg-white/10"
+	class="flex aspect-3/4 w-full items-center justify-center overflow-hidden bg-white"
 >
 	<canvas
 		bind:this={canvas}

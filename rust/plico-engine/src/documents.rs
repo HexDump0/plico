@@ -111,34 +111,66 @@ pub fn split_pdf_bytes(input: &[u8], mode: SplitMode<'_>) -> Result<Vec<Vec<u8>>
 }
 
 pub fn organize_pdf_bytes(input: &[u8], pages: &[(u32, i32)]) -> Result<Vec<u8>, String> {
-    let mut document = load_document(input, 1)?;
-    let available = document.get_pages();
+    organize_pdfs_bytes(
+        &[input],
+        &pages
+            .iter()
+            .map(|&(number, turn)| (0, number, turn))
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn organize_pdfs_bytes(
+    files: &[&[u8]],
+    pages: &[(usize, u32, i32)],
+) -> Result<Vec<u8>, String> {
+    if files.is_empty() {
+        return Err("Choose at least one PDF to organize.".into());
+    }
     if pages.is_empty() {
         return Err("Keep at least one page in the PDF.".into());
     }
 
+    let mut documents = files
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| load_document(bytes, index + 1))
+        .collect::<Result<Vec<_>, _>>()?;
+    let available = documents
+        .iter()
+        .map(Document::get_pages)
+        .collect::<Vec<_>>();
+    let mut selections = vec![Vec::new(); files.len()];
+
     let mut seen = BTreeSet::new();
     let mut order = Vec::with_capacity(pages.len());
-    for &(number, turn) in pages {
-        let Some(&page_id) = available.get(&number) else {
-            return Err(format!("Page {number} could not be read."));
+    for &(source, number, turn) in pages {
+        let Some(&page_id) = available.get(source).and_then(|pages| pages.get(&number)) else {
+            return Err(format!(
+                "Page {number} of PDF {} could not be read.",
+                source + 1
+            ));
         };
-        if !seen.insert(number) {
-            return Err(format!("Page {number} was selected more than once."));
+        if !seen.insert((source, number)) {
+            return Err(format!(
+                "Page {number} of PDF {} was selected more than once.",
+                source + 1
+            ));
         }
         if !matches!(turn, 0 | 90 | 180 | 270) {
             return Err("Page rotations must be 0, 90, 180, or 270 degrees.".into());
         }
         if turn != 0 {
+            let document = &mut documents[source];
             let page = document
                 .get_dictionary(page_id)
                 .map_err(|error| format!("Page {number} could not be read: {error}"))?;
             let rotation = page
-                .get_deref(b"Rotate", &document)
+                .get_deref(b"Rotate", document)
                 .ok()
                 .cloned()
                 .or_else(|| {
-                    inheritable_attributes(&document, page)
+                    inheritable_attributes(document, page)
                         .into_iter()
                         .find(|(key, _)| *key == b"Rotate")
                         .map(|(_, value)| value)
@@ -153,10 +185,17 @@ pub fn organize_pdf_bytes(input: &[u8], pages: &[(u32, i32)]) -> Result<Vec<u8>,
                 .map_err(|error| format!("Page {number} could not be read: {error}"))?
                 .set("Rotate", (rotation + i64::from(turn)).rem_euclid(360));
         }
-        order.push(number);
+        selections[source].push(number);
+        order.push((source, number));
     }
 
-    write_document(assemble_documents(vec![(document, Some(order))])?)
+    write_document(assemble_documents_in_order(
+        documents
+            .into_iter()
+            .zip(selections.into_iter().map(Some))
+            .collect(),
+        Some(&order),
+    )?)
 }
 
 /// Lossless stream recompression is always safe, so `reflate` is not optional.
@@ -202,6 +241,16 @@ fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
 /// Rebuilds one page tree from the requested pages of each input. Merge selects
 /// every page; Split and Organize select pages in their output order.
 fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Document, String> {
+    assemble_documents_in_order(documents, None)
+}
+
+/// `output_order` reorders the assembled pages across every input. Organize
+/// needs it because its page sequence interleaves documents; Merge and Split
+/// emit each document's selection consecutively, so they pass `None`.
+fn assemble_documents_in_order(
+    documents: Vec<(Document, Option<Vec<u32>>)>,
+    output_order: Option<&[(usize, u32)]>,
+) -> Result<Document, String> {
     let version = documents
         .iter()
         .map(|(document, _)| document.version.as_str())
@@ -214,10 +263,10 @@ fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Do
     // A Vec, not a map keyed by object id: page order is the concatenation of
     // each input's page order, which is not the same sequence as its object id
     // order. Nothing requires a page tree to list its pages in id order.
-    let mut pages: Vec<(ObjectId, Dictionary)> = Vec::new();
+    let mut pages: Vec<((usize, u32), ObjectId, Dictionary)> = Vec::new();
     let mut catalog: Option<Dictionary> = None;
 
-    for (mut document, selection) in documents {
+    for (source, (mut document, selection)) in documents.into_iter().enumerate() {
         // Page order and inherited attributes both have to be read while this
         // document's own page tree is still intact, so before any renumbering.
         let available = document.get_pages();
@@ -228,15 +277,16 @@ fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Do
                     available
                         .get(&number)
                         .copied()
+                        .map(|id| (number, id))
                         .ok_or_else(|| format!("Page {number} could not be read."))
                 })
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            available.into_values().collect::<Vec<_>>()
+            available.into_iter().collect::<Vec<_>>()
         };
         let inherited = page_order
             .iter()
-            .map(|page_id| {
+            .map(|(_, page_id)| {
                 let page = document
                     .get_dictionary(*page_id)
                     .map_err(|error| format!("A PDF page could not be read: {error}"))?;
@@ -244,7 +294,7 @@ fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Do
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        for (page_id, attributes) in page_order.iter().zip(inherited) {
+        for ((_, page_id), attributes) in page_order.iter().zip(inherited) {
             let Ok(page) = document.get_dictionary_mut(*page_id) else {
                 continue;
             };
@@ -263,17 +313,34 @@ fn assemble_documents(documents: Vec<(Document, Option<Vec<u32>>)>) -> Result<Do
             catalog = document.catalog().ok().cloned();
         }
 
-        for page_id in &page_order {
-            let page_id = moved[page_id];
+        for &(number, page_id) in &page_order {
+            let page_id = moved[&page_id];
             let page = document
                 .get_dictionary(page_id)
                 .map_err(|error| format!("A PDF page could not be read: {error}"))?
                 .clone();
-            pages.push((page_id, page));
+            pages.push(((source, number), page_id, page));
         }
 
         output.objects.extend(document.objects);
     }
+
+    let pages = if let Some(order) = output_order {
+        let mut by_source = pages
+            .into_iter()
+            .map(|(key, id, page)| (key, (id, page)))
+            .collect::<BTreeMap<_, _>>();
+        order
+            .iter()
+            .map(|key| {
+                by_source.remove(key).ok_or_else(|| {
+                    format!("Page {} of PDF {} could not be read.", key.1, key.0 + 1)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        pages.into_iter().map(|(_, id, page)| (id, page)).collect()
+    };
 
     let pages_id = (next_id, 0);
     let catalog_id = (next_id + 1, 0);

@@ -2,7 +2,12 @@ export type SplitOptions =
 	| { mode: 'ranges'; ranges: { from: number; to: number }[]; combine: boolean }
 	| { mode: 'fixed'; interval: number };
 
-export type OrganizePage = { number: number; rotation: 0 | 90 | 180 | 270 };
+// `source` identifies the input PDF, so one organize pass can mix pages from
+// several documents. See `sources.ts`.
+export type OrganizePage = { source: string; number: number; rotation: 0 | 90 | 180 | 270 };
+
+// The worker has the files in hand and only needs their position.
+export type OrganizeInstruction = { source: number; number: number; rotation: number };
 
 export type CompressOptions = {
 	imageQuality: number;
@@ -27,7 +32,7 @@ export type PdfImageOptions = {
 export type PdfWorkerRequest =
 	| { id: number; operation: 'merge'; files: ArrayBuffer[] }
 	| { id: number; operation: 'split'; files: ArrayBuffer[]; options: SplitOptions }
-	| { id: number; operation: 'organize'; files: ArrayBuffer[]; pages: OrganizePage[] }
+	| { id: number; operation: 'organize'; files: ArrayBuffer[]; pages: OrganizeInstruction[] }
 	| {
 			id: number;
 			operation: 'compress';

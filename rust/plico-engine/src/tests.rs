@@ -4,7 +4,7 @@ use lopdf::{Document, Object, Stream, dictionary};
 
 use super::{
     CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes, split_pdf_bytes,
+    merge_pdf_bytes, organize_pdf_bytes, organize_pdfs_bytes, split_pdf_bytes,
 };
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
@@ -426,6 +426,62 @@ fn merges_more_than_two_documents() {
     let merged = merge_pdf_bytes(&refs).unwrap();
 
     assert_eq!(Document::load_mem(&merged).unwrap().get_pages().len(), 4);
+}
+
+#[test]
+fn organizes_pages_across_documents_in_requested_order() {
+    let first = numbered_pdf(2);
+    let second = numbered_pdf(2);
+    let output =
+        organize_pdfs_bytes(&[&first, &second], &[(1, 2, 0), (0, 1, 90), (1, 1, 180)]).unwrap();
+
+    assert_eq!(page_contents(&output), ["2", "1", "1"]);
+
+    let document = Document::load_mem(&output).unwrap();
+    let rotations = document
+        .get_pages()
+        .into_values()
+        .map(|id| {
+            document
+                .get_dictionary(id)
+                .and_then(|page| page.get(b"Rotate"))
+                .and_then(Object::as_i64)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rotations, [0, 90, 180]);
+}
+
+#[test]
+fn keeps_rotation_of_a_page_that_already_had_one() {
+    let mut document = Document::load_mem(&numbered_pdf(1)).unwrap();
+    let page = *document.get_pages().values().next().unwrap();
+    document.get_dictionary_mut(page).unwrap().set("Rotate", 90);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+
+    let output = organize_pdf_bytes(&bytes, &[(1, 90)]).unwrap();
+    let result = Document::load_mem(&output).unwrap();
+    let page = *result.get_pages().values().next().unwrap();
+    assert_eq!(
+        result
+            .get_dictionary(page)
+            .and_then(|page| page.get(b"Rotate"))
+            .and_then(Object::as_i64)
+            .unwrap(),
+        180
+    );
+}
+
+#[test]
+fn organize_rejects_duplicate_pages_bad_sources_and_turns() {
+    let input = numbered_pdf(2);
+    assert!(organize_pdf_bytes(&input, &[(1, 0), (1, 90)]).is_err());
+    assert!(organize_pdf_bytes(&input, &[(3, 0)]).is_err());
+    assert!(organize_pdf_bytes(&input, &[]).is_err());
+    assert!(organize_pdfs_bytes(&[&input], &[(1, 0, 45)]).is_err());
+    assert!(organize_pdfs_bytes(&[], &[]).is_err());
+    assert!(organize_pdfs_bytes(&[&input], &[(0, 1, 0), (1, 1, 0)]).is_err());
 }
 
 #[test]

@@ -1,116 +1,186 @@
 <script lang="ts">
+	import { onDestroy, untrack } from 'svelte';
 	import {
-		IconArrowLeft,
-		IconArrowRight,
+		IconPlus,
+		IconRefresh,
 		IconRotate,
 		IconRotateClockwise,
-		IconTrash,
-		IconX
+		IconTrash
 	} from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
+	import { pageKey, sourceColor, sourceKey } from '$lib/pdf/sources';
 	import OrganizeThumbnail from './OrganizeThumbnail.svelte';
+	import OrganizePageCards from './OrganizePageCards.svelte';
+
+	type Source = {
+		key: string;
+		file: File;
+		pdf: PDFDocumentProxy | null;
+		task: PDFDocumentLoadingTask | null;
+		loading: boolean;
+		failed: boolean;
+		status: string;
+	};
 
 	let {
-		file,
+		files,
 		pages,
 		mode,
 		selected,
 		processing,
+		reducedMotion,
 		onpageschange,
 		onselectionchange,
+		onadd,
 		onremove
 	}: {
-		file: File;
+		files: File[];
 		pages: OrganizePage[];
 		mode: 'organize' | 'extract' | 'remove' | 'rotate';
-		selected: number[];
+		selected: string[];
 		processing: boolean;
+		reducedMotion: boolean;
 		onpageschange: (pages: OrganizePage[]) => void;
-		onselectionchange: (numbers: number[]) => void;
-		onremove: () => void;
+		onselectionchange: (keys: string[]) => void;
+		onadd: () => void;
+		onremove: (file: File) => void;
 	} = $props();
-	let pdf = $state<PDFDocumentProxy | null>(null);
-	let status = $state('Loading PDF...');
-	let dragging = $state<number | null>(null);
-	let dropTarget = $state<number | null>(null);
-	const remaining = $derived(pages.length);
+
+	let sources = $state<Source[]>([]);
+	// Extract, Remove, and Rotate stay single-document tools; only Organize
+	// builds one output from several inputs.
+	const activeFiles = $derived(mode === 'organize' ? files : files.slice(0, 1));
+	const loadedCount = $derived(sources.filter((source) => source.pdf).length);
+	const status = $derived(
+		sources.length === 0
+			? ''
+			: loadedCount > 0
+				? ''
+				: (sources.find((source) => source.failed)?.status ?? 'Loading PDFs...')
+	);
 
 	$effect(() => {
-		const source = file;
-		void mode;
-		let cancelled = false;
-		let loadingTask: PDFDocumentLoadingTask | undefined;
-		pdf = null;
-		status = 'Loading PDF...';
-		async function load() {
-			try {
-				const pdfjs = await import('pdfjs-dist');
-				const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
-				if (cancelled) return;
-				pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-				loadingTask = pdfjs.getDocument({ data: new Uint8Array(await source.arrayBuffer()) });
-				loadingTask.onPassword = () => {
-					if (!cancelled) status = 'Password-protected PDF';
-					void loadingTask?.destroy();
-				};
-				const document = await loadingTask.promise;
-				if (cancelled) return;
-				pdf = document;
-				status = '';
-				onpageschange(
-					Array.from({ length: document.numPages }, (_, index) => ({
+		const wanted = activeFiles;
+		const keys = wanted.map((file) => sourceKey(file));
+		const previous = untrack(() => sources);
+		const next = wanted.map((file) => {
+			const key = sourceKey(file);
+			return (
+				previous.find((source) => source.key === key) ?? {
+					key,
+					file,
+					pdf: null,
+					task: null,
+					loading: false,
+					failed: false,
+					status: ''
+				}
+			);
+		});
+		sources = next;
+		for (const stale of previous) {
+			if (!next.includes(stale)) void stale.task?.destroy();
+		}
+		const known = new Set(keys);
+		untrack(() => {
+			if (pages.some((page) => !known.has(page.source)))
+				onpageschange(pages.filter((page) => known.has(page.source)));
+		});
+		for (const source of next) {
+			if (!source.pdf && !source.failed && !source.loading) void load(source);
+		}
+	});
+
+	async function load(source: Source) {
+		const start = sources.find((entry) => entry.key === source.key);
+		if (!start || start.pdf || start.failed || start.loading) return;
+		start.loading = true;
+		try {
+			const pdfjs = await import('pdfjs-dist');
+			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+			const task: PDFDocumentLoadingTask = pdfjs.getDocument({
+				data: new Uint8Array(await source.file.arrayBuffer())
+			});
+			task.onPassword = () => {
+				const current = sources.find((entry) => entry.key === source.key);
+				if (current) {
+					current.failed = true;
+					current.status = 'Password-protected PDF';
+				}
+				void task.destroy();
+			};
+			const pdf = await task.promise;
+			const current = sources.find((entry) => entry.key === source.key);
+			if (!current) {
+				void task.destroy();
+				return;
+			}
+			current.task = task;
+			current.pdf = pdf;
+			if (!pages.some((page) => page.source === source.key))
+				onpageschange([
+					...pages,
+					...Array.from({ length: pdf.numPages }, (_, index) => ({
+						source: source.key,
 						number: index + 1,
 						rotation: 0 as const
 					}))
-				);
-			} catch {
-				if (!cancelled && status !== 'Password-protected PDF') status = 'Preview unavailable';
+				]);
+		} catch {
+			const current = sources.find((entry) => entry.key === source.key);
+			if (current) {
+				current.loading = false;
+				if (!current.failed) {
+					current.failed = true;
+					current.status = 'Preview unavailable';
+				}
 			}
 		}
-		void load();
-		return () => {
-			cancelled = true;
-			void loadingTask?.destroy();
-		};
-	});
-
-	function move(from: number, to: number) {
-		if (
-			mode !== 'organize' ||
-			processing ||
-			from < 0 ||
-			from === to ||
-			to < 0 ||
-			to >= pages.length
-		)
-			return;
-		const next = [...pages];
-		const [page] = next.splice(from, 1);
-		next.splice(to, 0, page);
-		onpageschange(next);
 	}
 
-	function rotate(number: number, by: number) {
-		if (processing) return;
-		onpageschange(
-			pages.map((page) =>
-				page.number === number
-					? { ...page, rotation: ((page.rotation + by + 360) % 360) as OrganizePage['rotation'] }
-					: page
+	function sourceOf(page: OrganizePage) {
+		return sources.find((source) => source.key === page.source);
+	}
+
+	function colorOf(page: OrganizePage) {
+		return sourceColor(
+			Math.max(
+				0,
+				sources.findIndex((source) => source.key === page.source)
 			)
 		);
 	}
 
-	function remove(number: number) {
-		if (processing || pages.length < 2) return;
-		onpageschange(pages.filter((page) => page.number !== number));
+	function pagesOf(key: string) {
+		return pages.filter((page) => page.source === key).length;
 	}
 
-	function toggle(number: number) {
+	function removeSource(key: string) {
+		const source = sources.find((entry) => entry.key === key);
+		if (source) onremove(source.file);
+	}
+
+	function rotate(page: OrganizePage, by: number) {
 		if (processing) return;
+		onpageschange(
+			pages.map((entry) =>
+				pageKey(entry) === pageKey(page)
+					? {
+							...entry,
+							rotation: ((entry.rotation + by + 360) % 360) as OrganizePage['rotation']
+						}
+					: entry
+			)
+		);
+	}
+
+	function toggle(page: OrganizePage) {
+		if (processing) return;
+		const key = pageKey(page);
 		onselectionchange(
-			selected.includes(number) ? selected.filter((item) => item !== number) : [...selected, number]
+			selected.includes(key) ? selected.filter((item) => item !== key) : [...selected, key]
 		);
 	}
 
@@ -125,14 +195,23 @@
 	}
 
 	function reset() {
-		if (processing || !pdf) return;
+		if (processing) return;
 		onpageschange(
-			Array.from({ length: pdf.numPages }, (_, index) => ({
-				number: index + 1,
-				rotation: 0 as const
-			}))
+			sources.flatMap((source) =>
+				source.pdf
+					? Array.from({ length: source.pdf.numPages }, (_, index) => ({
+							source: source.key,
+							number: index + 1,
+							rotation: 0 as const
+						}))
+					: []
+			)
 		);
 	}
+
+	onDestroy(() => {
+		for (const source of sources) void source.task?.destroy();
+	});
 </script>
 
 <section
@@ -143,53 +222,103 @@
 			: mode === 'remove'
 				? 'Remove pages'
 				: 'Rotate PDF'}
-	class="mx-auto w-full max-w-7xl space-y-6"
+	class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6"
 >
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div class="flex min-w-0 items-center gap-2">
-			<p class="max-w-sm truncate text-sm font-semibold" title={file.name}>{file.name}</p>
-			<span class="shrink-0 text-xs text-muted"
-				>{pdf
-					? mode === 'organize'
-						? `${remaining} of ${pdf.numPages} pages`
-						: mode === 'rotate'
-							? `${pdf.numPages} pages`
-							: `${selected.length} of ${pdf.numPages} selected`
-					: status}</span
+	{#if mode === 'organize'}
+		<div class="flex flex-wrap items-start justify-between gap-3">
+			<ul
+				class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2"
+				aria-label="PDFs in this project"
 			>
-			<button
-				type="button"
-				onclick={onremove}
-				disabled={processing}
-				class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-merge hover:text-canvas disabled:opacity-50"
-				aria-label="Remove PDF"
-				title="Remove PDF"><IconX size={18} stroke={2.5} /></button
-			>
+				{#each sources as source, index (source.key)}
+					<li class="flex min-w-0 items-center gap-2 text-sm">
+						<span class="{sourceColor(index).dot} size-2.5 shrink-0 rounded-full" aria-hidden="true"
+						></span>
+						<span class="max-w-40 truncate font-medium" title={source.file.name}
+							>{source.file.name}</span
+						>
+						<span class="shrink-0 text-xs text-muted"
+							>{source.pdf
+								? `${pagesOf(source.key)}/${source.pdf.numPages} pages`
+								: source.status || 'Loading...'}</span
+						>
+						<button
+							type="button"
+							onclick={() => removeSource(source.key)}
+							disabled={processing}
+							class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-convert/20 hover:text-convert disabled:opacity-40"
+							aria-label={`Remove ${source.file.name}`}
+							title="Remove PDF"><IconTrash size={16} stroke={1.8} /></button
+						>
+					</li>
+				{/each}
+			</ul>
+			<div class="flex shrink-0 items-center gap-2">
+				<button
+					type="button"
+					onclick={onadd}
+					disabled={processing}
+					class="flex items-center gap-1.5 rounded-xl border-2 border-white/10 bg-panel px-3 py-2 text-xs font-semibold text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+					><IconPlus size={16} /> Add PDF</button
+				>
+				<button
+					type="button"
+					onclick={reset}
+					disabled={processing}
+					class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+					aria-label="Reset pages"
+					title="Reset pages"><IconRefresh size={18} /></button
+				>
+			</div>
 		</div>
-		{#if pdf && mode === 'organize'}<button
-				type="button"
-				onclick={reset}
-				disabled={processing}
-				class="rounded-lg px-3 py-2 text-xs font-semibold text-merge hover:bg-white/10 disabled:opacity-50"
-				>Reset pages</button
-			>{/if}
-	</div>
-	{#if pdf}
+		{#if pages.length}
+			<OrganizePageCards
+				{sources}
+				{pages}
+				{processing}
+				{reducedMotion}
+				{onpageschange}
+				onremovesource={removeSource}
+			/>
+		{:else}
+			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
+		{/if}
+	{:else}
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div class="flex min-w-0 items-center gap-2">
+				<p class="max-w-sm truncate text-sm font-semibold" title={files[0]?.name}>
+					{files[0]?.name}
+				</p>
+				<span class="shrink-0 text-xs text-muted"
+					>{loadedCount
+						? mode === 'rotate'
+							? `${pages.length} pages`
+							: `${selected.length} of ${pages.length} selected`
+						: status}</span
+				>
+				<button
+					type="button"
+					onclick={() => files[0] && onremove(files[0])}
+					disabled={processing}
+					class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-muted transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
+					aria-label="Remove PDF"
+					title="Remove PDF"><IconTrash size={18} stroke={1.8} /></button
+				>
+			</div>
+		</div>
 		<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
 			<p>
-				{mode === 'organize'
-					? 'Drag pages to reorder, or use the arrow buttons. Rotate or remove individual pages below.'
-					: mode === 'extract'
-						? 'Select the pages to include in the new PDF.'
-						: mode === 'remove'
-							? 'Select the pages to remove. At least one page must remain.'
-							: 'Rotate pages below, or rotate every page at once.'}
+				{mode === 'extract'
+					? 'Select the pages to include in the new PDF.'
+					: mode === 'remove'
+						? 'Select the pages to remove. At least one page must remain.'
+						: 'Rotate pages below, or rotate every page at once.'}
 			</p>
 			{#if mode === 'extract' || mode === 'remove'}
 				<div class="flex gap-2">
 					<button
 						type="button"
-						onclick={() => onselectionchange(pages.map((page) => page.number))}
+						onclick={() => onselectionchange(pages.map(pageKey))}
 						disabled={processing}
 						class="text-merge hover:underline disabled:opacity-50">Select all</button
 					><button
@@ -199,7 +328,7 @@
 						class="text-merge hover:underline disabled:opacity-50">Clear</button
 					>
 				</div>
-			{:else if mode === 'rotate'}
+			{:else}
 				<div class="flex gap-2">
 					<button
 						type="button"
@@ -221,108 +350,57 @@
 			{/if}
 		</div>
 		<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-			{#each pages as page, index (page.number)}
+			{#each pages as page (pageKey(page))}
+				{@const source = sourceOf(page)}
+				{@const color = colorOf(page)}
 				<div
-					class="min-w-0 rounded-xl border p-2.5 transition-colors {dropTarget === page.number ||
-					selected.includes(page.number)
-						? 'border-merge bg-merge/10'
-						: 'border-white/10 bg-panel/70'}"
-					draggable={mode === 'organize' && !processing}
-					ondragstart={(event) => {
-						dragging = page.number;
-						event.dataTransfer?.setData('text/plain', String(page.number));
-						if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-					}}
-					ondragover={(event) => {
-						if (dragging === null) return;
-						event.preventDefault();
-						event.stopPropagation();
-						dropTarget = page.number;
-					}}
-					ondrop={(event) => {
-						if (dragging === null) return;
-						event.preventDefault();
-						event.stopPropagation();
-						move(
-							pages.findIndex((item) => item.number === dragging),
-							index
-						);
-						dragging = null;
-						dropTarget = null;
-					}}
-					ondragend={() => {
-						dragging = null;
-						dropTarget = null;
-					}}
+					class="relative min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 {selected.includes(
+						pageKey(page)
+					)
+						? color.strong
+						: color.border}"
 				>
-					<OrganizeThumbnail {pdf} number={page.number} rotation={page.rotation} />
-					<div class="mt-2 flex items-center justify-between gap-1 text-xs">
-						<span class="font-semibold"
-							>{mode === 'organize' ? `${index + 1}. ` : ''}Page {page.number}</span
-						>{#if page.rotation}<span class="text-merge">{page.rotation}°</span>{/if}
-					</div>
+					{#if source?.pdf}<OrganizeThumbnail
+							pdf={source.pdf}
+							number={page.number}
+							rotation={page.rotation}
+						/>{/if}
+					<span
+						class="{color.dot} absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md px-1.5 py-1 text-[11px] font-bold text-canvas backdrop-blur-sm"
+						>{page.number}</span
+					>
 					{#if mode === 'extract' || mode === 'remove'}
-						<label
-							class="mt-2 flex cursor-pointer items-center gap-2 border-t border-white/10 pt-2 text-xs font-medium"
+						<label class="absolute inset-0 cursor-pointer"
+							><span class="sr-only"
+								>{mode === 'extract' ? 'Extract' : 'Remove'} page {page.number}</span
 							><input
 								type="checkbox"
-								checked={selected.includes(page.number)}
+								checked={selected.includes(pageKey(page))}
 								disabled={processing}
-								onchange={() => toggle(page.number)}
-								class="accent-merge"
-							/>{mode === 'extract' ? 'Extract this page' : 'Remove this page'}</label
+								onchange={() => toggle(page)}
+								class="absolute top-2 right-2 size-6 accent-merge"
+							/></label
 						>
 					{:else}
-						<div class="mt-2 flex items-center justify-between gap-1 border-t border-white/10 pt-2">
-							{#if mode === 'organize'}<div class="flex gap-0.5">
-									<button
-										type="button"
-										onclick={() => move(index, index - 1)}
-										disabled={processing || index === 0}
-										aria-label={`Move page ${page.number} left`}
-										title="Move left"
-										class="rounded-md p-1.5 hover:bg-white/10 disabled:opacity-30"
-										><IconArrowLeft size={16} /></button
-									>
-									<button
-										type="button"
-										onclick={() => move(index, index + 1)}
-										disabled={processing || index === pages.length - 1}
-										aria-label={`Move page ${page.number} right`}
-										title="Move right"
-										class="rounded-md p-1.5 hover:bg-white/10 disabled:opacity-30"
-										><IconArrowRight size={16} /></button
-									>
-								</div>{/if}
-							<div class="flex gap-0.5">
-								<button
-									type="button"
-									onclick={() => rotate(page.number, -90)}
-									disabled={processing}
-									aria-label={`Rotate page ${page.number} left`}
-									title="Rotate left"
-									class="rounded-md p-1.5 hover:bg-white/10 disabled:opacity-30"
-									><IconRotate size={16} /></button
-								>
-								<button
-									type="button"
-									onclick={() => rotate(page.number, 90)}
-									disabled={processing}
-									aria-label={`Rotate page ${page.number} right`}
-									title="Rotate right"
-									class="rounded-md p-1.5 hover:bg-white/10 disabled:opacity-30"
-									><IconRotateClockwise size={16} /></button
-								>
-								{#if mode === 'organize'}<button
-										type="button"
-										onclick={() => remove(page.number)}
-										disabled={processing || pages.length === 1}
-										aria-label={`Remove page ${page.number}`}
-										title="Remove page"
-										class="rounded-md p-1.5 hover:bg-convert/20 hover:text-convert disabled:opacity-30"
-										><IconTrash size={16} /></button
-									>{/if}
-							</div>
+						<div class="absolute right-2 bottom-2 flex gap-1">
+							<button
+								type="button"
+								onclick={() => rotate(page, -90)}
+								disabled={processing}
+								aria-label={`Rotate page ${page.number} left`}
+								title="Rotate left"
+								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+								><IconRotate size={17} /></button
+							>
+							<button
+								type="button"
+								onclick={() => rotate(page, 90)}
+								disabled={processing}
+								aria-label={`Rotate page ${page.number} right`}
+								title="Rotate right"
+								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+								><IconRotateClockwise size={17} /></button
+							>
 						</div>
 					{/if}
 				</div>

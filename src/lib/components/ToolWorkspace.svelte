@@ -6,6 +6,7 @@
 	import { toolCategoryColor, type CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { OrganizePage, SplitOptions } from '$lib/pdf/types';
+	import { pageKey } from '$lib/pdf/sources';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import {
 		processCompressPdf,
@@ -91,7 +92,7 @@
 	});
 	let pageCount = $state(0);
 	let organizePages = $state<OrganizePage[]>([]);
-	let selectedPages = $state<number[]>([]);
+	let selectedPages = $state<string[]>([]);
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
 	let splitMode = $state<'ranges' | 'fixed'>('ranges');
 	let splitInterval = $state(1);
@@ -244,13 +245,18 @@
 	$effect(() => {
 		void currentFile;
 		pageCount = 0;
-		organizePages = [];
-		selectedPages = [];
 		splitRanges = [{ id: 0, from: 1, to: 1 }];
 		splitMode = 'ranges';
 		splitInterval = 1;
 		splitCombine = false;
 		pdfToImagePageRange = '';
+	});
+	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
+	// drop selections that no longer name a live page.
+	$effect(() => {
+		const keys = new Set(organizePages.map(pageKey));
+		if (selectedPages.some((key) => !keys.has(key)))
+			selectedPages = selectedPages.filter((key) => keys.has(key));
 	});
 	$effect(() => {
 		void tool.id;
@@ -285,17 +291,17 @@
 		);
 	}
 	async function organize() {
-		if (processing || !currentFile || !pageToolValid) return;
-		const file = currentFile;
+		if (processing || !pageToolValid) return;
+		const files = [...workspace.files];
 		const selected = new Set(selectedPages);
 		const pages = organizePages
 			.filter((page) =>
-				isExtract ? selected.has(page.number) : isRemove ? !selected.has(page.number) : true
+				isExtract ? selected.has(pageKey(page)) : isRemove ? !selected.has(pageKey(page)) : true
 			)
 			.map((page) => ({ ...page }));
 		await job.run(
-			(signal) => processOrganizePdf(file, pages, signal),
-			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} this PDF.`,
+			(signal) => processOrganizePdf(files, pages, signal),
+			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} ${files.length > 1 ? 'these PDFs' : 'this PDF'}.`,
 			() => downloadLink?.click()
 		);
 	}
@@ -386,7 +392,7 @@
 				) {
 					event.preventDefault();
 					if (!processing) {
-						if (isSplit || isPageTool || isPdfToImage || officeTool)
+						if (isSplit || isPdfToImage || officeTool || (isPageTool && !isOrganize))
 							replace(event.dataTransfer.files);
 						else workspace.add(event.dataTransfer.files, inputType);
 					}
@@ -414,7 +420,7 @@
 						out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 						class="col-start-1 row-start-1 flex min-w-0 flex-col"
 					>
-						{#if !isSplit && !isPageTool && !isPdfToImage && !officeTool}<input
+						{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !officeTool)}<input
 								bind:this={input}
 								type="file"
 								accept={inputAccept[inputType]}
@@ -447,9 +453,9 @@
 									/>{/key}
 							</div>
 						{:else if isPageTool && currentFile}
-							<div class="my-auto w-full py-6 lg:py-10">
-								{#key currentFile}<OrganizeViewer
-										file={currentFile}
+							<div class="flex min-h-0 w-full flex-1 flex-col py-6 lg:py-0">
+								{#key isOrganize ? 'organize' : currentFile}<OrganizeViewer
+										files={workspace.files}
 										pages={organizePages}
 										mode={isExtract
 											? 'extract'
@@ -460,9 +466,11 @@
 													: 'organize'}
 										selected={selectedPages}
 										{processing}
+										{reducedMotion}
 										onpageschange={(pages) => (organizePages = pages)}
-										onselectionchange={(numbers) => (selectedPages = numbers)}
-										onremove={() => workspace.remove(currentFile)}
+										onselectionchange={(keys) => (selectedPages = keys)}
+										onadd={() => input?.click()}
+										onremove={(file) => workspace.remove(file)}
 									/>{/key}
 							</div>
 						{:else}
@@ -520,22 +528,6 @@
 							bind:interval={splitInterval}
 							bind:combine={splitCombine}
 						/>{/key}
-				{:else if isPageTool}
-					<div class="space-y-2 text-sm text-muted">
-						<p>
-							{isExtract
-								? 'Select the pages to keep in a new PDF.'
-								: isRemove
-									? 'Select the pages to remove from this PDF.'
-									: isRotate
-										? 'Rotate individual pages or the entire PDF.'
-										: 'Arrange the pages in the order you want. Rotate or remove pages, then save the PDF.'}
-						</p>
-						{#if organizePages.length}<p>
-								{organizePages.length}
-								{organizePages.length === 1 ? 'page' : 'pages'} loaded
-							</p>{/if}
-					</div>
 				{:else if isCompress}
 					<CompressSettings
 						bind:level={compressLevel}

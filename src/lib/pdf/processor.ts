@@ -1,3 +1,4 @@
+import { sourceKey } from './sources';
 import type {
 	CompressOptions,
 	ImagePdfOptions,
@@ -83,12 +84,25 @@ export async function processSplitPdf(file: File, options: SplitOptions, signal?
 	);
 }
 
-export async function processOrganizePdf(file: File, pages: OrganizePage[], signal?: AbortSignal) {
+export async function processOrganizePdf(
+	files: File[],
+	pages: OrganizePage[],
+	signal?: AbortSignal
+) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const sources = new Map(files.map((file, index) => [sourceKey(file), index]));
+	const instructions = pages.map((page) => {
+		const source = sources.get(page.source);
+		if (source === undefined) throw new Error('A page belongs to a PDF that is no longer loaded.');
+		return { source, number: page.number, rotation: page.rotation };
+	});
 	return pdfOrZip(
-		await submit({ id: ++requestId, operation: 'organize', files: [buffer], pages }, signal)
+		await submit(
+			{ id: ++requestId, operation: 'organize', files: buffers, pages: instructions },
+			signal
+		)
 	);
 }
 

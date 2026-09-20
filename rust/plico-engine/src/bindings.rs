@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes, organize_pdf_bytes, split_pdf_bytes,
+    merge_pdf_bytes, organize_pdfs_bytes, split_pdf_bytes,
 };
 
 #[wasm_bindgen]
@@ -92,15 +92,38 @@ pub fn split_pdf_every(input: &[u8], interval: u32) -> Result<Array, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn organize_pdf(input: &[u8], page_turns: &[u32]) -> Result<Vec<u8>, JsValue> {
-    let chunks = page_turns.chunks_exact(2);
+pub fn organize_pdfs(
+    input: &[u8],
+    lengths: &[u32],
+    instructions: &[u32],
+) -> Result<Vec<u8>, JsValue> {
+    let expected_length = lengths
+        .iter()
+        .try_fold(0usize, |total, length| total.checked_add(*length as usize));
+    if expected_length != Some(input.len()) {
+        return Err(JsValue::from_str("The PDF input was incomplete."));
+    }
+
+    let chunks = instructions.chunks_exact(3);
     if !chunks.remainder().is_empty() {
         return Err(JsValue::from_str("A page instruction is incomplete."));
     }
-    let pages = chunks
-        .map(|pair| (pair[0], pair[1] as i32))
+
+    let mut offset = 0;
+    let files = lengths
+        .iter()
+        .map(|length| {
+            let end = offset + *length as usize;
+            let bytes = &input[offset..end];
+            offset = end;
+            bytes
+        })
         .collect::<Vec<_>>();
-    organize_pdf_bytes(input, &pages).map_err(|error| JsValue::from_str(&error))
+    let pages = chunks
+        .map(|chunk| (chunk[0] as usize, chunk[1], chunk[2] as i32))
+        .collect::<Vec<_>>();
+
+    organize_pdfs_bytes(&files, &pages).map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]

@@ -372,7 +372,7 @@
 				? 'border-red-400 bg-red-500/25 text-red-100'
 				: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
 		>
-			<IconTrash size={30} stroke={1.8} /><span>Remove</span>
+			<IconTrash size={30} stroke={1.8} />
 		</div>
 	{/if}
 	{#if canOrder && workspace.files.length > 1}

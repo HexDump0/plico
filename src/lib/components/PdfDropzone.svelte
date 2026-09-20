@@ -42,7 +42,6 @@
 	const single = $derived(
 		!!officeTool ||
 			selectedTool?.id === 'split' ||
-			selectedTool?.id === 'organize' ||
 			selectedTool?.id === 'extract' ||
 			selectedTool?.id === 'remove' ||
 			selectedTool?.id === 'rotate' ||
