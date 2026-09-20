@@ -28,6 +28,7 @@
 			selectedTool?.id === 'image-to-pdf' ||
 			selectedTool?.id === 'images-to-pdf'
 	);
+	$effect(() => workspace.use(isImageTool ? 'image' : 'pdf'));
 	const single = $derived(
 		selectedTool?.id === 'split' ||
 			selectedTool?.id === 'pdf-to-jpg' ||

@@ -1,11 +1,32 @@
 import { createContext } from 'svelte';
 
-export type AcceptedFileType = 'pdf' | 'image' | 'any';
+export type AcceptedFileType = 'pdf' | 'image';
 
 export class Workspace {
-	files = $state<File[]>([]);
-	error = $state('');
+	private pdfFiles = $state<File[]>([]);
+	private imageFiles = $state<File[]>([]);
+	private pdfError = $state('');
+	private imageError = $state('');
+	private activeType = $state<AcceptedFileType>('pdf');
+	get files() {
+		return this.activeType === 'image' ? this.imageFiles : this.pdfFiles;
+	}
+	set files(files: File[]) {
+		if (this.activeType === 'image') this.imageFiles = files;
+		else this.pdfFiles = files;
+	}
+	get error() {
+		return this.activeType === 'image' ? this.imageError : this.pdfError;
+	}
+	set error(error: string) {
+		if (this.activeType === 'image') this.imageError = error;
+		else this.pdfError = error;
+	}
+	use(type: AcceptedFileType) {
+		this.activeType = type;
+	}
 	add(incoming: FileList | File[], accept: AcceptedFileType = 'pdf') {
+		this.use(accept);
 		const candidates = Array.from(incoming);
 		const allowed = candidates.filter((file) => {
 			const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -14,7 +35,6 @@ export class Workspace {
 				file.type === 'image/png' ||
 				/\.(jpe?g|png)$/i.test(file.name);
 			if (accept === 'image') return isImage;
-			if (accept === 'any') return isPdf || isImage;
 			return isPdf;
 		});
 		this.error =
@@ -41,7 +61,9 @@ export class Workspace {
 		this.error = '';
 	}
 	remove(file: File) {
-		this.files = this.files.filter((item) => item !== file);
+		if (this.pdfFiles.includes(file)) this.pdfFiles = this.pdfFiles.filter((item) => item !== file);
+		if (this.imageFiles.includes(file))
+			this.imageFiles = this.imageFiles.filter((item) => item !== file);
 	}
 	move(from: number, to: number) {
 		if (from < 0 || to < 0 || from >= this.files.length || to >= this.files.length) return;

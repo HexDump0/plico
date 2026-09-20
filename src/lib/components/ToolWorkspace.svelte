@@ -50,6 +50,7 @@
 			tool.id === 'image-to-pdf' ||
 			tool.id === 'images-to-pdf'
 	);
+	workspace.use(untrack(() => isImageToPdf) ? 'image' : 'pdf');
 	const canOrder = $derived(isMerge || isCompress || isImageToPdf);
 	const accent = $derived(
 		isMerge
@@ -197,7 +198,7 @@
 			dragOrder = null;
 			keyboardPicked = null;
 			filename = currentIsImage ? 'plico-images' : 'plico-merged';
-			workspace.clear();
+			workspace.use(currentIsImage ? 'image' : 'pdf');
 		}
 	});
 	$effect(() => {

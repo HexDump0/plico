@@ -15,6 +15,7 @@
 
 	let root: HTMLDivElement;
 	const workspace = getWorkspace();
+	workspace.use('pdf');
 	function openTool(id: string) {
 		if (id === 'convert') {
 			header.openTools();
