@@ -16,16 +16,20 @@
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { SplitOptions } from '$lib/pdf/types';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
-	import { processPdfs, processSplitPdf } from '$lib/pdf/processor';
+	import { processCompressPdf, processPdfs, processSplitPdf } from '$lib/pdf/processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import PdfPreview from './PdfPreview.svelte';
+	import CompressSettings from './CompressSettings.svelte';
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(tool.id === 'merge');
 	const isSplit = $derived(tool.id === 'split');
-	const accent = $derived(isMerge ? 'text-merge' : isSplit ? 'text-split' : 'text-brand');
+	const isCompress = $derived(tool.id === 'compress');
+	const accent = $derived(
+		isMerge ? 'text-merge' : isSplit ? 'text-split' : isCompress ? 'text-compress' : 'text-brand'
+	);
 	let input = $state<HTMLInputElement>();
 	let dragged = $state<File | null>(null);
 	let dragOrder = $state<File[] | null>(null);
@@ -49,12 +53,17 @@
 	let splitMode = $state<'ranges' | 'fixed'>('ranges');
 	let splitInterval = $state(1);
 	let splitCombine = $state(false);
+	let compressLevel = $state<'light' | 'balanced' | 'strong'>('balanced');
+	let compressRemoveMetadata = $state(false);
+	let compressRemoveThumbnails = $state(false);
 	let filename = $state('plico-merged');
 	let downloadLink: HTMLAnchorElement;
 	let processing = $state(false);
 	let error = $state('');
 	let result = $state('');
 	let resultFormat = $state<'pdf' | 'zip'>('pdf');
+	let resultSize = $state(0);
+	let resultInputSize = $state(0);
 	let controller: AbortController | undefined;
 	const currentFile = $derived(workspace.files[0]);
 	const splitSignature = $derived(
@@ -65,6 +74,15 @@
 			ranges: splitRanges.map(({ from, to }) => [from, to])
 		})
 	);
+	const compressSignature = $derived(
+		JSON.stringify([compressLevel, compressRemoveMetadata, compressRemoveThumbnails])
+	);
+	const compressOptions = $derived({
+		imageQuality: compressLevel === 'light' ? 0 : compressLevel === 'balanced' ? 80 : 50,
+		maxImageDimension: compressLevel === 'strong' ? 1600 : 0,
+		removeMetadata: compressRemoveMetadata,
+		removeThumbnails: compressRemoveThumbnails
+	});
 	const splitValid = $derived(
 		!!currentFile &&
 			pageCount > 0 &&
@@ -85,20 +103,31 @@
 			? workspace.files.length < 2 || processing || !!dragged
 			: isSplit
 				? !splitValid || processing
-				: true
+				: isCompress
+					? workspace.files.length === 0 || processing
+					: true
 	);
 	const actionUnavailable = $derived(
-		isMerge ? workspace.files.length < 2 || !!dragged : isSplit ? !splitValid : true
+		isMerge
+			? workspace.files.length < 2 || !!dragged
+			: isSplit
+				? !splitValid
+				: isCompress
+					? workspace.files.length === 0
+					: true
 	);
 	const downloadName = $derived(
 		isSplit
 			? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
-			: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+			: isCompress
+				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
+				: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
 	$effect(() => {
 		void workspace.files;
 		void filename;
 		void splitSignature;
+		void compressSignature;
 		untrack(clearResult);
 	});
 	$effect(() => {
@@ -117,6 +146,8 @@
 		if (result) URL.revokeObjectURL(result);
 		result = '';
 		resultFormat = 'pdf';
+		resultSize = 0;
+		resultInputSize = 0;
 	}
 	onDestroy(clearResult);
 	async function merge() {
@@ -172,6 +203,34 @@
 		} catch (cause) {
 			if (!job.signal.aborted)
 				error = cause instanceof Error ? cause.message : 'Could not split this PDF.';
+		} finally {
+			if (controller === job) {
+				processing = false;
+				controller = undefined;
+			}
+		}
+	}
+	async function compress() {
+		if (processing || workspace.files.length === 0) return;
+		clearResult();
+		const job = new AbortController();
+		controller = job;
+		processing = true;
+		try {
+			const output = await processCompressPdf([...workspace.files], compressOptions, job.signal);
+			if (job.signal.aborted) return;
+			const mime = output.format === 'zip' ? 'application/zip' : 'application/pdf';
+			const url = URL.createObjectURL(new Blob([output.bytes.slice().buffer], { type: mime }));
+			processing = false;
+			resultFormat = output.format;
+			resultSize = output.bytes.byteLength;
+			resultInputSize = workspace.files.reduce((total, file) => total + file.size, 0);
+			result = url;
+			await tick();
+			if (!job.signal.aborted && result === url) downloadLink?.click();
+		} catch (cause) {
+			if (!job.signal.aborted)
+				error = cause instanceof Error ? cause.message : 'Could not compress these PDFs.';
 		} finally {
 			if (controller === job) {
 				processing = false;
@@ -599,6 +658,12 @@
 							bind:interval={splitInterval}
 							bind:combine={splitCombine}
 						/>{/key}
+				{:else if isCompress}
+					<CompressSettings
+						bind:level={compressLevel}
+						bind:removeMetadata={compressRemoveMetadata}
+						bind:removeThumbnails={compressRemoveThumbnails}
+					/>
 				{/if}
 			</div>
 			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
@@ -611,15 +676,32 @@
 					tabindex="-1"
 					aria-hidden="true">Download PDF</a
 				>
+				{#if isCompress && result && resultInputSize > 0}
+					<p class="text-center text-xs text-muted">
+						{formatSize(resultInputSize)} → {formatSize(resultSize)}
+						{#if resultSize < resultInputSize}
+							· {Math.round((1 - resultSize / resultInputSize) * 100)}% smaller
+						{/if}
+					</p>
+				{/if}
 				<button
 					disabled={actionDisabled}
-					onclick={() => (result ? downloadLink?.click() : isSplit ? void split() : void merge())}
+					onclick={() =>
+						result
+							? downloadLink?.click()
+							: isSplit
+								? void split()
+								: isCompress
+									? void compress()
+									: void merge()}
 					aria-label={result
 						? `Download ${resultFormat.toUpperCase()} again`
 						: processing
 							? isSplit
 								? 'Splitting PDF'
-								: 'Merging PDF'
+								: isCompress
+									? 'Compressing PDF'
+									: 'Merging PDF'
 							: tool.label}
 					class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,transform] duration-200 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {actionUnavailable
 						? 'opacity-40'
@@ -635,7 +717,9 @@
 								: 'opacity-100'}"
 							>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isSplit
 									? 'Splitting…'
-									: 'Merging…'}{:else}
+									: isCompress
+										? 'Compressing…'
+										: 'Merging…'}{:else}
 								{tool.label}<IconArrowRight size={20} />{/if}</span
 						>
 						<span

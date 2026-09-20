@@ -21,7 +21,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use lopdf::{Document, Object, Stream, dictionary};
-use plico_engine::{SplitMode, merge_pdf_bytes, split_pdf_bytes};
+use plico_engine::{
+    CompressOptions, SplitMode, compress_pdf_bytes, merge_pdf_bytes, split_pdf_bytes,
+};
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
 
@@ -278,4 +280,121 @@ fn splits_last_page_of_every_loadable_document() {
         println!("  {failure}");
     }
     assert!(failures.is_empty(), "split failed on real PDFs");
+}
+
+/// Compresses every loadable corpus file at the strongest setting and checks
+/// the result still reparses with identical pages. This is the structural half
+/// of the quality question; rendered output still wants a rasterising compare.
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn compresses_every_loadable_document() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+
+    let mut checked = 0usize;
+    let mut input_bytes = 0u64;
+    let mut output_bytes = 0u64;
+    let mut shrunk = 0usize;
+    let mut kept_original = 0usize;
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(mut source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.is_encrypted() && source.decrypt("").is_err() {
+            continue;
+        }
+        let pages = source.get_pages();
+        if pages.is_empty() {
+            continue;
+        }
+        let contents = pages
+            .values()
+            .map(|id| source.get_page_content(*id))
+            .collect::<Vec<_>>();
+        drop(source);
+
+        let compressed = match compress_pdf_bytes(
+            &bytes,
+            CompressOptions {
+                reflate: true,
+                image_quality: 50,
+                max_image_dimension: 1600,
+                remove_metadata: false,
+                remove_thumbnails: false,
+            },
+        ) {
+            Ok(compressed) => compressed,
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        // A file the engine cannot shrink comes back as the original bytes.
+        // Every check below is then a property of the source, not of a rebuild.
+        if compressed.len() == bytes.len() {
+            kept_original += 1;
+            input_bytes += bytes.len() as u64;
+            output_bytes += compressed.len() as u64;
+            checked += 1;
+            continue;
+        }
+        let Ok(mut result) = Document::load_mem(&compressed) else {
+            failures.push(format!("{name}: compressed output would not reparse"));
+            continue;
+        };
+        let (count, _) = describe(&result);
+        // Unlike merge, compress keeps the original page tree, so pages may
+        // still resolve /MediaBox through their ancestors.
+        if count != contents.len() {
+            failures.push(format!("{count} pages, expected {}", contents.len()));
+            continue;
+        }
+        // Recompression must not change decoded content, only how it is packed.
+        if result
+            .get_pages()
+            .into_values()
+            .map(|id| result.get_page_content(id))
+            .zip(&contents)
+            .any(|(after, before)| &after != before)
+        {
+            failures.push(format!("{name}: page content changed"));
+            continue;
+        }
+        let types = result
+            .objects
+            .iter()
+            .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
+            .collect::<BTreeMap<_, _>>();
+        let leaked = result
+            .prune_objects()
+            .into_iter()
+            .filter(|id| types[id] != b"XRef" && types[id] != b"ObjStm")
+            .count();
+        if leaked > 0 {
+            failures.push(format!("{name}: {leaked} unreachable objects"));
+            continue;
+        }
+
+        checked += 1;
+        input_bytes += bytes.len() as u64;
+        output_bytes += compressed.len() as u64;
+        shrunk += 1;
+    }
+
+    println!(
+        "\ncompress corpus: {checked} files checked, {shrunk} rebuilt smaller, {kept_original} passed through"
+    );
+    println!(
+        "  size: {:.1} MiB in -> {:.1} MiB out ({:.1}%)",
+        input_bytes as f64 / 1048576.0,
+        output_bytes as f64 / 1048576.0,
+        output_bytes as f64 / input_bytes.max(1) as f64 * 100.0
+    );
+    for failure in failures.iter().take(15) {
+        println!("  {failure}");
+    }
+    assert!(failures.is_empty(), "compress failed on real PDFs");
 }

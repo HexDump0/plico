@@ -3,10 +3,10 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 16 unit tests against
+Evidence comes from two places. `cargo test` runs 25 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
-test corpus (982 files) with a generated page, then checks a one-page split of
-every loadable file. Numbers below are from that run.
+test corpus (982 files) with a generated page, then checks a one-page split and
+compression of every loadable file. Numbers below are from that run.
 
 ---
 
@@ -245,7 +245,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Two tools exist, the catalogue advertises about forty
+### Three tools exist, the catalogue advertises about forty
 
 Merge and Split now share the engine's page selection and page-tree rebuilding
 path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
@@ -256,13 +256,20 @@ reachability: 924 checked, alongside the unchanged merge baseline above.
 Organise, extract, remove, and rotate can use the same path. Keep page order,
 inheritance flattening, safe renumbering, and pruning in that shared layer.
 
-Compress, convert and OCR are a different problem and want an explicit decision.
-Real compression means image transcoding inside legal PDF filters
-(`DCTDecode`, `JPXDecode`, `JBIG2Decode`, where JBIG2 is the one that matters for
-scanned text), font subsetting, and object stream packing. Anything
-render-dependent needs a rasteriser. If you reach for one, note that mupdf is
-AGPL, which is a licensing decision to make on purpose rather than discover.
-pdfium and qpdf are permissive and both build to wasm.
+Compress now repacks object streams, recompresses Flate streams, re-encodes
+eligible JPEGs, and converts large 8-bit Flate RGB/grayscale images to JPEG
+when that saves bytes. Its strongest setting also downsizes eligible images.
+The pdf.js corpus compress check covers 924 files with unchanged page counts
+and decoded page content. Strong output is 71.0% of input size (previous
+implementation: 73.8%); 860 files rebuild smaller and 64 pass through.
+Metadata and thumbnail removal are optional because a rewrite that guarantees
+their removal can make an already compact PDF larger.
+This is structural evidence, not a rendered image comparison. JPXDecode,
+JBIG2Decode, font subsetting and duplicate resource sharing remain open size
+wins. JBIG2 matters especially for scanned text. Anything render-dependent
+needs a rasteriser. If you reach for one, note that mupdf is AGPL, which is a
+licensing decision to make on purpose rather than discover. pdfium and qpdf
+are permissive and both build to wasm.
 
 ### Error strings are product copy inside the engine
 

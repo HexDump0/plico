@@ -1,4 +1,10 @@
-import type { PdfOutput, PdfWorkerRequest, PdfWorkerResponse, SplitOptions } from './types';
+import type {
+	CompressOptions,
+	PdfOutput,
+	PdfWorkerRequest,
+	PdfWorkerResponse,
+	SplitOptions
+} from './types';
 
 let worker: Worker | undefined;
 let requestId = 0;
@@ -63,4 +69,24 @@ export async function processSplitPdf(file: File, options: SplitOptions, signal?
 	const buffer = await file.arrayBuffer();
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal);
+}
+
+export async function processCompressPdf(
+	files: File[],
+	options: CompressOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{
+			id: ++requestId,
+			operation: 'compress',
+			files: buffers,
+			names: files.map((file) => file.name),
+			options
+		},
+		signal
+	);
 }
