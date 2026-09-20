@@ -1,11 +1,23 @@
 <script lang="ts">
 	import { IconPlus, IconX } from '@tabler/icons-svelte-runes';
-	let { pageCount }: { pageCount: number } = $props();
-	let mode = $state('ranges');
-	let ranges = $state([{ id: 0, from: 1, to: 1 }]);
+	import type { SplitRange } from '$lib/split-ranges';
+	let {
+		pageCount,
+		ranges = $bindable<SplitRange[]>(),
+		mode = $bindable<'ranges' | 'fixed'>(),
+		interval = $bindable<number>()
+	}: {
+		pageCount: number;
+		ranges: SplitRange[];
+		mode: 'ranges' | 'fixed';
+		interval: number;
+	} = $props();
 	let nextId = 1;
-	let interval = $state(1);
 	let combine = $state(false);
+	const modes = [
+		{ id: 'ranges', label: 'Page ranges' },
+		{ id: 'fixed', label: 'Every N pages' }
+	] as const;
 	const invalid = $derived(
 		ranges.some(
 			(range) =>
@@ -26,7 +38,7 @@
 			role="group"
 			aria-label="Split mode"
 		>
-			{#each [{ id: 'ranges', label: 'Page ranges' }, { id: 'fixed', label: 'Every N pages' }] as option (option.id)}<button
+			{#each modes as option (option.id)}<button
 					aria-pressed={mode === option.id}
 					class="rounded-lg px-2 py-3 text-xs font-semibold {mode === option.id
 						? 'bg-panel-hover text-split'
@@ -36,36 +48,44 @@
 		</div>
 	</div>
 	{#if mode === 'ranges'}
-		<div class="space-y-3">
-			{#each ranges as range, index (range.id)}<div class="rounded-xl border border-white/10 p-3">
-					<div class="mb-3 flex items-center justify-between">
-						<span class="text-xs text-muted">Range {index + 1}</span><button
-							disabled={ranges.length === 1}
-							class="rounded p-1 text-muted hover:text-white disabled:opacity-25"
+		<div class="space-y-2">
+			{#each ranges as range, index (range.id)}<div
+					role="group"
+					aria-label={`Range ${index + 1}`}
+					class="grid items-center gap-2 {ranges.length > 1
+						? 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_2rem]'
+						: 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)]'}"
+				>
+					<span
+						class="flex size-8 items-center justify-center rounded-lg bg-split/10 text-xs font-bold text-split"
+						aria-hidden="true">{index + 1}</span
+					>
+					<label
+						class="flex h-11 min-w-0 items-center gap-1 rounded-lg border border-white/10 bg-canvas px-2 text-xs text-muted focus-within:border-split/50"
+						>From<input
+							class="page-number w-full min-w-0 bg-transparent text-right text-sm text-white outline-none"
+							type="number"
+							min="1"
+							max={pageCount || undefined}
+							bind:value={range.from}
+						/></label
+					><label
+						class="flex h-11 min-w-0 items-center gap-1 rounded-lg border border-white/10 bg-canvas px-2 text-xs text-muted focus-within:border-split/50"
+						>To<input
+							class="page-number w-full min-w-0 bg-transparent text-right text-sm text-white outline-none"
+							type="number"
+							min={range.from}
+							max={pageCount || undefined}
+							bind:value={range.to}
+						/></label
+					>
+					{#if ranges.length > 1}<button
+							type="button"
+							class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white transition-colors hover:bg-convert hover:text-canvas"
 							aria-label={`Remove range ${index + 1}`}
 							onclick={() => (ranges = ranges.filter((item) => item.id !== range.id))}
-							><IconX size={16} /></button
-						>
-					</div>
-					<div class="grid grid-cols-2 gap-3">
-						<label class="text-xs text-muted"
-							>From<input
-								class="mt-2 w-full rounded-lg border border-white/10 bg-canvas p-3 text-sm text-white"
-								type="number"
-								min="1"
-								max={pageCount || undefined}
-								bind:value={range.from}
-							/></label
-						><label class="text-xs text-muted"
-							>To<input
-								class="mt-2 w-full rounded-lg border border-white/10 bg-canvas p-3 text-sm text-white"
-								type="number"
-								min={range.from}
-								max={pageCount || undefined}
-								bind:value={range.to}
-							/></label
-						>
-					</div>
+							><IconX size={18} stroke={2.5} /></button
+						>{/if}
 				</div>{/each}
 		</div>
 		<button
@@ -83,7 +103,7 @@
 	{:else}
 		<label class="block text-sm text-muted"
 			>Pages per PDF<input
-				class="mt-3 w-full rounded-xl border border-white/10 bg-canvas p-3 text-white"
+				class="page-number mt-3 w-full rounded-xl border border-white/10 bg-canvas p-3 text-white"
 				type="number"
 				min="1"
 				max={pageCount || undefined}
@@ -97,3 +117,15 @@
 		</p>
 	{/if}
 </div>
+
+<style>
+	.page-number {
+		appearance: textfield;
+		-moz-appearance: textfield;
+	}
+	.page-number::-webkit-inner-spin-button,
+	.page-number::-webkit-outer-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+</style>

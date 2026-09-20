@@ -4,7 +4,6 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import {
-		IconArrowLeft,
 		IconArrowRight,
 		IconPlus,
 		IconX,
@@ -14,11 +13,13 @@
 		IconLoader2
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
+	import type { SplitRange } from '$lib/split-ranges';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import { processPdfs } from '$lib/pdf/processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 	import SplitSettings from './SplitSettings.svelte';
+	import SplitViewer from './SplitViewer.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(tool.id === 'merge');
@@ -42,9 +43,10 @@
 		preference.addEventListener('change', update);
 		return () => preference.removeEventListener('change', update);
 	});
-	let activeFile = $state<File | null>(null);
-	let pageNumber = $state(1);
 	let pageCount = $state(0);
+	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
+	let splitMode = $state<'ranges' | 'fixed'>('ranges');
+	let splitInterval = $state(1);
 	let filename = $state('plico-merged');
 	let downloadLink: HTMLAnchorElement;
 	let processing = $state(false);
@@ -52,9 +54,7 @@
 	let result = $state('');
 	let controller: AbortController | undefined;
 	const downloadName = $derived(`${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`);
-	const currentFile = $derived(
-		activeFile && workspace.files.includes(activeFile) ? activeFile : workspace.files[0]
-	);
+	const currentFile = $derived(workspace.files[0]);
 	$effect(() => {
 		void workspace.files;
 		void filename;
@@ -62,8 +62,10 @@
 	});
 	$effect(() => {
 		void currentFile;
-		pageNumber = 1;
 		pageCount = 0;
+		splitRanges = [{ id: 0, from: 1, to: 1 }];
+		splitMode = 'ranges';
+		splitInterval = 1;
 	});
 	function clearResult() {
 		controller?.abort();
@@ -101,6 +103,18 @@
 	}
 	function add(files: FileList) {
 		workspace.add(files);
+		if (input) input.value = '';
+	}
+	function replace(files: FileList) {
+		const file = Array.from(files).find(
+			(item) => item.type === 'application/pdf' || /\.pdf$/i.test(item.name)
+		);
+		if (file) {
+			workspace.files = [file];
+			workspace.error = '';
+		} else if (files.length) {
+			workspace.error = 'Please choose a PDF.';
+		}
 		if (input) input.value = '';
 	}
 	function sortByFilename() {
@@ -334,12 +348,17 @@
 	>
 		<section
 			aria-label="Documents"
-			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 pb-12 sm:px-10 lg:px-16 lg:pt-10 lg:pb-20"
+			class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit
+				? 'pb-2 lg:pb-16'
+				: 'pb-12 lg:pb-20'}"
 			ondragover={(event) => event.preventDefault()}
 			ondrop={(event) => {
-				if (!dragged && event.dataTransfer?.files.length) {
+				if (!event.defaultPrevented && !dragged && event.dataTransfer?.files.length) {
 					event.preventDefault();
-					if (!processing) workspace.add(event.dataTransfer.files);
+					if (!processing) {
+						if (isSplit) replace(event.dataTransfer.files);
+						else workspace.add(event.dataTransfer.files);
+					}
 				}
 			}}
 		>
@@ -361,11 +380,6 @@
 								size={20}
 							/>{:else}<IconSortDescendingLetters size={20} />{/if}</button
 					>
-				{:else if isSplit && workspace.files.length}
-					<button
-						class="flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs text-muted hover:text-split"
-						onclick={() => input?.click()}><IconPlus size={17} />Add PDFs</button
-					>
 				{/if}
 			</div>
 			{#if workspace.files.length === 0}
@@ -373,52 +387,37 @@
 					<div class="h-80"><PdfDropzone selectedTool={tool} /></div>
 				</div>
 			{:else}
-				<input
-					bind:this={input}
-					type="file"
-					accept="application/pdf,.pdf"
-					multiple
-					class="hidden"
-					aria-label="Add PDF files"
-					onchange={() => input?.files && add(input.files)}
-				/>
+				{#if !isSplit}<input
+						bind:this={input}
+						type="file"
+						accept="application/pdf,.pdf"
+						multiple
+						class="hidden"
+						aria-label="Add PDF files"
+						onchange={() => input?.files && add(input.files)}
+					/>{/if}
 				{#if isSplit && currentFile}
-					<label class="mt-10 mb-6 block text-xs text-muted"
-						>Document<select
-							class="mt-2 block w-full max-w-md truncate rounded-xl border border-white/10 bg-panel p-3 text-sm text-white"
-							value={workspace.files.indexOf(currentFile)}
-							onchange={(event) =>
-								(activeFile = workspace.files[Number(event.currentTarget.value)])}
-							>{#each workspace.files as file, index (file)}<option value={index}
-									>{file.name}</option
-								>{/each}</select
-						></label
-					>
-					<div class="mx-auto max-w-52 sm:max-w-72">
-						{#key currentFile}{#key pageNumber}<PdfPreview
-									file={currentFile}
-									{pageNumber}
-									onload={(count) => (pageCount = count)}
-								/>{/key}{/key}
-						<div class="mt-4 flex items-center justify-between">
-							<button
-								aria-label="Previous page"
-								disabled={pageNumber <= 1}
-								class="rounded-lg border-2 border-white/10 p-2 disabled:opacity-30"
-								onclick={() => pageNumber--}><IconArrowLeft size={18} /></button
-							><span class="text-xs text-muted"
-								>Page {pageNumber} {pageCount ? `of ${pageCount}` : ''}</span
-							><button
-								aria-label="Next page"
-								disabled={pageNumber >= pageCount}
-								class="rounded-lg border-2 border-white/10 p-2 disabled:opacity-30"
-								onclick={() => pageNumber++}><IconArrowRight size={18} /></button
-							>
-						</div>
-						<button
-							class="mx-auto mt-5 block rounded-lg p-2 text-xs text-muted hover:text-convert"
-							onclick={() => workspace.remove(currentFile)}>Remove document</button
-						>
+					<div class="my-auto w-full py-6 lg:py-10">
+						{#key currentFile}<SplitViewer
+								file={currentFile}
+								ranges={splitRanges}
+								mode={splitMode}
+								interval={splitInterval}
+								onrangechange={(id, from, to) =>
+									(splitRanges = splitRanges.map((range) =>
+										range.id === id ? { ...range, from, to } : range
+									))}
+								onload={(count) => {
+									pageCount = count;
+									if (
+										splitRanges.length === 1 &&
+										splitRanges[0].from === 1 &&
+										splitRanges[0].to === 1
+									)
+										splitRanges[0].to = count;
+								}}
+								onremove={() => workspace.remove(currentFile)}
+							/>{/key}
 					</div>
 				{:else}
 					<ol
@@ -514,7 +513,12 @@
 						</div></label
 					>
 				{:else if isSplit}
-					{#key currentFile}<SplitSettings {pageCount} />{/key}
+					{#key currentFile}<SplitSettings
+							{pageCount}
+							bind:ranges={splitRanges}
+							bind:mode={splitMode}
+							bind:interval={splitInterval}
+						/>{/key}
 				{/if}
 			</div>
 			<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">

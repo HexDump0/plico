@@ -14,6 +14,7 @@
 		onready?: () => void;
 	} = $props();
 	const workspace = getWorkspace();
+	const single = $derived(selectedTool?.id === 'split');
 	let input: HTMLInputElement;
 	let dragging = $state(false);
 	let depth = 0;
@@ -106,7 +107,12 @@
 		finishRemoval();
 		finishTransition();
 		const wasEmpty = workspace.files.length === 0;
-		workspace.add(files);
+		const firstPdf = single
+			? Array.from(files).find(
+					(file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+				)
+			: undefined;
+		workspace.add(firstPdf ? [firstPdf] : files);
 		input.value = '';
 		if (!wasEmpty || !workspace.files.length) return;
 		if (selectedTool && onready) {
@@ -134,9 +140,9 @@
 	bind:this={input}
 	type="file"
 	accept="application/pdf,.pdf"
-	multiple
+	multiple={!single}
 	class="hidden"
-	aria-label="Choose PDF files"
+	aria-label={single ? 'Choose a PDF' : 'Choose PDF files'}
 	onchange={() => input.files && add(input.files)}
 />
 <section
@@ -172,7 +178,7 @@
 				onclick={() => input.click()}
 			>
 				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
-					>{dragging ? 'You can let go btw' : 'Drop in your PDFs'}</span
+					>{dragging ? 'You can let go btw' : single ? 'Drop in a PDF' : 'Drop in your PDFs'}</span
 				>
 			</button>
 		{/if}
