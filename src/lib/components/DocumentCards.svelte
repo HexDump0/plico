@@ -8,12 +8,12 @@
 		IconPlus,
 		IconX,
 		IconSortAscendingLetters,
-		IconSortDescendingLetters,
-		IconTrash
+		IconSortDescendingLetters
 	} from '@tabler/icons-svelte-runes';
 	import { IconFileTypeDocx, IconFileTypePpt, IconFileTypeXls } from '@tabler/icons-svelte-runes';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import PdfPreview from './PdfPreview.svelte';
+	import DragTrashZone from './DragTrashZone.svelte';
 
 	let {
 		mode,
@@ -364,16 +364,7 @@
 
 <div class="relative flex min-w-0 flex-1 flex-col">
 	{#if dragged}
-		<div
-			bind:this={trashZone}
-			transition:fade={{ duration: reducedMotion ? 0 : 160 }}
-			aria-hidden="true"
-			class="pointer-events-none absolute right-0 -bottom-6 left-0 z-10 flex h-24 items-center justify-center gap-3 rounded-2xl border-2 border-dashed text-center text-xs font-semibold transition-colors lg:top-0 lg:right-auto lg:-bottom-10 lg:-left-22 lg:h-auto lg:w-32 lg:flex-col {trashHovered
-				? 'border-red-400 bg-red-500/25 text-red-100'
-				: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
-		>
-			<IconTrash size={30} stroke={1.8} />
-		</div>
+		<DragTrashZone bind:zone={trashZone} hovered={trashHovered} {reducedMotion} />
 	{/if}
 	{#if canOrder && workspace.files.length > 1}
 		<button
@@ -405,7 +396,7 @@
 				canOrder &&
 				!processing
 					? 'cursor-grab touch-none select-none active:cursor-grabbing'
-					: ''} {file && dragged === file ? 'z-20' : ''}"
+					: ''} {file && dragged === file ? 'z-40' : ''}"
 			>
 				{#if file}
 					{#if dragged === file}<div

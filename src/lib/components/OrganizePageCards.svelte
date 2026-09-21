@@ -3,12 +3,12 @@
 	import { flushSync } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
-	import { fade } from 'svelte/transition';
-	import { IconRotate, IconRotateClockwise, IconTrash, IconX } from '@tabler/icons-svelte-runes';
+	import { IconRotate, IconRotateClockwise, IconX } from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
 	import { pageKey, sourceColor } from '$lib/pdf/sources';
 	import OrganizeThumbnail from './OrganizeThumbnail.svelte';
+	import DragTrashZone from './DragTrashZone.svelte';
 
 	let {
 		sources,
@@ -374,16 +374,7 @@
 
 <div class="relative flex min-w-0 flex-1 flex-col">
 	{#if dragged !== null}
-		<div
-			bind:this={trashZone}
-			transition:fade={{ duration: reducedMotion ? 0 : 160 }}
-			aria-hidden="true"
-			class="pointer-events-none fixed inset-y-0 left-0 top-36 bottom-2 z-30 flex w-24 flex-col items-center justify-center gap-3 rounded-r-2xl border-2 border-l-0 border-dashed text-center text-xs font-semibold transition-colors sm:w-28 {trashHovered
-				? 'border-red-400 bg-red-500/25 text-red-100'
-				: 'border-red-500/50 bg-red-500/[0.08] text-red-300'}"
-		>
-			<IconTrash size={30} stroke={1.8} />
-		</div>
+		<DragTrashZone bind:zone={trashZone} hovered={trashHovered} {reducedMotion} />
 	{/if}
 	<ol
 		aria-label="Page order"
@@ -400,7 +391,7 @@
 				class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-64 xl:w-72 {processing
 					? ''
 					: 'cursor-grab touch-none select-none active:cursor-grabbing'} {dragged === key
-					? 'z-20'
+					? 'z-40'
 					: ''}"
 			>
 				{#if dragged === key}<div
