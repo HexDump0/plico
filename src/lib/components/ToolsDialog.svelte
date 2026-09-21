@@ -27,10 +27,22 @@
 		return Array.from(results.querySelectorAll<HTMLElement>('[data-result-key]'));
 	}
 
+	// Svelte action is better here...TODO cleanup
+	// 	let ghostLayer: { clear(): void; add(node: HTMLElement): void } | undefined;
+	// function ghostLayerAction(node: HTMLDivElement) {
+	//   const layer = {
+	//     clear: () => node.replaceChildren(),
+	//     add: (ghost: HTMLElement) => node.appendChild(ghost)
+	//   };
+	//   ghostLayer = layer;
+	//   return { destroy: () => (ghostLayer = undefined) };
+	// }
+
+
 	function resetSearchMotion() {
 		searchVersion += 1;
 		searchMotion?.kill();
-		departing?.replaceChildren();
+		departing?.replaceChildren(); // first we need to 
 		if (results) gsap.set(resultElements(), { clearProps: 'transform,opacity' });
 	}
 

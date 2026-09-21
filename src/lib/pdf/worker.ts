@@ -177,6 +177,16 @@ async function exportPdfImages(
 	}
 }
 
+function transferable(bytes: Uint8Array): ArrayBuffer {
+	const { buffer, byteOffset, byteLength } = bytes;
+	// wasm-bindgen's glue for a returned Vec<u8> ends in .slice() followed by
+	// __wbindgen_free, so this view already owns its whole buffer. Copy only if
+	// that stops being true, rather than transferring a buffer we share.
+	if (buffer instanceof ArrayBuffer && byteOffset === 0 && byteLength === buffer.byteLength)
+		return buffer;
+	return bytes.slice().buffer;
+}
+
 self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 	const request = event.data;
 	const { id } = request;
@@ -213,7 +223,7 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				offset += file.byteLength;
 			}
 
-			const output = merge_pdfs(input, lengths).slice().buffer;
+			const output = transferable(merge_pdfs(input, lengths));
 			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf' };
 			self.postMessage(response, { transfer: [output] });
 			return;

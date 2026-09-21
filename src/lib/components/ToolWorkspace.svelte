@@ -146,6 +146,10 @@
 	);
 	const imagePdfSignature = $derived(JSON.stringify([imagePdfPageSize, imagePdfMargin]));
 	const compressOptions = $derived({
+		// clarification here
+		// 0 = preserve original, no changes; a higher compression value means better quality otherwise
+		// dimension of 0 also means preserve original
+		// TODO: should we do image compression with light mode?
 		imageQuality: compressLevel === 'light' ? 0 : compressLevel === 'balanced' ? 80 : 50,
 		maxImageDimension: compressLevel === 'strong' ? 1600 : compressLevel === 'balanced' ? 2400 : 0,
 		removeMetadata: compressRemoveMetadata,

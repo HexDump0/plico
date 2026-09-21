@@ -212,18 +212,6 @@ No sign of it in the corpus, which came out at 87.1% overall, so this is a
 latent risk rather than an observed one. The fix is to promote a direct value to
 one indirect object per ancestor and share the reference.
 
-### Redundant copies of the whole output
-
-`worker.ts:22` calls `.slice()` on what `merge_pdfs` returns. wasm-bindgen's glue
-for a returned `Vec<u8>` already ends in `.slice()` followed by
-`__wbindgen_free`, so that value is a fresh JS-owned copy. The extra call
-duplicates the entire output for nothing. If you remove it, assert
-`byteOffset === 0 && byteLength === buffer.byteLength` so a future wasm-bindgen
-change cannot quietly make the `transfer` unsound.
-
-`PdfDropzone.svelte:96` does `new Blob([bytes.slice().buffer])`. `Blob` copies
-its input anyway.
-
 ### Peak memory is roughly twice the input plus the output
 
 The worker concatenates all inputs into one buffer, wasm-bindgen copies that into

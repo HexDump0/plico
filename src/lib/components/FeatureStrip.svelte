@@ -45,3 +45,10 @@
 		{/each}
 	</div>
 </section>
+
+<style>
+	.feature-strip ::selection {
+		background: #000;
+		color: var(--color-brand);
+	}
+</style>

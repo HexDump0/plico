@@ -9,7 +9,7 @@
 </script>
 
 <svelte:head
-	><title>Plico</title><meta
+	><title>Plico · {tool.label}</title><meta
 		name="description"
 		content={`${tool.label} with Plico. Keep your documents on your device.`}
 	/></svelte:head

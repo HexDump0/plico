@@ -122,56 +122,42 @@
 		if (emptyPanel) gsap.set(emptyPanel, { clearProps: 'opacity,transform' });
 		transitioning = false;
 	}
-	function tint() {
-		const key = selectedTool?.heroTool ?? selectedTool?.id;
-		if (key) {
-			const value = getComputedStyle(document.documentElement)
-				.getPropertyValue(`--color-${key}`)
-				.trim();
-			if (value) return value;
-		}
-		return '#a78bfa';
-	}
-	function lighten(hex: string, amount: number): string {
-		const n = parseInt(hex.slice(1), 16);
-		const r = Math.min(255, ((n >> 16) & 255) + Math.round(255 * amount));
-		const g = Math.min(255, ((n >> 8) & 255) + Math.round(255 * amount));
-		const b = Math.min(255, (n & 255) + Math.round(255 * amount));
-		return `rgb(${r}, ${g}, ${b})`;
-	}
 	export function flash() {
+		// not really a flash
+		// if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 		if (!emptyPanel) return;
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 		gsap.killTweensOf(emptyPanel);
 		const computed = getComputedStyle(emptyPanel);
-		const baseBorder = computed.borderColor;
-		const baseText = computed.color;
-		const flashTint = lighten(tint(), 0.35);
+		const r = parseFloat(computed.borderTopLeftRadius) || 12;
+		// const flashTint = lighten(tint(), 0.35);
 		gsap.set(emptyPanel, { transition: 'none' });
 		gsap
 			.timeline({
 				onComplete: () => {
 					if (emptyPanel)
 						gsap.set(emptyPanel, {
-							clearProps: 'borderColor,color,transform,transition'
+							clearProps: 'transform,borderRadius,transition'
 						});
 				}
 			})
+
+			// "stomp" down: squash flat, pinch the corners, tilt
 			.to(emptyPanel, {
-				borderColor: flashTint,
-				color: flashTint,
-				rotate: -0.7,
-				scale: 0.985,
-				duration: 0.16,
+				scale: 0.92,
+				scaleY: 0.74,
+				rotate: -1,
+				borderRadius: `${r * 1.9}px ${r * 0.5}px ${r * 1.9}px ${r * 0.5}px`,
+				duration: 0.14,
 				ease: 'power2.in'
 			})
+			// little teeny recoil after: overshoot back, corners should sway then settle
 			.to(emptyPanel, {
-				borderColor: baseBorder,
-				color: baseText,
-				rotate: 0,
 				scale: 1,
-				duration: 0.5,
-				ease: 'power2.out'
+				scaleY: 1,
+				rotate: 0,
+				borderRadius: `${r}px`,
+				duration: 0.7,
+				ease: 'elastic.out(1, 0.35)'
 			});
 	}
 	onMount(() => {
