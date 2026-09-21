@@ -1,4 +1,3 @@
-import { tick } from 'svelte';
 import type { PdfOutput } from './types';
 
 const mimeTypes: Record<PdfOutput['format'], string> = {
@@ -19,6 +18,13 @@ export class DownloadJob {
 	size = $state(0);
 	inputSize = $state(0);
 	private controller: AbortController | undefined;
+	private blob = $state<Blob | undefined>(undefined);
+
+	// The produced file itself, kept so a result can become the next tool's
+	// input instead of living only as a revocable object URL.
+	get resultBlob() {
+		return this.blob;
+	}
 
 	clear() {
 		this.controller?.abort();
@@ -30,12 +36,12 @@ export class DownloadJob {
 		this.format = 'pdf';
 		this.size = 0;
 		this.inputSize = 0;
+		this.blob = undefined;
 	}
 
 	async run(
 		process: (signal: AbortSignal) => Promise<PdfOutput>,
 		fallbackError: string,
-		download: () => void,
 		inputSize = 0
 	) {
 		if (this.processing) return;
@@ -46,16 +52,14 @@ export class DownloadJob {
 		try {
 			const output = await process(controller.signal);
 			if (controller.signal.aborted) return;
-			const url = URL.createObjectURL(
-				new Blob([output.bytes.slice().buffer], { type: mimeTypes[output.format] })
-			);
+			const blob = new Blob([output.bytes.slice().buffer], { type: mimeTypes[output.format] });
+			this.blob = blob;
+			const url = URL.createObjectURL(blob);
 			this.processing = false;
 			this.format = output.format;
 			this.size = output.bytes.byteLength;
 			this.inputSize = inputSize;
 			this.result = url;
-			await tick();
-			if (!controller.signal.aborted && this.result === url) download();
 		} catch (cause) {
 			if (!controller.signal.aborted)
 				this.error = cause instanceof Error ? cause.message : fallbackError;

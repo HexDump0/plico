@@ -144,8 +144,7 @@
 	</div>
 	{#if content === 'github'}
 		<p class="leading-relaxed text-muted">
-			Plico is being built in the open. A link to the public repository will be available here when
-			it launches.
+			Plico is being built in the open. A link to the public repository will be available here when it launches.
 		</p>
 	{:else}
 		<p class="leading-relaxed text-muted">

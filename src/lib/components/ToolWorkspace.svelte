@@ -28,6 +28,7 @@
 	import { processOfficeFile } from '$lib/pdf/office-processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import DocumentCards from './DocumentCards.svelte';
+	import ResultPreview from './ResultPreview.svelte';
 	import CompressSettings from './CompressSettings.svelte';
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
@@ -118,6 +119,10 @@
 	const resultFormat = $derived(job.format);
 	const resultSize = $derived(job.size);
 	const resultInputSize = $derived(job.inputSize);
+	const resultBlob = $derived(job.resultBlob);
+	// Only a single PDF can feed the next tool. Zips and image outputs are dead
+	// ends for Continue, so they keep just the download button.
+	const canContinue = $derived(resultFormat === 'pdf');
 	const splitSignature = $derived(
 		JSON.stringify({
 			mode: splitMode,
@@ -227,6 +232,9 @@
 											? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
 											: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
 	);
+	const resultFile = $derived(
+		resultBlob ? new File([resultBlob], `preview.${resultFormat}`, { type: resultBlob.type }) : null
+	);
 	let prevInputType = $state(untrack(() => inputType));
 	$effect(() => {
 		const currentType = inputType;
@@ -239,7 +247,6 @@
 	});
 	$effect(() => {
 		void workspace.files;
-		void filename;
 		void splitSignature;
 		void organizeSignature;
 		void compressSignature;
@@ -274,8 +281,7 @@
 		const files = [...workspace.files];
 		await job.run(
 			async (signal) => ({ bytes: await processPdfs('merge', files, signal), format: 'pdf' }),
-			'Could not merge these PDFs.',
-			() => downloadLink?.click()
+			'Could not merge these PDFs.'
 		);
 	}
 	async function split() {
@@ -289,11 +295,7 @@
 						combine: splitCombine
 					}
 				: { mode: 'fixed', interval: splitInterval };
-		await job.run(
-			(signal) => processSplitPdf(file, options, signal),
-			'Could not split this PDF.',
-			() => downloadLink?.click()
-		);
+		await job.run((signal) => processSplitPdf(file, options, signal), 'Could not split this PDF.');
 	}
 	async function organize() {
 		if (processing || !pageToolValid) return;
@@ -306,8 +308,7 @@
 			.map((page) => ({ ...page }));
 		await job.run(
 			(signal) => processOrganizePdf(files, pages, signal),
-			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} ${files.length > 1 ? 'these PDFs' : 'this PDF'}.`,
-			() => downloadLink?.click()
+			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} ${files.length > 1 ? 'these PDFs' : 'this PDF'}.`
 		);
 	}
 	async function compress() {
@@ -317,7 +318,6 @@
 		await job.run(
 			(signal) => processCompressPdf(files, compressOptions, signal),
 			'Could not compress these PDFs.',
-			() => downloadLink?.click(),
 			inputSize
 		);
 	}
@@ -332,8 +332,7 @@
 		};
 		await job.run(
 			(signal) => processPdfToImages(file, options, signal),
-			'Could not convert this PDF to images.',
-			() => downloadLink?.click()
+			'Could not convert this PDF to images.'
 		);
 	}
 	async function convertImagesToPdf() {
@@ -346,8 +345,7 @@
 		};
 		await job.run(
 			(signal) => processImagesToPdf(files, options, signal),
-			'Could not convert images to PDF.',
-			() => downloadLink?.click()
+			'Could not convert images to PDF.'
 		);
 	}
 	async function convertOffice() {
@@ -356,9 +354,19 @@
 		const file = currentFile;
 		await job.run(
 			(signal) => processOfficeFile(operation, file, signal),
-			`Could not convert this ${inputType.toUpperCase()} file.`,
-			() => downloadLink?.click()
+			`Could not convert this ${inputType.toUpperCase()} file.`
 		);
+	}
+	// Load the result back in as the input for the next step. The effect that
+	// clears the job when files change then resets this workspace to the
+	// editing state, with the produced PDF already loaded.
+	function continueWithResult() {
+		const blob = job.resultBlob;
+		if (!blob || resultFormat !== 'pdf') return;
+		const file = new File([blob], downloadName, { type: blob.type });
+		workspace.use('pdf');
+		workspace.files = [file];
+		workspace.error = '';
 	}
 	function add(files: FileList) {
 		workspace.add(files, inputType);
@@ -439,79 +447,91 @@
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
-							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !officeTool)}<input
-									bind:this={input}
-									type="file"
-									accept={inputAccept[inputType]}
-									multiple
-									class="hidden"
-									aria-label={isImageToPdf ? 'Add images' : 'Add PDF files'}
-									onchange={() => input?.files && add(input.files)}
-								/>{/if}
-							{#if isSplit && currentFile}
-								<div class="my-auto w-full py-6 lg:py-10">
-									{#key currentFile}<SplitViewer
-											file={currentFile}
-											ranges={splitRanges}
-											mode={splitMode}
-											interval={splitInterval}
-											onrangechange={(id, from, to) =>
-												(splitRanges = splitRanges.map((range) =>
-													range.id === id ? { ...range, from, to } : range
-												))}
-											onload={(count) => {
-												pageCount = count;
-												if (
-													splitRanges.length === 1 &&
-													splitRanges[0].from === 1 &&
-													splitRanges[0].to === 1
-												)
-													splitRanges[0].to = count;
-											}}
-											onremove={() => workspace.remove(currentFile)}
-										/>{/key}
-								</div>
-							{:else if isPageTool && currentFile}
-								<div class="flex min-h-0 w-full flex-1 flex-col py-6 lg:py-0">
-									{#key isOrganize ? 'organize' : currentFile}<OrganizeViewer
-											files={workspace.files}
-											pages={organizePages}
-											mode={isExtract
-												? 'extract'
-												: isRemove
-													? 'remove'
-													: isRotate
-														? 'rotate'
-														: 'organize'}
-											selected={selectedPages}
-											{processing}
-											{reducedMotion}
-											onpageschange={(pages) => (organizePages = pages)}
-											onselectionchange={(keys) => (selectedPages = keys)}
-											onadd={() => input?.click()}
-											onremove={(file) => workspace.remove(file)}
-										/>{/key}
-								</div>
-							{:else}
-								<DocumentCards
-									mode={cardMode}
-									{accent}
-									officeFormat={inputType === 'docx' || inputType === 'pptx' || inputType === 'xlsx'
-										? inputType
-										: undefined}
-									{processing}
-									{reducedMotion}
-									bind:dragged
-									bind:keyboardPicked
-									onadd={() => input?.click()}
-									onload={(count) => {
-										if (!pageCount) pageCount = count;
-									}}
+							{#if result}
+								<ResultPreview
+									file={resultFile}
+									format={resultFormat}
+									name={downloadName}
+									size={resultSize}
+									onclose={() => job.clear()}
 								/>
+							{:else}
+								{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !officeTool)}<input
+										bind:this={input}
+										type="file"
+										accept={inputAccept[inputType]}
+										multiple
+										class="hidden"
+										aria-label={isImageToPdf ? 'Add images' : 'Add PDF files'}
+										onchange={() => input?.files && add(input.files)}
+									/>{/if}
+								{#if isSplit && currentFile}
+									<div class="my-auto w-full py-6 lg:py-10">
+										{#key currentFile}<SplitViewer
+												file={currentFile}
+												ranges={splitRanges}
+												mode={splitMode}
+												interval={splitInterval}
+												onrangechange={(id, from, to) =>
+													(splitRanges = splitRanges.map((range) =>
+														range.id === id ? { ...range, from, to } : range
+													))}
+												onload={(count) => {
+													pageCount = count;
+													if (
+														splitRanges.length === 1 &&
+														splitRanges[0].from === 1 &&
+														splitRanges[0].to === 1
+													)
+														splitRanges[0].to = count;
+												}}
+												onremove={() => workspace.remove(currentFile)}
+											/>{/key}
+									</div>
+								{:else if isPageTool && currentFile}
+									<div class="flex min-h-0 w-full flex-1 flex-col py-6 lg:py-0">
+										{#key isOrganize ? 'organize' : currentFile}<OrganizeViewer
+												files={workspace.files}
+												pages={organizePages}
+												mode={isExtract
+													? 'extract'
+													: isRemove
+														? 'remove'
+														: isRotate
+															? 'rotate'
+															: 'organize'}
+												selected={selectedPages}
+												{processing}
+												{reducedMotion}
+												onpageschange={(pages) => (organizePages = pages)}
+												onselectionchange={(keys) => (selectedPages = keys)}
+												onadd={() => input?.click()}
+												onremove={(file) => workspace.remove(file)}
+											/>{/key}
+									</div>
+								{:else}
+									<DocumentCards
+										mode={cardMode}
+										{accent}
+										officeFormat={inputType === 'docx' ||
+										inputType === 'pptx' ||
+										inputType === 'xlsx'
+											? inputType
+											: undefined}
+										{processing}
+										{reducedMotion}
+										bind:dragged
+										bind:keyboardPicked
+										onadd={() => input?.click()}
+										onload={(count) => {
+											if (!pageCount) pageCount = count;
+										}}
+									/>
+								{/if}
+								{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
+										{workspace.error}
+									</p>{/if}
 							{/if}
-							{#if workspace.error}<p role="alert" class="mt-4 text-sm text-convert">
-									{workspace.error}
-								</p>{/if}
 						</div>
 					{/if}
 				</div>
@@ -603,12 +623,39 @@
 							{/if}
 						</p>
 					{/if}
-					<button
-						disabled={actionDisabled}
-						onclick={() =>
-							result
-								? downloadLink?.click()
-								: isSplit
+					{#if result}
+						{#if canContinue}
+							<p class="text-center text-xs text-muted">
+								Loads this result as the input, so you can pick the next tool.
+							</p>
+							<button
+								onclick={continueWithResult}
+								class="flex min-h-14 w-full items-center justify-center gap-3 rounded-xl border-2 border-white/10 px-4 py-4 text-sm font-bold transition-colors hover:border-white/20 hover:bg-white/5"
+								aria-label="Continue with this result as the next input"
+								><IconArrowRight size={20} />Continue</button
+							>
+						{/if}
+						<button
+							onclick={() => downloadLink?.click()}
+							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 motion-safe:enabled:active:scale-[0.985] {buttonColor}"
+							aria-label={`Download ${resultFormat.toUpperCase()}`}
+						>
+							<span
+								class="pointer-events-none absolute inset-0 origin-left scale-x-100 bg-white/15"
+								aria-hidden="true"
+							></span>
+							<span class="relative z-10 flex items-center justify-center gap-3 whitespace-nowrap"
+								><IconDownload size={20} />Download {resultFormat.toUpperCase()}</span
+							>
+						</button>
+					{:else}
+						<p class="text-center text-xs text-muted">
+							Preview first — nothing downloads until you say so.
+						</p>
+						<button
+							disabled={actionDisabled}
+							onclick={() =>
+								isSplit
 									? void split()
 									: isPageTool
 										? void organize()
@@ -621,9 +668,7 @@
 													: isImageToPdf
 														? void convertImagesToPdf()
 														: void merge()}
-						aria-label={result
-							? `Download ${resultFormat.toUpperCase()} again`
-							: processing
+							aria-label={processing
 								? isSplit
 									? 'Splitting PDF'
 									: isPageTool
@@ -638,46 +683,35 @@
 														? 'Converting images to PDF...'
 														: 'Merging PDF'
 								: tool.label}
-						class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
-							? 'opacity-40'
-							: ''}"
-					>
-						<span
-							class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
-								? 'scale-x-100'
-								: 'scale-x-0'}"
-							aria-hidden="true"
-						></span>
-						<span class="relative z-10 grid place-items-center">
+							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
+								? 'opacity-40'
+								: ''}"
+						>
 							<span
-								aria-hidden={!!result}
-								class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
-									? '-translate-y-2 opacity-0'
-									: 'translate-y-0 opacity-100'}"
-								>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
-										? 'Converting...'
-										: isSplit
-											? 'Splitting...'
-											: isPageTool
-												? 'Processing...'
-												: isCompress
-													? 'Compressing...'
-													: isPdfToImage
-														? 'Converting...'
-														: isImageToPdf
+								class="pointer-events-none absolute inset-0 origin-left scale-x-0 bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]"
+								aria-hidden="true"
+							></span>
+							<span class="relative z-10 grid place-items-center">
+								<span
+									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap"
+									>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
+											? 'Converting...'
+											: isSplit
+												? 'Splitting...'
+												: isPageTool
+													? 'Processing...'
+													: isCompress
+														? 'Compressing...'
+														: isPdfToImage
 															? 'Converting...'
-															: 'Merging...'}{:else}
-									{tool.label}<IconArrowRight size={20} />{/if}</span
-							>
-							<span
-								aria-hidden={!result}
-								class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
-									? 'translate-y-0 opacity-100 motion-safe:delay-100'
-									: 'translate-y-2 opacity-0'}"
-								><IconDownload size={20} />Download {resultFormat.toUpperCase()}</span
-							>
-						</span></button
-					>
+															: isImageToPdf
+																? 'Converting...'
+																: 'Merging...'}{:else}
+										{tool.label}<IconArrowRight size={20} />{/if}</span
+								>
+							</span></button
+						>
+					{/if}
 					{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
 				</div>
 			</aside>
