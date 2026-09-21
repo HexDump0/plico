@@ -6,7 +6,8 @@
 		IconRefresh,
 		IconRotate,
 		IconRotateClockwise,
-		IconTrash
+		IconTrash,
+		IconX
 	} from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
@@ -235,25 +236,29 @@
 					<li
 						in:fade={{ duration: reducedMotion ? 0 : 240 }}
 						out:fade={{ duration: reducedMotion ? 0 : 140 }}
-						class="flex min-w-0 items-center gap-2 text-sm"
+						class="flex min-w-0 items-center gap-2 px-1"
 					>
-						<span class="{sourceColor(index).dot} size-2.5 shrink-0 rounded-full" aria-hidden="true"
-						></span>
-						<span class="max-w-40 truncate font-medium" title={source.file.name}
+						{#if sources.length > 1}<span
+								class="{sourceColor(index).dot} size-2.5 shrink-0 rounded-full"
+								aria-hidden="true"
+							></span>{/if}
+						<span class="max-w-xl min-w-0 truncate text-sm font-semibold" title={source.file.name}
 							>{source.file.name}</span
 						>
-						<span class="shrink-0 text-xs text-muted"
+						<span class="shrink-0 text-xs whitespace-nowrap text-muted"
 							>{source.pdf
-								? `${pagesOf(source.key)}/${source.pdf.numPages} pages`
+								? pagesOf(source.key) === source.pdf.numPages
+									? `${source.pdf.numPages} ${source.pdf.numPages === 1 ? 'page' : 'pages'}`
+									: `${pagesOf(source.key)}/${source.pdf.numPages} pages`
 								: source.status || 'Loading...'}</span
 						>
 						<button
 							type="button"
 							onclick={() => removeSource(source.key)}
 							disabled={processing}
-							class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-convert/20 hover:text-convert disabled:opacity-40"
+							class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
 							aria-label={`Remove ${source.file.name}`}
-							title="Remove PDF"><IconTrash size={16} stroke={1.8} /></button
+							title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 						>
 					</li>
 				{/each}
