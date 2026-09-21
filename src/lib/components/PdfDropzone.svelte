@@ -122,6 +122,58 @@
 		if (emptyPanel) gsap.set(emptyPanel, { clearProps: 'opacity,transform' });
 		transitioning = false;
 	}
+	function tint() {
+		const key = selectedTool?.heroTool ?? selectedTool?.id;
+		if (key) {
+			const value = getComputedStyle(document.documentElement)
+				.getPropertyValue(`--color-${key}`)
+				.trim();
+			if (value) return value;
+		}
+		return '#a78bfa';
+	}
+	function lighten(hex: string, amount: number): string {
+		const n = parseInt(hex.slice(1), 16);
+		const r = Math.min(255, ((n >> 16) & 255) + Math.round(255 * amount));
+		const g = Math.min(255, ((n >> 8) & 255) + Math.round(255 * amount));
+		const b = Math.min(255, (n & 255) + Math.round(255 * amount));
+		return `rgb(${r}, ${g}, ${b})`;
+	}
+	export function flash() {
+		if (!emptyPanel) return;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		gsap.killTweensOf(emptyPanel);
+		const computed = getComputedStyle(emptyPanel);
+		const baseBorder = computed.borderColor;
+		const baseText = computed.color;
+		const flashTint = lighten(tint(), 0.35);
+		gsap.set(emptyPanel, { transition: 'none' });
+		gsap
+			.timeline({
+				onComplete: () => {
+					if (emptyPanel)
+						gsap.set(emptyPanel, {
+							clearProps: 'borderColor,color,transform,transition'
+						});
+				}
+			})
+			.to(emptyPanel, {
+				borderColor: flashTint,
+				color: flashTint,
+				rotate: -0.7,
+				scale: 0.985,
+				duration: 0.16,
+				ease: 'power2.in'
+			})
+			.to(emptyPanel, {
+				borderColor: baseBorder,
+				color: baseText,
+				rotate: 0,
+				scale: 1,
+				duration: 0.5,
+				ease: 'power2.out'
+			});
+	}
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
 		const changed = () => {
@@ -131,7 +183,11 @@
 			}
 		};
 		preference.addEventListener('change', changed);
-		return () => preference.removeEventListener('change', changed);
+		input.addEventListener('cancel', flash);
+		return () => {
+			preference.removeEventListener('change', changed);
+			input.removeEventListener('cancel', flash);
+		};
 	});
 	onDestroy(() => {
 		disposed = true;

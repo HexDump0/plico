@@ -41,6 +41,31 @@ export interface CatalogTool {
 	heroTool?: ToolId;
 }
 
+const supportedToolIds = new Set([
+	'merge',
+	'compress',
+	'split',
+	'organize',
+	'extract',
+	'remove',
+	'rotate',
+	'pdf-to-jpg',
+	'pdf-to-png',
+	'jpg-to-pdf',
+	'png-to-pdf',
+	'word-to-pdf',
+	'powerpoint-to-pdf',
+	'excel-to-pdf',
+	'pdf-to-word',
+	'pdf-to-powerpoint',
+	'pdf-to-excel'
+]);
+
+export function isToolSupported(id: string): boolean {
+	const tool = findTool(id);
+	return !!tool && supportedToolIds.has(tool.id);
+}
+
 export function findTool(id: string) {
 	const normalizedId =
 		id === 'pdf-to-image' || id === 'pdf-to-images'

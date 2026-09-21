@@ -25,6 +25,7 @@ src/lib/pdf/processor.ts          main-thread side, owns the worker
 src/lib/pdf/worker.ts             worker side, calls into wasm
 src/lib/pdf/wasm/                 generated, gitignored, never edit
 src/lib/tool-catalog.ts           the ~40 advertised tools
+scripts/raster-compare.mjs        rendered-output comparison over the corpus
 testing/                          local corpus, gitignored
 ```
 
@@ -42,6 +43,7 @@ npm run check         # svelte-check
 npm run lint          # prettier and eslint
 npm run test:engine   # cargo test
 npm run test:corpus   # needs a corpus, see below
+npm run test:raster   # needs a corpus, renders and compares output
 ```
 
 First-time requirements beyond node: `rustup target add wasm32-unknown-unknown`,
@@ -60,6 +62,10 @@ npm run test:corpus
 Current baseline on that corpus: 982 files, 49 that lopdf will not load at all,
 9 needing a real password, 924 merged and checked, output at 87.1% of input size.
 If your change moves any of those numbers, say so.
+
+The raster harness is currently red on 9 files. Do not be surprised by that; it
+is the point. See `ISSUES.md` for which files and why. If your change moves that
+number, say so.
 
 ## Engine invariants
 

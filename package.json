@@ -11,6 +11,8 @@
 		"build:wasm": "wasm-pack build rust/plico-engine --target web --out-dir ../../src/lib/pdf/wasm --out-name plico_engine --no-pack --no-opt",
 		"test:engine": "cargo test",
 		"test:corpus": "cargo test --release --test corpus -- --ignored --nocapture",
+		"test:raster": "node scripts/raster-compare.mjs",
+		"pretest:raster": "npm run build:wasm",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"precheck": "npm run build:wasm",

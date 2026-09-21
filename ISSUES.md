@@ -247,6 +247,12 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ### Fifteen tools exist, the catalogue advertises about forty
 
+Tools that exist in the catalogue but have no implementation yet now render a
+"not available yet" panel in the workspace, rather than falling through to the
+merge branch and telling a Sign or OCR user to choose two PDFs. The catalogue
+still lists them so the roadmap stays visible; the panel is the honest version
+of that.
+
 Merge and Split now share the engine's page selection and page-tree rebuilding
 path. Split supports ranges, combined ranges, and fixed-size parts. Multiple
 outputs are packaged into a ZIP in the worker. The new corpus check extracts the
@@ -295,17 +301,34 @@ wording across both operations.
 
 ## Open, testing
 
-### Nothing compares rendered output
+### Rendered output is now compared, and it found three classes of loss
 
-The corpus harness checks structure. Page counts, geometry, reachability, and
-that the result reparses. Two pages can satisfy all of that and still look
-wrong.
+`npm run test:raster` merges every corpus file with a marker page, renders
+source and result with pdf.js at 36 DPI, and requires every page to survive
+pixel-for-pixel. It runs pdf.js in Node against `@napi-rs/canvas`, which
+pdfjs-dist already depends on, so the harness needs no new renderer and no AGPL
+code. A pixel is "changed" if any channel moves by more than 32; a page fails
+if more than 0.1% change. pdf.js is deterministic on this corpus (two renders
+of the same file differ by 0.000%), so a diff means the merge changed the page.
 
-The highest-value thing left to build is a rasterising comparison. Merge with
-Plico and with `qpdf --empty --pages a.pdf b.pdf --`, render both with pdfium or
-mupdf at low DPI, compare perceptual hashes. Note that a structural check would
-have passed the inheritance bug above, which was silently producing wrong-sized
-blank pages.
+Baseline on the pdf.js corpus: 921 of 982 files merge and render
+byte-identical. The 9 differences fall into four buckets:
+
+- lopdf stream-decoding loss (5): `xobject-image.pdf`, `operator-in-TJ-array.pdf`,
+  `issue7665.pdf`, `issue1293r.pdf`, `issue11549_reduced.pdf`. Each has a
+  content stream lopdf cannot decode (a wrong `/Length`, an empty decode, or a
+  filter handled differently than pdf.js), so the merge writes back empty or
+  altered bytes and the page renders blank or shifted. The structural harness
+  passed all of these. The fix is to detect a failed decode and refuse the
+  merge rather than silently ship an empty page.
+- malformed page tree (1): `issue7229.pdf`. lopdf counts one fewer page than
+  pdf.js because the source's `/Kids` names a missing object, so the merge
+  ships one fewer page than a viewer shows.
+- geometry rounding (1): `freeculture.pdf` page 2 is one pixel shorter after
+  merging, from lopdf's f32 float serialisation of an inherited `/CropBox`.
+- identical content, different render (2): `issue13147.pdf`, `issue5954.pdf`
+  have byte-identical content streams and resources after merging yet render
+  differently in pdf.js. Settling which is right needs a second renderer.
 
 ### No fuzzing
 

@@ -14,6 +14,7 @@
 	import FeatureStrip from './FeatureStrip.svelte';
 
 	let root: HTMLDivElement;
+	let dropzone: PdfDropzone;
 	const workspace = getWorkspace();
 	workspace.use('pdf');
 	function openTool(id: string) {
@@ -49,8 +50,12 @@
 			openTool(tool);
 			return;
 		}
-		selectedTool =
-			selectedHeroTool === tool ? null : (tools.find((item) => item.id === tool) ?? null);
+		if (selectedHeroTool === tool) {
+			selectedTool = null;
+			dropzone?.flash();
+			return;
+		}
+		selectedTool = tools.find((item) => item.id === tool) ?? null;
 	}
 
 	function clearToolCue() {
@@ -79,11 +84,12 @@
 
 	function animateConnection(id: string) {
 		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-		gsap.fromTo(
-			root.querySelector(`[data-connection="${id}"]`),
-			{ strokeDashoffset: 39 },
-			{ strokeDashoffset: 0, duration: 0.7, ease: 'power2.out', overwrite: true }
-		);
+		gsap.to(root.querySelector(`[data-connection="${id}"]`), {
+			strokeDashoffset: '-=39',
+			duration: 0.7,
+			ease: 'power2.out',
+			overwrite: true
+		});
 	}
 </script>
 
@@ -178,6 +184,7 @@
 				</div>
 				<div class="h-80 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%]">
 					<PdfDropzone
+						bind:this={dropzone}
 						{selectedTool}
 						onready={() => selectedTool && openTool(selectedTool.id)}
 						onneedstool={suggestTool}
