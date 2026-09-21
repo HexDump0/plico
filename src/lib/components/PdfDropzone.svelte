@@ -169,11 +169,7 @@
 			}
 		};
 		preference.addEventListener('change', changed);
-		input.addEventListener('cancel', flash);
-		return () => {
-			preference.removeEventListener('change', changed);
-			input.removeEventListener('cancel', flash);
-		};
+		return () => preference.removeEventListener('change', changed);
 	});
 	onDestroy(() => {
 		disposed = true;
