@@ -1,65 +1,39 @@
-# Plico
+<div align="center">
+  <h1>Plico</h1>
+  <p><strong>PDF tools that run locally.</strong></p>
 
-An open-source, local-first PDF toolbox. Files are processed in your browser by a
-Rust engine compiled to WebAssembly, and never uploaded.
+  <p>
+    <img alt="SvelteKit" src="https://img.shields.io/badge/SvelteKit--FF3E00?logo=svelte&logoColor=white">
+    <img alt="Rust" src="https://img.shields.io/badge/Rust--000000?logo=rust&logoColor=white">
+    <img alt="WebAssembly" src="https://img.shields.io/badge/WebAssembly--654FF0?logo=webassembly&logoColor=white">
+  </p>
+</div>
 
-## Development
+![Plico's local-first PDF toolbox](./.github/assets/plico-home.png)
 
-You need Node, plus a Rust toolchain that can target wasm:
+Plico is an open-source, local-first PDF tool for merging, splitting, compressing,
+reordering, and converting documents. Every file is processed in your browser by a Rust
+engine compiled to WebAssembly with no server side processing 
+
+## Run it locally
+
+You need Node.js, Rust with the Wasm target, and `wasm-pack`:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 brew install wasm-pack
-```
-
-Then:
-
-```sh
 npm install
 npm run dev
 ```
 
-The wasm engine is generated and not committed. `npm run dev`, `npm run build`
-and `npm run check` build it first, so you should not have to think about it. To
-build it on its own:
+The generated Wasm package is not committed. `npm run dev`, `npm run build`, and
+`npm run check` build it automatically
+
+## Useful commands
 
 ```sh
-npm run build:wasm
+npm run check        # Svelte and TypeScript checks
+npm run build        # production build
+npm run test:engine  # Rust engine tests
+npm run test:corpus  # structural checks against a local PDF corpus
 ```
-
-If Vite reports `Failed to resolve import "./wasm/plico_engine.js"`, that build
-has not run.
-
-Useful checks:
-
-```sh
-npm run check
-npm run lint
-npm run build
-npm run test:engine
-```
-
-Format the project with:
-
-```sh
-npm run format
-```
-
-## The PDF engine
-
-The engine lives in `rust/plico-engine`. `npm run test:engine` runs its unit
-tests against generated fixtures.
-
-There is also a structural test over a directory of real PDFs, which is ignored
-by default because it needs files on disk:
-
-```sh
-git clone --depth 1 https://github.com/mozilla/pdf.js testing/pdfjs
-npm run test:corpus
-```
-
-It merges every usable file in the corpus and checks page counts, page geometry
-and object reachability in the result.
-
-See [AGENTS.md](./AGENTS.md) for the engine's invariants and [ISSUES.md](./ISSUES.md)
-for what is known to be broken.
