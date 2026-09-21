@@ -42,6 +42,11 @@ function pdfjsAssets(): Plugin {
 }
 
 export default defineConfig({
+	ssr: {
+		// GSAP's ESM entry is not loadable through Vercel's CommonJS function wrapper.
+		// Bundle it into the server output so Vite normalizes the module format.
+		noExternal: ['gsap']
+	},
 	plugins: [
 		tailwindcss(),
 		pdfjsAssets(),
