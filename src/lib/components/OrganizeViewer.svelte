@@ -2,11 +2,13 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import {
+		IconCheck,
 		IconPlus,
 		IconRefresh,
 		IconRotate,
 		IconRotateClockwise,
-		IconTrash,
+		IconDeselect,
+		IconSelectAll,
 		IconX
 	} from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
@@ -224,7 +226,7 @@
 			: mode === 'remove'
 				? 'Remove pages'
 				: 'Rotate PDF'}
-	class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6"
+	class="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6"
 >
 	{#if mode === 'organize'}
 		<div class="flex flex-wrap items-start justify-between gap-3">
@@ -294,29 +296,49 @@
 			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 		{/if}
 	{:else}
-		<div class="flex flex-wrap items-center justify-between gap-3">
-			<div class="flex min-w-0 items-center gap-2">
-				<p class="max-w-sm truncate text-sm font-semibold" title={files[0]?.name}>
-					{files[0]?.name}
-				</p>
-				<span class="shrink-0 text-xs text-muted"
-					>{loadedCount
-						? mode === 'rotate'
-							? `${pages.length} pages`
-							: `${selected.length} of ${pages.length} selected`
-						: status}</span
+		<div class="mx-auto flex w-fit max-w-full items-center gap-2 px-1 xl:max-w-[calc(100%-7rem)]">
+			<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={files[0]?.name}>
+				{files[0]?.name}
+			</p>
+			<span class="shrink-0 text-xs whitespace-nowrap text-muted"
+				>{loadedCount
+					? mode === 'rotate'
+						? `${pages.length} pages`
+						: `${selected.length} of ${pages.length} selected`
+					: status}</span
+			>
+			<button
+				type="button"
+				onclick={() => files[0] && onremove(files[0])}
+				disabled={processing}
+				class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
+				aria-label="Remove PDF"
+				title="Remove PDF"><IconX size={18} stroke={2.5} /></button
+			>
+		</div>
+		{#if mode === 'extract' || mode === 'remove'}
+			<div class="flex items-center justify-end gap-2 xl:absolute xl:top-0 xl:right-0">
+				<button
+					type="button"
+					onclick={() => onselectionchange(pages.map(pageKey))}
+					disabled={processing || selected.length === pages.length}
+					class="flex size-10 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+					aria-label="Select all pages"
+					title="Select all pages"><IconSelectAll size={20} stroke={1.8} /></button
 				>
 				<button
 					type="button"
-					onclick={() => files[0] && onremove(files[0])}
-					disabled={processing}
-					class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-muted transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
-					aria-label="Remove PDF"
-					title="Remove PDF"><IconTrash size={18} stroke={1.8} /></button
+					onclick={() => onselectionchange([])}
+					disabled={processing || selected.length === 0}
+					class="flex size-10 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+					aria-label="Clear selection"
+					title="Clear selection"><IconDeselect size={20} stroke={1.8} /></button
 				>
 			</div>
-		</div>
-		<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+		{/if}
+		<div
+			class="mx-auto flex max-w-full flex-wrap items-center justify-center gap-x-5 gap-y-3 text-center text-sm text-muted"
+		>
 			<p>
 				{mode === 'extract'
 					? 'Select the pages to include in the new PDF.'
@@ -324,51 +346,40 @@
 						? 'Select the pages to remove. At least one page must remain.'
 						: 'Rotate pages below, or rotate every page at once.'}
 			</p>
-			{#if mode === 'extract' || mode === 'remove'}
-				<div class="flex gap-2">
-					<button
-						type="button"
-						onclick={() => onselectionchange(pages.map(pageKey))}
-						disabled={processing}
-						class="text-merge hover:underline disabled:opacity-50">Select all</button
-					><button
-						type="button"
-						onclick={() => onselectionchange([])}
-						disabled={processing}
-						class="text-merge hover:underline disabled:opacity-50">Clear</button
-					>
-				</div>
-			{:else}
-				<div class="flex gap-2">
+			{#if mode === 'rotate'}
+				<div class="flex flex-wrap items-center justify-center gap-2">
 					<button
 						type="button"
 						onclick={() => rotateAll(-90)}
 						disabled={processing}
-						class="text-merge hover:underline disabled:opacity-50">Rotate all left</button
+						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
+						>Rotate all left</button
 					><button
 						type="button"
 						onclick={() => rotateAll(90)}
 						disabled={processing}
-						class="text-merge hover:underline disabled:opacity-50">Rotate all right</button
+						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
+						>Rotate all right</button
 					><button
 						type="button"
 						onclick={reset}
 						disabled={processing}
-						class="text-merge hover:underline disabled:opacity-50">Reset</button
+						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
+						>Reset</button
 					>
 				</div>
 			{/if}
 		</div>
-		<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+		<div class="my-auto flex flex-wrap items-start justify-center gap-5 py-10 sm:gap-7 lg:py-16">
 			{#each pages as page (pageKey(page))}
 				{@const source = sourceOf(page)}
 				{@const color = colorOf(page)}
 				<div
-					class="relative min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 {selected.includes(
+					class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 sm:w-64 xl:w-72 {selected.includes(
 						pageKey(page)
 					)
-						? color.strong
-						: color.border}"
+						? `${color.strong} shadow-lg shadow-merge/10`
+						: `${color.border} hover:border-white/60`}"
 				>
 					{#if source?.pdf}<OrganizeThumbnail
 							pdf={source.pdf}
@@ -388,8 +399,20 @@
 								checked={selected.includes(pageKey(page))}
 								disabled={processing}
 								onchange={() => toggle(page)}
-								class="absolute top-2 right-2 size-6 accent-merge"
-							/></label
+								class="peer sr-only"
+							/>
+							<span
+								aria-hidden="true"
+								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg border text-white backdrop-blur-sm peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white {selected.includes(
+									pageKey(page)
+								)
+									? 'border-merge bg-merge text-canvas'
+									: 'border-white/20 bg-canvas/80'}"
+								>{#if selected.includes(pageKey(page))}<IconCheck
+										size={18}
+										stroke={2.5}
+									/>{/if}</span
+							></label
 						>
 					{:else}
 						<div class="absolute right-2 bottom-2 flex gap-1">
