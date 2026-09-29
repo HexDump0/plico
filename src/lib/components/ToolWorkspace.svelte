@@ -419,6 +419,7 @@
 		>
 			<section
 				aria-label="Documents"
+				data-drag-area
 				class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
 				isPdfToImage ||
 				isPageTool

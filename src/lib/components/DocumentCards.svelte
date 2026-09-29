@@ -14,6 +14,7 @@
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import PdfPreview from './PdfPreview.svelte';
 	import DragTrashZone from './DragTrashZone.svelte';
+	import { edgeScroll } from '$lib/motion/edge-scroll';
 
 	let {
 		mode,
@@ -130,6 +131,15 @@
 		let active = false;
 		let movingSlot = false;
 		let startIndex = -1;
+		let pointerX = 0;
+		let pointerY = 0;
+		const scroller = edgeScroll(node.closest<HTMLElement>('[data-drag-area]'), (delta) => {
+			baseY += delta;
+			targetY += delta;
+			y += delta;
+			gsap.set(surface, { y: reducedMotion ? targetY : y });
+			track();
+		});
 		const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
 		function layoutPosition(card: HTMLElement) {
 			const parent = card.offsetParent;
@@ -221,6 +231,7 @@
 			if (pointerId < 0) return;
 			const id = pointerId;
 			pointerId = -1;
+			scroller.stop();
 			if (activePointer === id) activePointer = -1;
 			if (node.hasPointerCapture(id)) node.releasePointerCapture(id);
 			if (!active) return;
@@ -306,7 +317,13 @@
 			}
 			targetX = baseX + dx;
 			targetY = baseY + dy;
-			trashHovered = isOverTrash(event.clientX, event.clientY);
+			pointerX = event.clientX;
+			pointerY = event.clientY;
+			track();
+		}
+		function track() {
+			trashHovered = isOverTrash(pointerX, pointerY);
+			scroller.update(trashHovered ? null : pointerY);
 			if (trashHovered) {
 				dropTarget = null;
 				return;
@@ -344,6 +361,7 @@
 			destroy() {
 				if (activePointer === pointerId) activePointer = -1;
 				cancelAnimationFrame(frameId);
+				scroller.stop();
 				gsap.killTweensOf(surface);
 				node.removeEventListener('pointerdown', pointerDown);
 				node.removeEventListener('pointermove', pointerMove);
