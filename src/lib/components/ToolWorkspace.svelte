@@ -32,6 +32,7 @@
 	import SplitSettings from './SplitSettings.svelte';
 	import SplitViewer from './SplitViewer.svelte';
 	import OrganizeViewer from './OrganizeViewer.svelte';
+	import PageSelectSettings from './PageSelectSettings.svelte';
 	import PdfToImageSettings from './PdfToImageSettings.svelte';
 	import ImageToPdfSettings from './ImageToPdfSettings.svelte';
 	let { tool }: { tool: CatalogTool } = $props();
@@ -547,6 +548,13 @@
 								bind:interval={splitInterval}
 								bind:combine={splitCombine}
 							/>{/key}
+					{:else if isExtract || isRemove}
+						<PageSelectSettings
+							pages={organizePages}
+							bind:selected={selectedPages}
+							mode={isExtract ? 'extract' : 'remove'}
+							{processing}
+						/>
 					{:else if isCompress}
 						<CompressSettings
 							bind:level={compressLevel}

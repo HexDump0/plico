@@ -1,19 +1,21 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
+	import gsap from 'gsap';
 	import { fade } from 'svelte/transition';
 	import {
 		IconCheck,
+		IconDeselect,
 		IconPlus,
 		IconRefresh,
 		IconRotate,
 		IconRotateClockwise,
-		IconDeselect,
 		IconSelectAll,
 		IconX
 	} from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
 	import { pageKey, sourceColor, sourceKey } from '$lib/pdf/sources';
+	import { spring } from '$lib/motion/link';
 	import OrganizeThumbnail from './OrganizeThumbnail.svelte';
 	import OrganizePageCards from './OrganizePageCards.svelte';
 
@@ -144,17 +146,79 @@
 		}
 	}
 
-	function sourceOf(page: OrganizePage) {
-		return sources.find((source) => source.key === page.source);
+	const allSelected = $derived(pages.length > 0 && selected.length === pages.length);
+	let toggleButton = $state<HTMLButtonElement>();
+	let toggleWidth = 0;
+	let wasAllSelected: boolean | null = null;
+
+	$effect.pre(() => {
+		void allSelected;
+		if (toggleButton) toggleWidth = toggleButton.getBoundingClientRect().width;
+	});
+
+	$effect(() => {
+		const all = allSelected;
+		const button = toggleButton;
+		if (!button) return;
+		const previous = wasAllSelected;
+		wasAllSelected = all;
+		if (previous !== null && previous !== all && !untrack(() => reducedMotion))
+			morphToggle(button, all);
+	});
+
+	// The button resizes to its new label while the old label rolls away and
+	// the new one rises in, reversing direction when the selection is cleared.
+	function morphToggle(button: HTMLButtonElement, all: boolean) {
+		const incoming = button.querySelector<HTMLElement>(
+			`[data-label="${all ? 'clear' : 'select'}"]`
+		);
+		const outgoing = button.querySelector<HTMLElement>(
+			`[data-label="${all ? 'select' : 'clear'}"]`
+		);
+		if (!incoming || !outgoing) return;
+		const direction = all ? 1 : -1;
+		gsap.killTweensOf([button, incoming, outgoing]);
+		gsap.set(button, { clearProps: 'width' });
+		const width = button.getBoundingClientRect().width;
+		gsap.fromTo(
+			button,
+			{ width: toggleWidth },
+			{ width, duration: 0.42, ease: spring, clearProps: 'width' }
+		);
+		gsap.fromTo(
+			outgoing,
+			{ y: 0, opacity: 1, filter: 'blur(0px)' },
+			{
+				y: -12 * direction,
+				opacity: 0,
+				filter: 'blur(3px)',
+				duration: 0.18,
+				ease: 'power2.in',
+				clearProps: 'transform,opacity,filter'
+			}
+		);
+		gsap.fromTo(
+			incoming,
+			{ y: 12 * direction, opacity: 0, filter: 'blur(3px)' },
+			{
+				y: 0,
+				opacity: 1,
+				filter: 'blur(0px)',
+				duration: 0.4,
+				delay: 0.06,
+				ease: spring,
+				clearProps: 'transform,opacity,filter'
+			}
+		);
 	}
 
-	function colorOf(page: OrganizePage) {
-		return sourceColor(
-			Math.max(
-				0,
-				sources.findIndex((source) => source.key === page.source)
-			)
-		);
+	function toggleAll() {
+		if (processing || pages.length === 0) return;
+		onselectionchange(allSelected ? [] : pages.map(pageKey));
+	}
+
+	function sourceOf(page: OrganizePage) {
+		return sources.find((source) => source.key === page.source);
 	}
 
 	function pagesOf(key: string) {
@@ -296,90 +360,99 @@
 			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 		{/if}
 	{:else}
-		<div class="mx-auto flex w-fit max-w-full items-center gap-2 px-1 xl:max-w-[calc(100%-7rem)]">
-			<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={files[0]?.name}>
-				{files[0]?.name}
-			</p>
-			<span class="shrink-0 text-xs whitespace-nowrap text-muted"
-				>{loadedCount
-					? mode === 'rotate'
-						? `${pages.length} pages`
-						: `${selected.length} of ${pages.length} selected`
-					: status}</span
-			>
-			<button
-				type="button"
-				onclick={() => files[0] && onremove(files[0])}
-				disabled={processing}
-				class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
-				aria-label="Remove PDF"
-				title="Remove PDF"><IconX size={18} stroke={2.5} /></button
-			>
-		</div>
-		{#if mode === 'extract' || mode === 'remove'}
-			<div class="flex items-center justify-end gap-2 xl:absolute xl:top-0 xl:right-0">
-				<button
-					type="button"
-					onclick={() => onselectionchange(pages.map(pageKey))}
-					disabled={processing || selected.length === pages.length}
-					class="flex size-10 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
-					aria-label="Select all pages"
-					title="Select all pages"><IconSelectAll size={20} stroke={1.8} /></button
+		<div class="flex flex-wrap items-start justify-between gap-3">
+			<div class="flex min-w-0 items-center gap-2 px-1">
+				<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={files[0]?.name}>
+					{files[0]?.name}
+				</p>
+				<span class="shrink-0 text-xs whitespace-nowrap text-muted"
+					>{loadedCount ? `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}` : status}</span
 				>
 				<button
 					type="button"
-					onclick={() => onselectionchange([])}
-					disabled={processing || selected.length === 0}
-					class="flex size-10 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
-					aria-label="Clear selection"
-					title="Clear selection"><IconDeselect size={20} stroke={1.8} /></button
+					onclick={() => files[0] && onremove(files[0])}
+					disabled={processing}
+					class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
+					aria-label="Remove PDF"
+					title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 				>
 			</div>
-		{/if}
-		<div
-			class="mx-auto flex max-w-full flex-wrap items-center justify-center gap-x-5 gap-y-3 text-center text-sm text-muted"
-		>
-			<p>
-				{mode === 'extract'
-					? 'Select the pages to include in the new PDF.'
-					: mode === 'remove'
-						? 'Select the pages to remove. At least one page must remain.'
-						: 'Rotate pages below, or rotate every page at once.'}
-			</p>
-			{#if mode === 'rotate'}
-				<div class="flex flex-wrap items-center justify-center gap-2">
+			<div class="flex shrink-0 items-center gap-2">
+				{#if mode === 'rotate'}
 					<button
 						type="button"
 						onclick={() => rotateAll(-90)}
-						disabled={processing}
-						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
-						>Rotate all left</button
-					><button
+						disabled={processing || pages.length === 0}
+						class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+						aria-label="Rotate all pages left"
+						title="Rotate all left"><IconRotate size={18} /></button
+					>
+					<button
 						type="button"
 						onclick={() => rotateAll(90)}
-						disabled={processing}
-						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
-						>Rotate all right</button
-					><button
+						disabled={processing || pages.length === 0}
+						class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+						aria-label="Rotate all pages right"
+						title="Rotate all right"><IconRotateClockwise size={18} /></button
+					>
+					<button
 						type="button"
 						onclick={reset}
-						disabled={processing}
-						class="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs font-medium text-merge transition-colors hover:border-merge/40 hover:bg-merge/10 disabled:opacity-50"
-						>Reset</button
+						disabled={processing || pages.length === 0}
+						class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors hover:border-merge/40 hover:text-merge disabled:opacity-40"
+						aria-label="Reset pages"
+						title="Reset pages"><IconRefresh size={18} /></button
 					>
-				</div>
-			{/if}
+				{:else}
+					<button
+						bind:this={toggleButton}
+						type="button"
+						onclick={toggleAll}
+						disabled={processing || pages.length === 0}
+						aria-label={allSelected ? 'Clear selection' : 'Select all pages'}
+						class="relative flex items-center overflow-hidden rounded-xl border-2 bg-panel px-3 py-2 text-xs font-semibold whitespace-nowrap transition-colors duration-300 disabled:opacity-40 {allSelected
+							? mode === 'extract'
+								? 'border-merge/40 text-merge hover:border-merge/70'
+								: 'border-convert/40 text-convert hover:border-convert/70'
+							: mode === 'extract'
+								? 'border-white/10 text-muted hover:border-merge/40 hover:text-merge'
+								: 'border-white/10 text-muted hover:border-convert/40 hover:text-convert'}"
+					>
+						<span
+							aria-hidden="true"
+							class="pointer-events-none absolute inset-0 origin-left motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {mode ===
+							'extract'
+								? 'bg-merge/10'
+								: 'bg-convert/10'} {allSelected ? 'scale-x-100' : 'scale-x-0'}"
+						></span>
+						<span
+							data-label="select"
+							aria-hidden="true"
+							class="flex items-center gap-1.5 {allSelected
+								? 'absolute inset-y-0 left-3 opacity-0'
+								: 'relative'}"><IconSelectAll size={16} />Select all</span
+						>
+						<span
+							data-label="clear"
+							aria-hidden="true"
+							class="flex items-center gap-1.5 {allSelected
+								? 'relative'
+								: 'absolute inset-y-0 left-3 opacity-0'}"><IconDeselect size={16} />Clear</span
+						>
+					</button>
+				{/if}
+			</div>
 		</div>
-		<div class="my-auto flex flex-wrap items-start justify-center gap-5 py-10 sm:gap-7 lg:py-16">
+		<div class="my-auto flex flex-wrap items-start justify-center gap-5 py-12 sm:gap-7">
 			{#each pages as page (pageKey(page))}
 				{@const source = sourceOf(page)}
-				{@const color = colorOf(page)}
+				{@const picked = selected.includes(pageKey(page))}
 				<div
-					class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 sm:w-64 xl:w-72 {selected.includes(
-						pageKey(page)
-					)
-						? `${color.strong} shadow-lg shadow-merge/10`
-						: `${color.border} hover:border-white/60`}"
+					class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 sm:w-64 xl:w-72 {picked
+						? mode === 'extract'
+							? 'border-merge/70 shadow-merge/10'
+							: 'border-convert/70 shadow-convert/10'
+						: 'border-white/10 hover:border-white/25'}"
 				>
 					{#if source?.pdf}<OrganizeThumbnail
 							pdf={source.pdf}
@@ -387,7 +460,7 @@
 							rotation={page.rotation}
 						/>{/if}
 					<span
-						class="{color.dot} absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md px-1.5 py-1 text-[11px] font-bold text-canvas backdrop-blur-sm"
+						class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
 						>{page.number}</span
 					>
 					{#if mode === 'extract' || mode === 'remove'}
@@ -396,22 +469,19 @@
 								>{mode === 'extract' ? 'Extract' : 'Remove'} page {page.number}</span
 							><input
 								type="checkbox"
-								checked={selected.includes(pageKey(page))}
+								checked={picked}
 								disabled={processing}
 								onchange={() => toggle(page)}
 								class="peer sr-only"
 							/>
 							<span
 								aria-hidden="true"
-								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg border text-white backdrop-blur-sm peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white {selected.includes(
-									pageKey(page)
-								)
-									? 'border-merge bg-merge text-canvas'
-									: 'border-white/20 bg-canvas/80'}"
-								>{#if selected.includes(pageKey(page))}<IconCheck
-										size={18}
-										stroke={2.5}
-									/>{/if}</span
+								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg border text-white backdrop-blur-sm transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white {picked
+									? mode === 'extract'
+										? 'border-merge bg-merge text-canvas'
+										: 'border-convert bg-convert text-canvas'
+									: 'border-white/20 bg-canvas/80 group-hover:border-white/40'}"
+								>{#if picked}<IconCheck size={18} stroke={2.5} />{/if}</span
 							></label
 						>
 					{:else}

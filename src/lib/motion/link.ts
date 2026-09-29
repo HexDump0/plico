@@ -1,6 +1,6 @@
 import gsap from 'gsap';
 
-function spring(progress: number) {
+export function spring(progress: number) {
 	const frequency = 9;
 	const time = frequency * progress;
 	return (1 - (1 + time) * Math.exp(-time)) / (1 - (1 + frequency) * Math.exp(-frequency));
