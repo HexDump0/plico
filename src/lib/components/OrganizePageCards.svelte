@@ -144,6 +144,8 @@
 		let movingSlot = false;
 		let startIndex = -1;
 		let pointerX = 0;
+		let held = false;
+		let holdTimer = 0;
 		let pointerY = 0;
 		const scroller = edgeScroll(node.closest<HTMLElement>('[data-drag-area]'), (delta) => {
 			baseY += delta;
@@ -243,6 +245,7 @@
 			if (pointerId < 0) return;
 			const id = pointerId;
 			pointerId = -1;
+			clearTimeout(holdTimer);
 			scroller.stop();
 			if (activePointer === id) activePointer = -1;
 			if (node.hasPointerCapture(id)) node.releasePointerCapture(id);
@@ -289,6 +292,23 @@
 					onComplete: () => gsap.set(surface, { clearProps: 'transform' })
 				});
 		}
+		function lift() {
+			active = true;
+			startIndex = indexOf(key);
+			flushSync(() => {
+				dragOrder = [...pages];
+				dragged = key;
+			});
+			gsap.killTweensOf(surface);
+			baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
+			baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
+			angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
+			vx = vy = angularVelocity = 0;
+			lastFrame = performance.now();
+			frameId = requestAnimationFrame(animate);
+			targetX = baseX;
+			targetY = baseY;
+		}
 		function pointerDown(event: PointerEvent) {
 			if (
 				processing ||
@@ -304,26 +324,33 @@
 			downX = event.clientX;
 			downY = event.clientY;
 			node.setPointerCapture(pointerId);
+			// Touch needs a short hold so a swipe over the cards still scrolls.
+			held = event.pointerType !== 'touch';
+			if (!held)
+				holdTimer = window.setTimeout(() => {
+					held = true;
+					navigator.vibrate?.(10);
+					lift();
+				}, 300);
+		}
+		function blockTouchScroll(event: TouchEvent) {
+			if (active) event.preventDefault();
+		}
+		function blockContextMenu(event: Event) {
+			if (pointerId >= 0) event.preventDefault();
 		}
 		function pointerMove(event: PointerEvent) {
 			if (event.pointerId !== pointerId) return;
 			const dx = event.clientX - downX;
 			const dy = event.clientY - downY;
 			if (!active) {
-				if (Math.hypot(dx, dy) < 6) return;
-				active = true;
-				startIndex = indexOf(key);
-				flushSync(() => {
-					dragOrder = [...pages];
-					dragged = key;
-				});
-				gsap.killTweensOf(surface);
-				baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
-				baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
-				angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
-				vx = vy = angularVelocity = 0;
-				lastFrame = performance.now();
-				frameId = requestAnimationFrame(animate);
+				if (Math.hypot(dx, dy) < (held ? 6 : 10)) return;
+				// On touch, moving before the hold completes is a scroll, not a drag.
+				if (!held) {
+					finish(false);
+					return;
+				}
+				lift();
 			}
 			targetX = baseX + dx;
 			targetY = baseY + dy;
@@ -367,6 +394,8 @@
 		node.addEventListener('pointercancel', pointerCancel);
 		node.addEventListener('dragstart', preventNativeDrag);
 		node.addEventListener('lostpointercapture', lostPointerCapture);
+		node.addEventListener('touchmove', blockTouchScroll, { passive: false });
+		node.addEventListener('contextmenu', blockContextMenu);
 		return {
 			destroy() {
 				if (activePointer === pointerId) activePointer = -1;
@@ -379,6 +408,9 @@
 				node.removeEventListener('pointercancel', pointerCancel);
 				node.removeEventListener('dragstart', preventNativeDrag);
 				node.removeEventListener('lostpointercapture', lostPointerCapture);
+				node.removeEventListener('touchmove', blockTouchScroll);
+				node.removeEventListener('contextmenu', blockContextMenu);
+				clearTimeout(holdTimer);
 				if (dragged === key) {
 					dragOrder = null;
 					dragged = null;
@@ -396,7 +428,7 @@
 	{/if}
 	<ol
 		aria-label="Page order"
-		class="my-auto flex flex-wrap items-center justify-center gap-5 sm:gap-7 py-12"
+		class="my-auto flex flex-wrap items-center justify-center gap-5 py-12 sm:gap-7"
 	>
 		{#each visiblePages as page, index (pageKey(page))}
 			{@const key = pageKey(page)}
@@ -408,7 +440,8 @@
 				animate:cardFlip={{ key }}
 				class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-64 xl:w-72 {processing
 					? ''
-					: 'cursor-grab touch-none select-none active:cursor-grabbing'} {dragged === key
+					: 'cursor-grab select-none [-webkit-touch-callout:none] active:cursor-grabbing'} {dragged ===
+				key
 					? 'z-40'
 					: ''}"
 			>

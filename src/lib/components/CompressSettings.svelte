@@ -1,15 +1,19 @@
 <script lang="ts">
 	import { slide } from 'svelte/transition';
+	import { IconChevronDown } from '@tabler/icons-svelte-runes';
+	import ToggleSwitch from './ToggleSwitch.svelte';
 
 	let advancedOpen = $state(false);
 	let {
 		level = $bindable<'light' | 'balanced' | 'strong'>(),
 		removeMetadata = $bindable<boolean>(),
-		removeThumbnails = $bindable<boolean>()
+		removeThumbnails = $bindable<boolean>(),
+		reducedMotion
 	}: {
 		level: 'light' | 'balanced' | 'strong';
 		removeMetadata: boolean;
 		removeThumbnails: boolean;
+		reducedMotion: boolean;
 	} = $props();
 	const levels = [
 		{ id: 'light', label: 'Light' },
@@ -52,62 +56,25 @@
 			onclick={() => (advancedOpen = !advancedOpen)}
 		>
 			Advanced options
-			<svg
+			<IconChevronDown
+				size={16}
+				stroke={1.75}
 				aria-hidden="true"
-				class="size-4 motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.75"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path d="m6 9 6 6 6-6" />
-			</svg>
+				class="motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
+			/>
 		</button>
 		{#if advancedOpen}
 			<div
 				id="compress-advanced-options"
 				class="space-y-2 pt-4"
-				transition:slide={{ duration: 300 }}
+				transition:slide={{ duration: reducedMotion ? 0 : 300 }}
 			>
-				<label
-					class="flex cursor-pointer items-center justify-between gap-4 rounded-xl bg-canvas/50 px-3.5 py-3 text-sm hover:border-white/15 motion-safe:transition-colors"
-				>
-					<span>Remove metadata</span>
-					<input type="checkbox" role="switch" class="peer sr-only" bind:checked={removeMetadata} />
-					<span
-						aria-hidden="true"
-						class="relative h-6 w-10 shrink-0 rounded-full bg-white/15 peer-checked:bg-compress peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-compress motion-safe:transition-colors"
-					>
-						<span
-							class="absolute top-1 left-1 size-4 rounded-full bg-white motion-safe:transition-transform {removeMetadata
-								? 'translate-x-4'
-								: ''}"
-						></span>
-					</span>
-				</label>
-				<label
-					class="flex cursor-pointer items-center justify-between gap-4 rounded-xl bg-canvas/50 px-3.5 py-3 text-sm hover:border-white/15 motion-safe:transition-colors"
-				>
-					<span>Remove page thumbnails</span>
-					<input
-						type="checkbox"
-						role="switch"
-						class="peer sr-only"
-						bind:checked={removeThumbnails}
-					/>
-					<span
-						aria-hidden="true"
-						class="relative h-6 w-10 shrink-0 rounded-full bg-white/15 peer-checked:bg-compress peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-compress motion-safe:transition-colors"
-					>
-						<span
-							class="absolute top-1 left-1 size-4 rounded-full bg-white motion-safe:transition-transform {removeThumbnails
-								? 'translate-x-4'
-								: ''}"
-						></span>
-					</span>
-				</label>
+				<ToggleSwitch bind:checked={removeMetadata} label="Remove metadata" tone="compress" />
+				<ToggleSwitch
+					bind:checked={removeThumbnails}
+					label="Remove page thumbnails"
+					tone="compress"
+				/>
 			</div>
 		{/if}
 	</div>

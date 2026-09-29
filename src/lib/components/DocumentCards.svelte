@@ -132,6 +132,8 @@
 		let movingSlot = false;
 		let startIndex = -1;
 		let pointerX = 0;
+		let held = false;
+		let holdTimer = 0;
 		let pointerY = 0;
 		const scroller = edgeScroll(node.closest<HTMLElement>('[data-drag-area]'), (delta) => {
 			baseY += delta;
@@ -231,6 +233,7 @@
 			if (pointerId < 0) return;
 			const id = pointerId;
 			pointerId = -1;
+			clearTimeout(holdTimer);
 			scroller.stop();
 			if (activePointer === id) activePointer = -1;
 			if (node.hasPointerCapture(id)) node.releasePointerCapture(id);
@@ -278,6 +281,23 @@
 				});
 			}
 		}
+		function lift() {
+			active = true;
+			startIndex = visibleFiles.indexOf(file);
+			flushSync(() => {
+				dragOrder = [...workspace.files];
+				dragged = file;
+			});
+			gsap.killTweensOf(surface);
+			baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
+			baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
+			angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
+			vx = vy = angularVelocity = 0;
+			lastFrame = performance.now();
+			frameId = requestAnimationFrame(animate);
+			targetX = baseX;
+			targetY = baseY;
+		}
 		function pointerDown(event: PointerEvent) {
 			if (
 				!canOrder ||
@@ -294,26 +314,33 @@
 			downX = event.clientX;
 			downY = event.clientY;
 			node.setPointerCapture(pointerId);
+			// Touch needs a short hold so a swipe over the cards still scrolls.
+			held = event.pointerType !== 'touch';
+			if (!held)
+				holdTimer = window.setTimeout(() => {
+					held = true;
+					navigator.vibrate?.(10);
+					lift();
+				}, 300);
+		}
+		function blockTouchScroll(event: TouchEvent) {
+			if (active) event.preventDefault();
+		}
+		function blockContextMenu(event: Event) {
+			if (pointerId >= 0) event.preventDefault();
 		}
 		function pointerMove(event: PointerEvent) {
 			if (event.pointerId !== pointerId) return;
 			const dx = event.clientX - downX;
 			const dy = event.clientY - downY;
 			if (!active) {
-				if (Math.hypot(dx, dy) < 6) return;
-				active = true;
-				startIndex = visibleFiles.indexOf(file);
-				flushSync(() => {
-					dragOrder = [...workspace.files];
-					dragged = file;
-				});
-				gsap.killTweensOf(surface);
-				baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
-				baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
-				angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
-				vx = vy = angularVelocity = 0;
-				lastFrame = performance.now();
-				frameId = requestAnimationFrame(animate);
+				if (Math.hypot(dx, dy) < (held ? 6 : 10)) return;
+				// On touch, moving before the hold completes is a scroll, not a drag.
+				if (!held) {
+					finish(false);
+					return;
+				}
+				lift();
 			}
 			targetX = baseX + dx;
 			targetY = baseY + dy;
@@ -357,6 +384,8 @@
 		node.addEventListener('pointercancel', pointerCancel);
 		node.addEventListener('dragstart', preventNativeDrag);
 		node.addEventListener('lostpointercapture', lostPointerCapture);
+		node.addEventListener('touchmove', blockTouchScroll, { passive: false });
+		node.addEventListener('contextmenu', blockContextMenu);
 		return {
 			destroy() {
 				if (activePointer === pointerId) activePointer = -1;
@@ -369,6 +398,9 @@
 				node.removeEventListener('pointercancel', pointerCancel);
 				node.removeEventListener('dragstart', preventNativeDrag);
 				node.removeEventListener('lostpointercapture', lostPointerCapture);
+				node.removeEventListener('touchmove', blockTouchScroll);
+				node.removeEventListener('contextmenu', blockContextMenu);
+				clearTimeout(holdTimer);
 				if (dragged === file) {
 					dragOrder = null;
 					dragged = null;
@@ -413,7 +445,7 @@
 				class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-52 {file &&
 				canOrder &&
 				!processing
-					? 'cursor-grab touch-none select-none active:cursor-grabbing'
+					? 'cursor-grab select-none [-webkit-touch-callout:none] active:cursor-grabbing'
 					: ''} {file && dragged === file ? 'z-40' : ''}"
 			>
 				{#if file}

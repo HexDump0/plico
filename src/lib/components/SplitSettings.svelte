@@ -2,6 +2,7 @@
 	import { IconPlus, IconX } from '@tabler/icons-svelte-runes';
 	import type { SplitRange } from '$lib/split-ranges';
 	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
+	import ToggleSwitch from './ToggleSwitch.svelte';
 	let {
 		pageCount,
 		ranges = $bindable<SplitRange[]>(),
@@ -110,10 +111,7 @@
 		{#if invalid}<p role="alert" class="text-xs text-convert">
 				Enter valid page ranges between 1 and {pageCount || 'the last page'}.
 			</p>{/if}
-		<label class="flex items-start gap-3 text-sm leading-relaxed text-muted"
-			><input type="checkbox" class="mt-1 size-4 accent-brand" bind:checked={combine} />Combine
-			ranges into one PDF</label
-		>
+		<ToggleSwitch bind:checked={combine} label="Combine ranges into one PDF" tone="split" />
 	{:else}
 		<label class="block text-sm text-muted"
 			>Pages per PDF<input

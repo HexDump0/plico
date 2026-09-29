@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { slide } from 'svelte/transition';
+	import { IconChevronDown } from '@tabler/icons-svelte-runes';
 
 	let advancedOpen = $state(false);
 	let {
@@ -7,13 +8,15 @@
 		dpi = $bindable<number>(),
 		quality = $bindable<number>(),
 		pageRange = $bindable<string>(),
-		pageCount = 0
+		pageCount = 0,
+		reducedMotion
 	}: {
 		format: 'jpg' | 'png';
 		dpi: number;
 		quality: number;
 		pageRange: string;
 		pageCount?: number;
+		reducedMotion: boolean;
 	} = $props();
 
 	const formats = [
@@ -85,22 +88,20 @@
 			onclick={() => (advancedOpen = !advancedOpen)}
 		>
 			Advanced options
-			<svg
+			<IconChevronDown
+				size={16}
+				stroke={1.75}
 				aria-hidden="true"
-				class="size-4 motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.75"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path d="m6 9 6 6 6-6" />
-			</svg>
+				class="motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
+			/>
 		</button>
 
 		{#if advancedOpen}
-			<div id="image-advanced-options" class="space-y-4 pt-4" transition:slide={{ duration: 250 }}>
+			<div
+				id="image-advanced-options"
+				class="space-y-4 pt-4"
+				transition:slide={{ duration: reducedMotion ? 0 : 250 }}
+			>
 				{#if format === 'jpg'}
 					<div class="space-y-2">
 						<div class="flex items-center justify-between text-xs font-medium text-muted">

@@ -7,7 +7,7 @@
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { OrganizePage, SplitOptions } from '$lib/pdf/types';
 	import { pageKey } from '$lib/pdf/sources';
-	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
+	import { getWorkspace } from '$lib/workspace.svelte';
 	import {
 		processCompressPdf,
 		processImagesToPdf,
@@ -35,6 +35,8 @@
 	import PageSelectSettings from './PageSelectSettings.svelte';
 	import PdfToImageSettings from './PdfToImageSettings.svelte';
 	import ImageToPdfSettings from './ImageToPdfSettings.svelte';
+	import OutputFilename from './OutputFilename.svelte';
+	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
 	const supported = $derived(isToolSupported(tool.id));
@@ -105,7 +107,7 @@
 	let compressLevel = $state<'light' | 'balanced' | 'strong'>('balanced');
 	let compressRemoveMetadata = $state(false);
 	let compressRemoveThumbnails = $state(false);
-	let filename = $state(untrack(() => (isImageToPdf ? 'plico-images' : 'plico-merged')));
+	let filename = $state('');
 	let downloadLink: HTMLAnchorElement;
 	const job = new DownloadJob();
 	const processing = $derived(job.processing);
@@ -212,26 +214,61 @@
 									? !imagePdfValid || !!dragged || !!keyboardPicked
 									: true
 	);
-	const downloadName = $derived(
+	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
+	const autoName = $derived(
 		officeTool
-			? `${currentFile?.name.replace(/\.[^.]+$/, '') || 'document'}.${officeTools[officeTool].output}`
+			? baseName
+			: isMerge
+				? 'plico-merged'
+				: isImageToPdf
+					? 'plico-images'
+					: isSplit
+						? `${baseName}-split`
+						: isOrganize
+							? `${baseName}-organized`
+							: isExtract
+								? `${baseName}-extracted`
+								: isRemove
+									? `${baseName}-pages-removed`
+									: isRotate
+										? `${baseName}-rotated`
+										: isCompress
+											? `${baseName}-compressed`
+											: `${baseName}-images`
+	);
+	// Several parts or images arrive as a ZIP; predict which before processing
+	// so the filename field shows the extension that will actually download.
+	const expectedFormat = $derived(
+		officeTool
+			? officeTools[officeTool].output
 			: isSplit
-				? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-split.${resultFormat}`
-				: isOrganize
-					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-organized.pdf`
-					: isExtract
-						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-extracted.${resultFormat}`
-						: isRemove
-							? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-pages-removed.pdf`
-							: isRotate
-								? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-rotated.pdf`
-								: isCompress
-									? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-compressed.${resultFormat}`
-									: isPdfToImage
-										? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-images.${resultFormat}`
-										: isImageToPdf
-											? `${filename.trim().replace(/\.pdf$/i, '') || (currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : 'images')}.pdf`
-											: `${filename.trim().replace(/\.pdf$/i, '') || 'plico-merged'}.pdf`
+				? (
+						splitMode === 'ranges'
+							? splitCombine || splitRanges.length === 1
+							: pageCount > 0 && splitInterval >= pageCount
+					)
+					? 'pdf'
+					: 'zip'
+				: isExtract && extractOutput === 'images'
+					? selectedPages.length === 1
+						? extractImageFormat
+						: 'zip'
+					: isPdfToImage
+						? (parsePageRange(pdfToImagePageRange, pageCount)?.length ?? pageCount) === 1
+							? pdfToImageFormat
+							: 'zip'
+						: isCompress && workspace.files.length > 1
+							? 'zip'
+							: 'pdf'
+	);
+	const outputExtension = $derived(result ? resultFormat : expectedFormat);
+	const downloadName = $derived(
+		`${filename.trim().replace(new RegExp(`\\.${outputExtension}$`, 'i'), '') || autoName}.${outputExtension}`
+	);
+	const savedPercent = $derived(
+		isCompress && result && resultInputSize > 0
+			? Math.round((1 - resultSize / resultInputSize) * 100)
+			: 0
 	);
 	let prevInputType = $state(untrack(() => inputType));
 	$effect(() => {
@@ -239,13 +276,11 @@
 		if (prevInputType !== currentType) {
 			prevInputType = currentType;
 			keyboardPicked = null;
-			filename = currentType === 'image' ? 'plico-images' : 'plico-merged';
 			workspace.use(currentType);
 		}
 	});
 	$effect(() => {
 		void workspace.files;
-		void filename;
 		void splitSignature;
 		void organizeSignature;
 		void compressSignature;
@@ -273,6 +308,7 @@
 		void tool.id;
 		organizePages = [];
 		selectedPages = [];
+		filename = '';
 	});
 	onDestroy(() => job.clear());
 	async function merge() {
@@ -415,7 +451,10 @@
 		</div>
 	{:else}
 		<div
-			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]"
+			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem] {workspace
+				.files.length
+				? 'max-lg:pb-24'
+				: ''}"
 		>
 			<section
 				aria-label="Documents"
@@ -548,21 +587,7 @@
 					<h1 class="flex items-center gap-3 text-xl font-semibold tracking-tight">
 						<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
 					</h1>
-					{#if isMerge}
-						<label class="block text-sm font-medium"
-							>Output filename
-							<div
-								class="mt-3 flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-white/25"
-							>
-								<input
-									bind:value={filename}
-									class="min-w-0 flex-1 bg-transparent py-3 text-sm outline-none"
-									aria-label="Output filename"
-									placeholder="plico-merged"
-								/><span class="text-xs text-muted">.pdf</span>
-							</div></label
-						>
-					{:else if isSplit}
+					{#if isSplit}
 						{#key currentFile}<SplitSettings
 								{pageCount}
 								{reducedMotion}
@@ -584,12 +609,14 @@
 						/>
 					{:else if isCompress}
 						<CompressSettings
+							{reducedMotion}
 							bind:level={compressLevel}
 							bind:removeMetadata={compressRemoveMetadata}
 							bind:removeThumbnails={compressRemoveThumbnails}
 						/>
 					{:else if isPdfToImage}
 						<PdfToImageSettings
+							{reducedMotion}
 							bind:format={pdfToImageFormat}
 							bind:dpi={pdfToImageDpi}
 							bind:quality={pdfToImageQuality}
@@ -598,22 +625,26 @@
 						/>
 					{:else if isImageToPdf}
 						<ImageToPdfSettings bind:pageSize={imagePdfPageSize} bind:margin={imagePdfMargin} />
-						<label class="block text-sm font-medium"
-							>Output filename
-							<div
-								class="mt-3 flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-white/25"
-							>
-								<input
-									bind:value={filename}
-									class="min-w-0 flex-1 bg-transparent py-3 text-sm outline-none"
-									aria-label="Output filename"
-									placeholder="plico-images"
-								/><span class="text-xs text-muted">.pdf</span>
-							</div></label
-						>
 					{/if}
+					{#if workspace.files.length}<div
+							in:rangeReveal={{ reducedMotion, preview: true }}
+							out:rangeCollapse={{ reducedMotion }}
+						>
+							<OutputFilename
+								bind:value={filename}
+								placeholder={autoName}
+								extension={outputExtension}
+							/>
+						</div>{/if}
 				</div>
-				<div class="shrink-0 space-y-4 p-6 sm:p-8" aria-live="polite">
+				<!-- On phones the action stays pinned to the bottom once there is
+				something to process, instead of sitting below every page card. -->
+				<div
+					class="shrink-0 space-y-4 p-6 sm:p-8 {workspace.files.length
+						? 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-20 max-lg:border-t max-lg:border-white/10 max-lg:bg-canvas/85 max-lg:px-6 max-lg:py-4 max-lg:backdrop-blur-md'
+						: ''}"
+					aria-live="polite"
+				>
 					<a
 						bind:this={downloadLink}
 						href={result}
@@ -623,21 +654,6 @@
 						tabindex="-1"
 						aria-hidden="true">Download {resultFormat.toUpperCase()}</a
 					>
-					{#if isCompress && result && resultInputSize > 0}
-						<p
-							class="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-center text-xs text-muted"
-						>
-							<span class="inline-flex items-center gap-1.5">
-								<span>{formatSize(resultInputSize)}</span>
-								<span class="sr-only">to</span>
-								<IconArrowRight size={14} stroke={1.75} aria-hidden="true" />
-								<span>{formatSize(resultSize)}</span>
-							</span>
-							{#if resultSize < resultInputSize}
-								<span>({Math.round((1 - resultSize / resultInputSize) * 100)}% smaller)</span>
-							{/if}
-						</p>
-					{/if}
 					<button
 						disabled={actionDisabled}
 						onclick={() =>
@@ -657,7 +673,7 @@
 														? void convertImagesToPdf()
 														: void merge()}
 						aria-label={result
-							? `Download ${resultFormat.toUpperCase()} again`
+							? `Download ${resultFormat.toUpperCase()} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 							: processing
 								? isSplit
 									? 'Splitting PDF'
@@ -709,7 +725,10 @@
 								class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
 									? 'translate-y-0 opacity-100 motion-safe:delay-100'
 									: 'translate-y-2 opacity-0'}"
-								><IconDownload size={20} />Download {resultFormat.toUpperCase()}</span
+								><IconDownload size={20} />Download {resultFormat.toUpperCase()}{#if savedPercent > 0}<span
+										class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold"
+										>−{savedPercent}%</span
+									>{/if}</span
 							>
 						</span></button
 					>
