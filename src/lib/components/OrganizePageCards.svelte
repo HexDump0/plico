@@ -378,7 +378,7 @@
 	{/if}
 	<ol
 		aria-label="Page order"
-		class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-20"
+		class="my-auto flex flex-wrap items-center justify-center gap-5 sm:gap-7 py-12"
 	>
 		{#each visiblePages as page, index (pageKey(page))}
 			{@const key = pageKey(page)}

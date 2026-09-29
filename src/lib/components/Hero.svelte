@@ -117,7 +117,7 @@
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"
-			class="hero-stage relative grid flex-1 items-center gap-10 px-6 py-10 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 lg:py-20 xl:px-24"
+			class="hero-stage relative grid flex-1 items-center gap-10 px-6 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 py-12 xl:px-24"
 		>
 			<div class="hero-copy relative z-10 min-w-0 lg:col-span-5">
 				<h1 id="hero-title" class="text-5xl leading-tight font-bold tracking-tight">

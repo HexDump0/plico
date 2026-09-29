@@ -429,7 +429,7 @@
 						<div
 							in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
-							class="col-start-1 row-start-1 mx-auto flex w-full max-w-xl flex-col justify-center py-12 lg:py-20"
+							class="col-start-1 row-start-1 mx-auto flex w-full max-w-xl flex-col justify-center py-12"
 						>
 							<div class="h-80"><PdfDropzone selectedTool={tool} emptyOnly /></div>
 						</div>
