@@ -95,6 +95,9 @@
 	let pageCount = $state(0);
 	let organizePages = $state<OrganizePage[]>([]);
 	let selectedPages = $state<string[]>([]);
+	let extractOutput = $state<'pdf' | 'images'>('pdf');
+	let extractImageFormat = $state<'jpg' | 'png'>('jpg');
+	let extractDpi = $state(150);
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
 	let splitMode = $state<'ranges' | 'fixed'>('ranges');
 	let splitInterval = $state(1);
@@ -127,7 +130,9 @@
 			ranges: splitRanges.map(({ from, to }) => [from, to])
 		})
 	);
-	const organizeSignature = $derived(JSON.stringify([organizePages, selectedPages]));
+	const organizeSignature = $derived(
+		JSON.stringify([organizePages, selectedPages, extractOutput, extractImageFormat, extractDpi])
+	);
 	const pageToolValid = $derived(
 		!!currentFile &&
 			organizePages.length > 0 &&
@@ -215,7 +220,7 @@
 				: isOrganize
 					? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-organized.pdf`
 					: isExtract
-						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-extracted.pdf`
+						? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-extracted.${resultFormat}`
 						: isRemove
 							? `${currentFile?.name.replace(/\.pdf$/i, '') || 'document'}-pages-removed.pdf`
 							: isRotate
@@ -300,6 +305,23 @@
 		if (processing || !pageToolValid) return;
 		const files = [...workspace.files];
 		const selected = new Set(selectedPages);
+		if (isExtract && extractOutput === 'images') {
+			const file = files[0];
+			const options: PdfImageOptions = {
+				format: extractImageFormat,
+				dpi: extractDpi,
+				quality: 80,
+				pages: organizePages
+					.filter((page) => selected.has(pageKey(page)))
+					.map((page) => page.number)
+			};
+			await job.run(
+				(signal) => processPdfToImages(file, options, signal),
+				'Could not extract pages from this PDF.',
+				() => downloadLink?.click()
+			);
+			return;
+		}
 		const pages = organizePages
 			.filter((page) =>
 				isExtract ? selected.has(pageKey(page)) : isRemove ? !selected.has(pageKey(page)) : true
@@ -554,6 +576,10 @@
 							bind:selected={selectedPages}
 							mode={isExtract ? 'extract' : 'remove'}
 							{processing}
+							{reducedMotion}
+							bind:output={extractOutput}
+							bind:imageFormat={extractImageFormat}
+							bind:dpi={extractDpi}
 						/>
 					{:else if isCompress}
 						<CompressSettings

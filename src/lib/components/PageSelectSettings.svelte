@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { cubicOut } from 'svelte/easing';
+	import { slide } from 'svelte/transition';
 	import { parsePageRange } from '$lib/pdf/page-range';
 	import { pageKey } from '$lib/pdf/sources';
 	import type { OrganizePage } from '$lib/pdf/types';
@@ -7,13 +9,34 @@
 		pages,
 		selected = $bindable<string[]>(),
 		mode,
-		processing
+		processing,
+		reducedMotion,
+		output = $bindable<'pdf' | 'images'>('pdf'),
+		imageFormat = $bindable<'jpg' | 'png'>('jpg'),
+		dpi = $bindable<number>(150)
 	}: {
 		pages: OrganizePage[];
 		selected: string[];
 		mode: 'extract' | 'remove';
 		processing: boolean;
+		reducedMotion: boolean;
+		output?: 'pdf' | 'images';
+		imageFormat?: 'jpg' | 'png';
+		dpi?: number;
 	} = $props();
+	const outputs = [
+		{ id: 'pdf', label: 'PDF' },
+		{ id: 'images', label: 'Images' }
+	] as const;
+	const formats = [
+		{ id: 'jpg', label: 'JPG' },
+		{ id: 'png', label: 'PNG' }
+	] as const;
+	const resolutions = [
+		{ dpi: 72, label: '72 DPI' },
+		{ dpi: 150, label: '150 DPI' },
+		{ dpi: 300, label: '300 DPI' }
+	] as const;
 
 	let text = $state('');
 	let editing = $state(false);
@@ -79,6 +102,84 @@
 			/>
 		</div>
 	</div>
+	{#if mode === 'extract'}
+		<div>
+			<h2 class="mb-3 text-sm font-semibold">Extract as</h2>
+			<div
+				class="relative grid grid-cols-2 gap-2 rounded-xl bg-canvas p-1"
+				role="group"
+				aria-label="Extract as"
+			>
+				<span
+					aria-hidden="true"
+					class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1rem)/2)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {output ===
+					'images'
+						? 'translate-x-[calc(100%+0.5rem)]'
+						: ''}"
+				></span>
+				{#each outputs as option (option.id)}<button
+						type="button"
+						aria-pressed={output === option.id}
+						disabled={processing}
+						class="relative z-10 rounded-lg px-2 py-3 text-xs font-semibold motion-safe:transition-colors {output ===
+						option.id
+							? 'text-merge'
+							: 'text-muted hover:text-white'}"
+						onclick={() => (output = option.id)}>{option.label}</button
+					>{/each}
+			</div>
+		</div>
+		{#if output === 'images'}
+			<div
+				transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+				class="space-y-6"
+			>
+				<div>
+					<h2 class="mb-3 text-sm font-semibold">Image format</h2>
+					<div
+						class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
+						role="group"
+						aria-label="Image format"
+					>
+						{#each formats as option (option.id)}<button
+								type="button"
+								aria-pressed={imageFormat === option.id}
+								disabled={processing}
+								class="rounded-lg px-2 py-3 text-xs font-semibold motion-safe:transition-colors {imageFormat ===
+								option.id
+									? 'bg-panel-hover text-merge'
+									: 'text-muted hover:text-white'}"
+								onclick={() => (imageFormat = option.id)}>{option.label}</button
+							>{/each}
+					</div>
+				</div>
+				<div>
+					<div class="mb-3 flex items-center justify-between">
+						<h2 class="text-sm font-semibold">Resolution</h2>
+						<span class="text-xs text-muted"
+							>{dpi === 300 ? 'Print' : dpi === 150 ? 'Standard' : 'Screen'}</span
+						>
+					</div>
+					<div
+						class="grid grid-cols-3 gap-1 rounded-xl bg-canvas p-1"
+						role="group"
+						aria-label="Resolution"
+					>
+						{#each resolutions as option (option.dpi)}<button
+								type="button"
+								aria-pressed={dpi === option.dpi}
+								disabled={processing}
+								class="rounded-lg px-2 py-3 text-xs font-semibold motion-safe:transition-colors {dpi ===
+								option.dpi
+									? 'bg-panel-hover text-merge'
+									: 'text-muted hover:text-white'}"
+								onclick={() => (dpi = option.dpi)}>{option.label}</button
+							>{/each}
+					</div>
+				</div>
+			</div>
+		{/if}
+	{/if}
 	{#if unmatched}<p role="alert" class="text-xs text-convert">
 			Enter pages between 1 and {pages.length}.
 		</p>{:else if nothingLeft}<p role="alert" class="text-xs text-convert">
