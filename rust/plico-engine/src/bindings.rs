@@ -108,11 +108,14 @@ pub fn split_pdf_ranges(
     bounds: &[u32],
     combine: bool,
 ) -> Result<Array, JsValue> {
-    let chunks = bounds.chunks_exact(2);
-    if !chunks.remainder().is_empty() {
+    let (pairs, remainder) = bounds.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(JsValue::from_str("A page range is incomplete."));
     }
-    let ranges = chunks.map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
+    let ranges = pairs
+        .iter()
+        .map(|&[from, to]| (from, to))
+        .collect::<Vec<_>>();
     split_pdf_bytes_with_password(input, password, SplitMode::Ranges(&ranges, combine))
         .map(split_outputs_to_js)
         .map_err(|error| JsValue::from_str(&error))
@@ -140,8 +143,8 @@ pub fn organize_pdfs(
         return Err(JsValue::from_str("The PDF input was incomplete."));
     }
 
-    let chunks = instructions.chunks_exact(3);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = instructions.as_chunks::<3>();
+    if !remainder.is_empty() {
         return Err(JsValue::from_str("A page instruction is incomplete."));
     }
 
@@ -156,6 +159,7 @@ pub fn organize_pdfs(
         })
         .collect::<Vec<_>>();
     let items = chunks
+        .iter()
         .map(|chunk| {
             let turn = chunk[2] as i32;
             if chunk[0] != BLANK_PAGE {

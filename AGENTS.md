@@ -69,7 +69,7 @@ If your change moves any of those numbers, say so.
 
 The raster harness is currently red on 9 files. Do not be surprised by that; it
 is the point. See `ISSUES.md` for which files and why. If your change moves that
-number, say so. (It is also currently comparing nothing; see `ISSUES.md`.)
+number, say so.
 
 The stamp raster harness is red on 7 files, all lopdf load/save losses shared
 with merge, and reports 37 pages where the number drew nothing visible, each
@@ -103,6 +103,10 @@ Never let a reference to a missing object get remapped onto a real one. That is
 what `renumber()` exists for. lopdf's own renumbering leaves such references
 alone while everything moves underneath them, which turned one corpus file's page
 tree into a cycle and lost every page in it.
+
+Never call lopdf's `renumber_objects()`, including to compact ids before
+writing. It reuses the id reserved for missing objects, so dangling references
+start resolving to real ones. `write_document` compacts with `renumber()`.
 
 Set `/Root` before pruning. `prune_objects()` sweeps from the trailer, so pruning
 first deletes the entire document.

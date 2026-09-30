@@ -173,7 +173,7 @@ for (const file of files.slice(0, limit === Infinity ? undefined : limit)) {
 
 	let merged;
 	try {
-		merged = merge_pdfs(input, lengths);
+		merged = merge_pdfs(input, lengths, [], []);
 	} catch {
 		counts.engineRefused++;
 		continue;

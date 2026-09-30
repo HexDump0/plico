@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 68 unit tests against
+Evidence comes from two places. `cargo test` runs 69 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -109,6 +109,23 @@ encrypting. Test: `protects_with_aes_256_and_opens_only_with_a_password`, plus
 a manual check: 38 protected corpus files give poppler the same text as their
 originals and qpdf no new warnings.
 
+### Writing undid the dangling reference fix
+
+`renumber()` keeps a reference to a missing object dangling by pointing it at a
+reserved id past every object. `write_document` then compacted ids with lopdf's
+`renumber_objects()`, which leaves references it has no mapping for alone, so
+the reserved id was reused and the reference resolved to whatever landed there.
+A page whose `/Annots` named a missing object came out of a merge annotated by
+a content stream from the other file. Merge, Split and Organize all wrote
+through this path. The final compaction now uses `renumber()` too, which also
+remaps every trailer reference rather than only `/Root`. Test:
+`a_reference_to_a_missing_object_stays_dangling_when_written`.
+
+The same run found `scripts/raster-compare.mjs` calling `merge_pdfs` without the
+arguments it gained for passwords and bookmarks. Every merge threw, was counted
+as refused, and the harness passed while comparing nothing. Re-measured after
+the fix: the same 9 failures listed below.
+
 ### Smaller ones
 
 `Document::load_mem` applied no decompression limit, so a small file could
@@ -130,22 +147,6 @@ case.
 ---
 
 ## Open, engine correctness
-
-### A dangling reference can still land on a real object when written
-
-`renumber()` points a reference to a missing object at a reserved id so it stays
-dangling. `write_document` then calls lopdf's `renumber_objects()` after
-pruning, which compacts ids and leaves references it has no mapping for alone,
-the exact behaviour `renumber()` exists to avoid. The reserved id is free, so
-compaction moves a real object onto it.
-
-Reproduced 2026-09-30: a page with `/Annots [50 0 R]`, object 50 missing,
-merged with a three page PDF. In the output that annotation reference resolves
-to a content stream from the second file. It parses cleanly. Merge, Split and
-Organize all write through `write_document`. The likely fix is to compact with
-`renumber(&mut document, 1)` instead, which keeps missing references past the
-last object, plus a regression test shaped like the reproduction. Not fixed
-yet.
 
 ### Page numbers and watermarks only draw Western European text
 
@@ -400,14 +401,6 @@ byte-identical. The 9 differences fall into four buckets:
   have byte-identical content streams and resources after merging yet render
   differently in pdf.js. Settling which is right needs a second renderer.
 
-### The merge raster harness currently compares nothing
-
-`merge_pdfs` gained `passwords` and `bookmarks` arguments, and
-`scripts/raster-compare.mjs` still calls it with two. The wasm binding throws
-on the missing arrays, every file is counted as "engine refused the merge", and
-the run reports 0 failures. The 9 file baseline above predates that and has not
-been re-measured. The fix is passing `[], []`.
-
 ### Stamps are checked by rendering, with 7 known failures
 
 `npm run test:raster:stamp` renders every corpus file three ways with pdf.js:
@@ -453,12 +446,6 @@ lopdf's parser. Nobody has checked which is which.
 `svelte/prefer-svelte-reactivity`. These predate this work and sit in dialog and
 motion code where a naive fix risks changing behaviour, so they are listed rather
 than patched. `npm run lint` fails until they are dealt with.
-
-### Two clippy warnings from a newer toolchain
-
-`cargo clippy --all-targets` flags `chunks_exact` with a constant size in
-`split_pdf_ranges` and `organize_pdfs` in `bindings.rs`. The code predates the
-lint; it was clean on the toolchain that wrote it.
 
 ### Worker lifecycle
 

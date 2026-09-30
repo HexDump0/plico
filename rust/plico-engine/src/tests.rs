@@ -2155,3 +2155,52 @@ fn refuses_to_stamp_a_page_tree_listing_a_page_it_cannot_read() {
     assert!(error.contains("damaged"), "{error}");
     assert!(add_watermark_bytes(&broken, "", watermark_options("DRAFT")).is_err());
 }
+
+/// A page whose /Annots names object 50, which is never written.
+fn dangling_annotation_pdf() -> Vec<u8> {
+    let mut page = square_page(200);
+    page.set("Annots", vec![Object::Reference((50, 0))]);
+    pdf_with_pages(&[("first", page)], dictionary! {})
+}
+
+#[test]
+fn a_reference_to_a_missing_object_stays_dangling_when_written() {
+    let broken = dangling_annotation_pdf();
+    let other = numbered_pdf(3);
+    let outputs = [
+        merge_pdf_bytes(&[&broken, &other]).unwrap(),
+        split_pdf_bytes(&broken, SplitMode::Every(1))
+            .unwrap()
+            .remove(0),
+        organize_pdfs_bytes(&[&broken, &other], &[(1, 1, 0), (0, 1, 0)]).unwrap(),
+    ];
+    for output in outputs {
+        let document = Document::load_mem(&output).unwrap();
+        let annotated = document
+            .get_pages()
+            .into_values()
+            .find(|page| document.get_dictionary(*page).unwrap().has(b"Annots"))
+            .unwrap();
+        let annotation = document
+            .get_dictionary(annotated)
+            .and_then(|page| page.get(b"Annots"))
+            .and_then(Object::as_array)
+            .unwrap()[0]
+            .as_reference()
+            .unwrap();
+        assert!(
+            document.get_object(annotation).is_err(),
+            "the missing annotation now resolves to {:?}",
+            document.get_object(annotation)
+        );
+        let producer = document
+            .trailer
+            .get(b"Info")
+            .and_then(Object::as_reference)
+            .and_then(|info| document.get_dictionary(info))
+            .and_then(|info| info.get(b"Producer"))
+            .and_then(Object::as_str)
+            .unwrap();
+        assert_eq!(producer, b"Plico");
+    }
+}

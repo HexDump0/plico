@@ -718,11 +718,7 @@ fn renumber(document: &mut Document, start: u32) -> BTreeMap<ObjectId, ObjectId>
         .map(|(id, object)| (moved[&id], object))
         .collect();
 
-    if let Ok(root) = document.trailer.get(b"Root").and_then(Object::as_reference)
-        && let Some(id) = moved.get(&root)
-    {
-        document.trailer.set("Root", *id);
-    }
+    remap_dictionary(&mut document.trailer, &moved, unresolved);
     document.max_id = start + moved.len() as u32;
 
     moved
@@ -862,7 +858,10 @@ fn write_document(mut document: Document) -> Result<Vec<u8>, String> {
     // Collects each input's superseded catalog and page tree nodes, along with
     // the outline items and name trees that only those referenced.
     document.prune_objects();
-    document.renumber_objects();
+    // Compacts the ids pruning left gaps in. Not lopdf's `renumber_objects()`:
+    // it would slide a real object onto the id `renumber()` reserved for
+    // references to missing objects, and those would then resolve to it.
+    renumber(&mut document, 1);
     document.compress();
 
     let mut bytes = Vec::new();
