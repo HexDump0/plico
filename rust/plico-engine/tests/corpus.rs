@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 
 use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 use plico_engine::{
-    CompressOptions, SplitMode, compress_pdf_bytes, merge_pdf_bytes, split_pdf_bytes,
-    split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, ProtectOptions, SplitMode, compress_pdf_bytes, merge_pdf_bytes,
+    protect_pdf_bytes, split_pdf_bytes, split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
@@ -503,4 +503,89 @@ fn unlocks_protected_documents_with_their_passwords() {
         println!("  {failure}");
     }
     assert!(failures.is_empty(), "unlocking failed on real PDFs");
+}
+
+/// Protects every loadable corpus file with a password and restrictions, then
+/// requires it to reopen only with that password, with every page's content
+/// unchanged, and to unlock back to the same pages.
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn protects_every_loadable_document() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+
+    let mut checked = 0usize;
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.trailer.get(b"Encrypt").is_ok() || source.get_pages().is_empty() {
+            continue;
+        }
+        let expected = source
+            .get_pages()
+            .into_values()
+            .map(|id| source.get_page_content(id))
+            .collect::<Vec<_>>();
+        drop(source);
+
+        let locked = match protect_pdf_bytes(
+            &bytes,
+            "",
+            ProtectOptions {
+                user_password: "open sesame",
+                owner_password: "",
+                allow_printing: false,
+                allow_copying: true,
+                allow_editing: false,
+            },
+        ) {
+            Ok(locked) => locked,
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        if Document::load_mem(&locked).is_ok_and(|document| !document.get_pages().is_empty()) {
+            failures.push(format!("{name}: opened without its password"));
+            continue;
+        }
+        let reopened =
+            Document::load_mem_with_options(&locked, LoadOptions::with_password("open sesame"));
+        let pages = reopened.map(|document| {
+            document
+                .get_pages()
+                .into_values()
+                .map(|id| document.get_page_content(id))
+                .collect::<Vec<_>>()
+        });
+        if pages.as_ref().ok() != Some(&expected) {
+            failures.push(format!("{name}: pages changed once protected"));
+            continue;
+        }
+        let unlocked = unlock_pdf_bytes(&locked, "open sesame")
+            .ok()
+            .and_then(|bytes| Document::load_mem(&bytes).ok())
+            .map(|document| {
+                document
+                    .get_pages()
+                    .into_values()
+                    .map(|id| document.get_page_content(id))
+                    .collect::<Vec<_>>()
+            });
+        if unlocked.as_ref() != Some(&expected) {
+            failures.push(format!("{name}: pages changed after unlocking"));
+            continue;
+        }
+        checked += 1;
+    }
+
+    println!("\nprotect corpus: {checked} files protected, reopened and unlocked");
+    for failure in failures.iter().take(15) {
+        println!("  {failure}");
+    }
+    assert!(failures.is_empty(), "protecting failed on real PDFs");
 }

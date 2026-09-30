@@ -854,20 +854,6 @@ pub(crate) fn parse_version(version: &str) -> (u32, u32) {
     (major.parse().unwrap_or(1), minor.parse().unwrap_or(0))
 }
 
-/// Writes `input` back without its encryption and otherwise as it was: no page
-/// tree rebuild and no renumbering, so references stay exactly where they
-/// point. Only the object stream containers the load already unpacked, and
-/// anything else unreachable, are dropped.
-pub fn unlock_pdf_bytes(input: &[u8], password: &str) -> Result<Vec<u8>, String> {
-    let mut document = load_document(input, 1, password)?;
-    document.prune_objects();
-    let mut bytes = Vec::new();
-    document
-        .save_to(&mut bytes)
-        .map_err(|error| format!("The PDF could not be created: {error}"))?;
-    Ok(bytes)
-}
-
 fn write_document(mut document: Document) -> Result<Vec<u8>, String> {
     // Reachability sweep from the trailer, so it has to run after /Root is set.
     // Collects each input's superseded catalog and page tree nodes, along with

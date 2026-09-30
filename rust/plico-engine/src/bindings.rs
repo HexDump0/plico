@@ -2,9 +2,10 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, ImagePdfOptions, OrganizeItem, PageOrientation, SplitMode,
-    compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes_with_options,
-    organize_pdf_items, split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, ImagePdfOptions, OrganizeItem, PageOrientation, ProtectOptions, Protection,
+    SplitMode, compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes_with_options,
+    organize_pdf_items, protect_pdf_bytes, protection_of, split_pdf_bytes_with_password,
+    unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -202,6 +203,43 @@ pub fn compress_pdf(
             max_image_dimension,
             remove_metadata,
             remove_thumbnails,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
+/// 0 unprotected, 1 restricted but opens without a password, 2 needs a password.
+#[wasm_bindgen]
+pub fn pdf_protection(input: &[u8]) -> Result<u8, JsValue> {
+    protection_of(input)
+        .map(|protection| match protection {
+            Protection::None => 0,
+            Protection::Restricted => 1,
+            Protection::Password => 2,
+        })
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn protect_pdf(
+    input: &[u8],
+    password: &str,
+    user_password: &str,
+    owner_password: &str,
+    allow_printing: bool,
+    allow_copying: bool,
+    allow_editing: bool,
+) -> Result<Vec<u8>, JsValue> {
+    protect_pdf_bytes(
+        input,
+        password,
+        ProtectOptions {
+            user_password,
+            owner_password,
+            allow_printing,
+            allow_copying,
+            allow_editing,
         },
     )
     .map_err(|error| JsValue::from_str(&error))

@@ -99,6 +99,16 @@ algorithm 7) and hands lopdf that instead. Revisions 5 and 6 were already right.
 Tests: `accepts_the_owner_password_for_split_and_organize`,
 `accepts_the_owner_password_of_a_revision_2_pdf`.
 
+### lopdf's AES-256 files were unreadable in poppler
+
+`EncryptionVersion::V5` writes an `/Encrypt` dictionary without `/Length 256`
+and a crypt filter without `/Length 32`. pdf.js and qpdf infer them; poppler
+falls back to a short key and every stream decrypts to noise, with lopdf itself
+reading the file back perfectly. `protect_pdf_bytes` adds both entries after
+encrypting. Test: `protects_with_aes_256_and_opens_only_with_a_password`, plus
+a manual check: 38 protected corpus files give poppler the same text as their
+originals and qpdf no new warnings.
+
 ### Smaller ones
 
 `Document::load_mem` applied no decompression limit, so a small file could
@@ -175,6 +185,10 @@ encrypted files into empty documents. Protected PDFs are unlocked by the Rust
 engine (`unlock_pdf`) before they reach it.
 
 ### The output has no `/ID`
+
+Protected output does get one: `protect_pdf_bytes` writes a random `/ID`,
+since readers expect it on encrypted files. Everything else below still
+applies to the other operations.
 
 `/ID` is strongly recommended in PDF 1.x and required in 2.0. Adding one means
 either randomness or a content hash, and neither is in the dependency tree

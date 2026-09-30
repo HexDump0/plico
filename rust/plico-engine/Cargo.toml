@@ -13,6 +13,8 @@ jpeg-encoder = "0.7"
 js-sys = "0.3"
 lopdf = { version = "0.44.0", default-features = false, features = ["wasm_js"] }
 md5 = { package = "md-5", version = "0.11" }
+# Already in the tree through lopdf; wasm_js makes it work in the browser.
+getrandom = { version = "0.4", features = ["wasm_js"] }
 png = "0.18"
 wasm-bindgen = "0.2"
 zune-core = "0.5"

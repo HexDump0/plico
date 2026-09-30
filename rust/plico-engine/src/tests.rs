@@ -14,6 +14,7 @@ use super::{
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
+use crate::{ProtectOptions, Protection, protect_pdf_bytes, protection_of};
 
 fn image_pdf_options() -> ImagePdfOptions {
     ImagePdfOptions {
@@ -1326,4 +1327,122 @@ fn forced_orientation_applies_to_every_image() {
             assert_eq!(media_box(&document, page)[2..], expected);
         }
     }
+}
+
+fn protect(bytes: &[u8], user: &str, owner: &str, print: bool, copy: bool, edit: bool) -> Vec<u8> {
+    protect_pdf_bytes(
+        bytes,
+        "",
+        ProtectOptions {
+            user_password: user,
+            owner_password: owner,
+            allow_printing: print,
+            allow_copying: copy,
+            allow_editing: edit,
+        },
+    )
+    .unwrap()
+}
+
+fn encrypt_entry(bytes: &[u8], key: &[u8]) -> i64 {
+    let document = Document::load_mem(bytes).unwrap();
+    document
+        .get_encrypted()
+        .unwrap()
+        .get(key)
+        .and_then(Object::as_i64)
+        .unwrap()
+}
+
+#[test]
+fn protects_with_aes_256_and_opens_only_with_a_password() {
+    let source = numbered_pdf(3);
+    let locked = protect(&source, "open", "owner", true, true, true);
+
+    assert_eq!(encrypt_entry(&locked, b"V"), 5);
+    assert_eq!(encrypt_entry(&locked, b"R"), 6);
+    // poppler misreads AES-256 files without these (see security.rs).
+    assert_eq!(encrypt_entry(&locked, b"Length"), 256);
+    assert_eq!(protection_of(&locked).unwrap(), Protection::Password);
+    assert!(split_pdf_bytes(&locked, SplitMode::Every(10)).is_err());
+    for password in ["open", "owner"] {
+        let parts = split_pdf_bytes_with_password(&locked, password, SplitMode::Every(10)).unwrap();
+        assert_eq!(page_contents(&parts[0]), ["1", "2", "3"]);
+    }
+}
+
+#[test]
+fn records_the_permissions_it_was_asked_for() {
+    let locked = protect(&numbered_pdf(1), "open", "", false, true, false);
+    let bits = encrypt_entry(&locked, b"P") as u32;
+    let has = |flag: Permissions| bits & flag.bits() as u32 != 0;
+    assert!(!has(Permissions::PRINTABLE));
+    assert!(has(Permissions::COPYABLE));
+    assert!(!has(Permissions::MODIFIABLE));
+    assert!(has(Permissions::COPYABLE_FOR_ACCESSIBILITY));
+}
+
+#[test]
+fn restrictions_alone_open_without_a_password() {
+    let restricted = protect(&numbered_pdf(2), "", "", false, false, false);
+    assert_eq!(protection_of(&restricted).unwrap(), Protection::Restricted);
+    let parts = split_pdf_bytes(&restricted, SplitMode::Every(10)).unwrap();
+    assert_eq!(page_contents(&parts[0]), ["1", "2"]);
+}
+
+#[test]
+fn unlocking_round_trips_and_refuses_unprotected_files() {
+    let source = numbered_pdf(3);
+    assert_eq!(protection_of(&source).unwrap(), Protection::None);
+    assert!(unlock_pdf_bytes(&source, "").is_err());
+
+    let locked = protect(&source, "open", "", true, true, true);
+    let unlocked = unlock_pdf_bytes(&locked, "open").unwrap();
+    assert_eq!(protection_of(&unlocked).unwrap(), Protection::None);
+    assert_eq!(page_contents(&unlocked), ["1", "2", "3"]);
+
+    let restricted = protect(&source, "", "", false, true, true);
+    let freed = unlock_pdf_bytes(&restricted, "").unwrap();
+    assert_eq!(protection_of(&freed).unwrap(), Protection::None);
+}
+
+#[test]
+fn reprotecting_changes_the_password() {
+    let first = protect(&numbered_pdf(1), "old", "", true, true, true);
+    let second = protect_pdf_bytes(
+        &first,
+        "old",
+        ProtectOptions {
+            user_password: "new",
+            owner_password: "",
+            allow_printing: true,
+            allow_copying: true,
+            allow_editing: true,
+        },
+    )
+    .unwrap();
+    assert!(split_pdf_bytes_with_password(&second, "old", SplitMode::Every(1)).is_err());
+    let parts = split_pdf_bytes_with_password(&second, "new", SplitMode::Every(1)).unwrap();
+    assert_eq!(page_contents(&parts[0]), ["1"]);
+}
+
+#[test]
+fn protect_refuses_options_that_protect_nothing() {
+    let source = numbered_pdf(1);
+    let attempt = |user: &str, owner: &str, print: bool| {
+        protect_pdf_bytes(
+            &source,
+            "",
+            ProtectOptions {
+                user_password: user,
+                owner_password: owner,
+                allow_printing: print,
+                allow_copying: true,
+                allow_editing: true,
+            },
+        )
+    };
+    assert!(attempt("", "", true).is_err());
+    assert!(attempt("same", "same", false).is_err());
+    assert!(attempt(&"x".repeat(128), "", true).is_err());
 }

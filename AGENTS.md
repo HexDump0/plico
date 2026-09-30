@@ -15,6 +15,7 @@ rust/plico-engine/src/documents.rs                          page selection, asse
 rust/plico-engine/src/compression.rs                        compression pipeline and stream packing
 rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
+rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
 rust/plico-engine/src/tests.rs                              generated-fixture unit tests
 rust/plico-engine/tests/corpus.rs                           structural checks over a real PDF corpus
