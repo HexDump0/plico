@@ -35,13 +35,26 @@ pub(crate) const MAX_DECOMPRESSED_STREAM: usize = 256 * 1024 * 1024;
 const MAX_PAGE_TREE_DEPTH: usize = 256;
 
 pub fn merge_pdf_bytes(files: &[&[u8]]) -> Result<Vec<u8>, String> {
+    merge_pdf_bytes_with_passwords(files, &[])
+}
+
+/// `passwords` pairs with `files` by index; a missing or empty entry means the
+/// file opens without one.
+pub fn merge_pdf_bytes_with_passwords(
+    files: &[&[u8]],
+    passwords: &[&str],
+) -> Result<Vec<u8>, String> {
     if files.len() < 2 {
         return Err("Choose at least two PDFs to merge.".into());
     }
 
     let mut documents = Vec::with_capacity(files.len());
     for (index, bytes) in files.iter().enumerate() {
-        documents.push(load_document(bytes, index + 1)?);
+        documents.push(load_document(
+            bytes,
+            index + 1,
+            password_at(passwords, index),
+        )?);
     }
 
     write_document(merge_documents(documents)?)
@@ -53,7 +66,15 @@ pub enum SplitMode<'a> {
 }
 
 pub fn split_pdf_bytes(input: &[u8], mode: SplitMode<'_>) -> Result<Vec<Vec<u8>>, String> {
-    let document = load_document(input, 1)?;
+    split_pdf_bytes_with_password(input, "", mode)
+}
+
+pub fn split_pdf_bytes_with_password(
+    input: &[u8],
+    password: &str,
+    mode: SplitMode<'_>,
+) -> Result<Vec<Vec<u8>>, String> {
+    let document = load_document(input, 1, password)?;
     let page_count = document.get_pages().len() as u32;
 
     let groups = match mode {
@@ -124,6 +145,14 @@ pub fn organize_pdfs_bytes(
     files: &[&[u8]],
     pages: &[(usize, u32, i32)],
 ) -> Result<Vec<u8>, String> {
+    organize_pdfs_bytes_with_passwords(files, &[], pages)
+}
+
+pub fn organize_pdfs_bytes_with_passwords(
+    files: &[&[u8]],
+    passwords: &[&str],
+    pages: &[(usize, u32, i32)],
+) -> Result<Vec<u8>, String> {
     if files.is_empty() {
         return Err("Choose at least one PDF to organize.".into());
     }
@@ -134,7 +163,7 @@ pub fn organize_pdfs_bytes(
     let mut documents = files
         .iter()
         .enumerate()
-        .map(|(index, bytes)| load_document(bytes, index + 1))
+        .map(|(index, bytes)| load_document(bytes, index + 1, password_at(passwords, index)))
         .collect::<Result<Vec<_>, _>>()?;
     let available = documents
         .iter()
@@ -202,24 +231,57 @@ pub fn organize_pdfs_bytes(
 /// `image_quality` trades image fidelity for size: 0 keeps every image byte.
 /// `max_image_dimension` downscales images wider or taller than that many
 /// pixels, preserving aspect; 0 keeps every size.
-pub(crate) fn load_document(bytes: &[u8], position: usize) -> Result<Document, String> {
-    let options = LoadOptions {
-        max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM),
-        ..Default::default()
-    };
-    let mut document = Document::load_mem_with_options(bytes, options)
-        .map_err(|error| format!("PDF {position} could not be read: {error}"))?;
+pub(crate) fn password_at<'a>(passwords: &[&'a str], index: usize) -> &'a str {
+    passwords.get(index).copied().unwrap_or("")
+}
 
-    // Most "encrypted" PDFs only restrict permissions and open under an empty
-    // user password, which is what viewers do silently. Only a document that
-    // fails that is genuinely password protected.
-    //
-    // This has to happen before any renumbering: below /V 5 the encryption key
-    // is derived from each object's number and generation.
-    if document.is_encrypted() {
-        document.decrypt("").map_err(|_| {
-            format!("PDF {position} is password protected. Unlock it before continuing.")
-        })?;
+/// Decryption happens inside the load, before any renumbering: below /V 5 the
+/// encryption key is derived from each object's number and generation. lopdf
+/// tries the empty user password first, because most "encrypted" PDFs only
+/// restrict permissions and viewers open them silently. A successful load drops
+/// /Encrypt, so everything written from it is unlocked.
+///
+/// A document lopdf cannot decrypt loads as nothing but its /Encrypt
+/// dictionary, so there is no decrypting after the fact: a password has to go
+/// into the load itself, which means loading a protected file twice.
+pub(crate) fn load_document(
+    bytes: &[u8],
+    position: usize,
+    password: &str,
+) -> Result<Document, String> {
+    let load = |password: Option<String>| {
+        Document::load_mem_with_options(
+            bytes,
+            LoadOptions {
+                max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM),
+                password,
+                ..Default::default()
+            },
+        )
+    };
+    let unreadable = |error| format!("PDF {position} could not be read: {error}");
+    // pdf.js verifies passwords before they get here, so a failure also covers
+    // encryption lopdf cannot handle; this wording is true either way.
+    let rejected = || format!("PDF {position} could not be unlocked with that password.");
+
+    let mut document = load(None).map_err(unreadable)?;
+    // A successful load removes /Encrypt from the trailer. One that is still
+    // there but not a reference, which `is_encrypted` misses, means lopdf
+    // decrypted nothing (pdf.js corpus: issue6010_1.pdf).
+    if document.is_encrypted() || document.trailer.get(b"Encrypt").is_ok() {
+        if password.is_empty() {
+            return Err(format!(
+                "PDF {position} is password protected. Unlock it before continuing."
+            ));
+        }
+        document =
+            load(Some(user_password_for(&document, password))).map_err(|error| match error {
+                lopdf::Error::InvalidPassword | lopdf::Error::Decryption(_) => rejected(),
+                error => unreadable(error),
+            })?;
+        if document.is_encrypted() || document.trailer.get(b"Encrypt").is_ok() {
+            return Err(rejected());
+        }
     }
 
     if document.get_pages().is_empty() {
@@ -492,9 +554,121 @@ fn remap_dictionary(
 
 /// Orders (major, minor) properly. Comparing the strings happens to work across
 /// today's versions but would rank "1.10" below "1.5".
+/// lopdf derives the file key from whatever password it is given as if it were
+/// the user password. For revisions 2 to 4 an owner password therefore
+/// "authenticates" and then decrypts every object into garbage that still
+/// parses. Hand lopdf the user password instead, recovered from the owner
+/// password (ISO 32000-1, 7.6.3.4, algorithm 7). Revisions 5 and 6 derive the
+/// key from either password correctly.
+///
+/// Passwords below revision 5 are PDFDocEncoding, which matches Latin-1 for
+/// everything but a few punctuation bytes. A byte that does not survive the
+/// round trip fails authentication in the load; it cannot produce noise.
+fn user_password_for(document: &Document, password: &str) -> String {
+    let revision = document
+        .get_encrypted()
+        .and_then(|dict| dict.get(b"R"))
+        .and_then(Object::as_i64)
+        .unwrap_or(0);
+    if revision >= 5
+        || document.authenticate_user_password(password).is_ok()
+        || document.authenticate_owner_password(password).is_err()
+    {
+        return password.to_owned();
+    }
+    let owner = password
+        .chars()
+        .filter_map(|char| u8::try_from(u32::from(char)).ok())
+        .collect::<Vec<_>>();
+    let Some(padded) = recover_user_password(document, &owner, revision) else {
+        return password.to_owned();
+    };
+    let length = (0..=32)
+        .find(|&length| padded[length..] == PASSWORD_PADDING[..32 - length])
+        .unwrap_or(32);
+    padded[..length]
+        .iter()
+        .map(|&byte| char::from(byte))
+        .collect()
+}
+
+const PASSWORD_PADDING: [u8; 32] = [
+    0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
+    0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
+];
+
+fn recover_user_password(document: &Document, owner: &[u8], revision: i64) -> Option<Vec<u8>> {
+    use md5::{Digest, Md5};
+
+    let encrypt = document.get_encrypted().ok()?;
+    let owner_value = encrypt.get(b"O").ok()?.as_str().ok()?.get(..32)?;
+    let key_length = if revision == 2 {
+        5
+    } else {
+        let bits = encrypt
+            .get(b"Length")
+            .and_then(Object::as_i64)
+            .unwrap_or(40);
+        (bits as usize / 8).clamp(5, 16)
+    };
+
+    let used = owner.len().min(32);
+    let mut hasher = Md5::new();
+    hasher.update(&owner[..used]);
+    hasher.update(&PASSWORD_PADDING[..32 - used]);
+    let mut hash = hasher.finalize().to_vec();
+    if revision >= 3 {
+        for _ in 0..50 {
+            hash = Md5::digest(&hash[..key_length]).to_vec();
+        }
+    }
+    let key = &hash[..key_length];
+
+    let mut user = owner_value.to_vec();
+    if revision == 2 {
+        rc4(key, &mut user);
+    } else {
+        for round in (0..=19u8).rev() {
+            let round_key = key.iter().map(|byte| byte ^ round).collect::<Vec<_>>();
+            rc4(&round_key, &mut user);
+        }
+    }
+    Some(user)
+}
+
+fn rc4(key: &[u8], data: &mut [u8]) {
+    let mut state: [u8; 256] = std::array::from_fn(|index| index as u8);
+    let mut j = 0u8;
+    for i in 0..256 {
+        j = j.wrapping_add(state[i]).wrapping_add(key[i % key.len()]);
+        state.swap(i, j as usize);
+    }
+    let (mut i, mut j) = (0u8, 0u8);
+    for byte in data {
+        i = i.wrapping_add(1);
+        j = j.wrapping_add(state[i as usize]);
+        state.swap(i as usize, j as usize);
+        *byte ^= state[state[i as usize].wrapping_add(state[j as usize]) as usize];
+    }
+}
+
 pub(crate) fn parse_version(version: &str) -> (u32, u32) {
     let (major, minor) = version.split_once('.').unwrap_or((version, "0"));
     (major.parse().unwrap_or(1), minor.parse().unwrap_or(0))
+}
+
+/// Writes `input` back without its encryption and otherwise as it was: no page
+/// tree rebuild and no renumbering, so references stay exactly where they
+/// point. Only the object stream containers the load already unpacked, and
+/// anything else unreachable, are dropped.
+pub fn unlock_pdf_bytes(input: &[u8], password: &str) -> Result<Vec<u8>, String> {
+    let mut document = load_document(input, 1, password)?;
+    document.prune_objects();
+    let mut bytes = Vec::new();
+    document
+        .save_to(&mut bytes)
+        .map_err(|error| format!("The PDF could not be created: {error}"))?;
+    Ok(bytes)
 }
 
 fn write_document(mut document: Document) -> Result<Vec<u8>, String> {

@@ -20,9 +20,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lopdf::{Document, Object, Stream, dictionary};
+use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 use plico_engine::{
     CompressOptions, SplitMode, compress_pdf_bytes, merge_pdf_bytes, split_pdf_bytes,
+    split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
@@ -397,4 +398,109 @@ fn compresses_every_loadable_document() {
         println!("  {failure}");
     }
     assert!(failures.is_empty(), "compress failed on real PDFs");
+}
+
+/// The protected files in pdf.js's corpus, with the passwords its own test
+/// manifest supplies. They cover RC4 and AES, revisions 2 to 6, and passwords
+/// that need PDFDocEncoding or SASLprep.
+const PROTECTED: [(&str, &str); 7] = [
+    ("issue15893_reduced.pdf", "test"),
+    ("issue3371.pdf", "ELXRTQWS"),
+    ("issue6010_1.pdf", "abc"),
+    ("issue6010_2.pdf", "æøå"),
+    ("bug1782186.pdf", "Hello"),
+    ("issue21579.pdf", "pässwört"),
+    ("saslprep-r6.pdf", "SªSL\u{ad}prep"),
+];
+
+/// Every page must come out unlocked and carry exactly the content lopdf reads
+/// from the source when given the same password. A wrong password must fail
+/// rather than decrypt into noise.
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn unlocks_protected_documents_with_their_passwords() {
+    let root = std::env::var("PLICO_CORPUS").unwrap_or_else(|_| DEFAULT_CORPUS.to_owned());
+    let mut checked = 0usize;
+    let mut unsupported = Vec::new();
+    let mut failures = Vec::new();
+    for (name, password) in PROTECTED {
+        let Ok(bytes) = fs::read(Path::new(&root).join(name)) else {
+            continue;
+        };
+        let options = LoadOptions::with_password(password);
+        let Ok(source) = Document::load_mem_with_options(&bytes, options) else {
+            // Encryption lopdf cannot handle has to be refused, never written
+            // out as whatever a failed decrypt left behind.
+            if split_pdf_bytes_with_password(&bytes, password, SplitMode::Every(u32::MAX)).is_ok() {
+                failures.push(format!(
+                    "{name}: lopdf cannot decrypt it, yet it produced output"
+                ));
+            } else {
+                unsupported.push(name);
+            }
+            continue;
+        };
+        let expected = source
+            .get_pages()
+            .into_values()
+            .map(|id| source.get_page_content(id))
+            .collect::<Vec<_>>();
+
+        if split_pdf_bytes(&bytes, SplitMode::Every(u32::MAX)).is_ok() {
+            failures.push(format!("{name}: opened without its password"));
+            continue;
+        }
+        if split_pdf_bytes_with_password(&bytes, "wrong", SplitMode::Every(u32::MAX)).is_ok() {
+            failures.push(format!("{name}: opened with a wrong password"));
+            continue;
+        }
+        let outputs =
+            match split_pdf_bytes_with_password(&bytes, password, SplitMode::Every(u32::MAX)) {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    failures.push(format!("{name}: {error}"));
+                    continue;
+                }
+            };
+        let result = Document::load_mem(&outputs[0]).unwrap();
+        if result.is_encrypted() {
+            failures.push(format!("{name}: output is still encrypted"));
+            continue;
+        }
+        let actual = result
+            .get_pages()
+            .into_values()
+            .map(|id| result.get_page_content(id))
+            .collect::<Vec<_>>();
+        if actual != expected {
+            failures.push(format!(
+                "{name}: page content differs from the decrypted source"
+            ));
+            continue;
+        }
+        let unlocked = unlock_pdf_bytes(&bytes, password)
+            .ok()
+            .and_then(|bytes| Document::load_mem(&bytes).ok());
+        let unlocked_pages = unlocked.map(|document| {
+            document
+                .get_pages()
+                .into_values()
+                .map(|id| document.get_page_content(id))
+                .collect::<Vec<_>>()
+        });
+        if unlocked_pages.as_ref() != Some(&expected) {
+            failures.push(format!("{name}: unlocking changed or lost page content"));
+            continue;
+        }
+        checked += 1;
+    }
+
+    println!(
+        "\nprotected corpus: {checked} of {} unlocked, refused as unsupported: {unsupported:?}",
+        PROTECTED.len()
+    );
+    for failure in &failures {
+        println!("  {failure}");
+    }
+    assert!(failures.is_empty(), "unlocking failed on real PDFs");
 }

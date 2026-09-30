@@ -417,6 +417,7 @@ dependencies = [
  "jpeg-encoder",
  "js-sys",
  "lopdf",
+ "md-5",
  "png",
  "wasm-bindgen",
  "zune-core",

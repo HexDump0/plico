@@ -30,13 +30,27 @@ export type PdfImageOptions = {
 };
 
 export type PdfWorkerRequest =
-	| { id: number; operation: 'merge'; files: ArrayBuffer[] }
-	| { id: number; operation: 'split'; files: ArrayBuffer[]; options: SplitOptions }
-	| { id: number; operation: 'organize'; files: ArrayBuffer[]; pages: OrganizeInstruction[] }
+	| { id: number; operation: 'merge'; files: ArrayBuffer[]; passwords: string[] }
+	| { id: number; operation: 'unlock'; files: ArrayBuffer[]; passwords: string[] }
+	| {
+			id: number;
+			operation: 'split';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: SplitOptions;
+	  }
+	| {
+			id: number;
+			operation: 'organize';
+			files: ArrayBuffer[];
+			passwords: string[];
+			pages: OrganizeInstruction[];
+	  }
 	| {
 			id: number;
 			operation: 'compress';
 			files: ArrayBuffer[];
+			passwords: string[];
 			names: string[];
 			options: CompressOptions;
 	  }
@@ -50,6 +64,7 @@ export type PdfWorkerRequest =
 			id: number;
 			operation: 'pdf-to-images';
 			files: ArrayBuffer[];
+			passwords: string[];
 			options: PdfImageOptions;
 	  };
 

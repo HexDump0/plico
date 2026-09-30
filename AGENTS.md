@@ -76,6 +76,10 @@ failure mode this codebase has.
 Decrypt before renumbering. Below `/V 5` the encryption key is derived from each
 object's number and generation, so moving objects first produces garbage.
 
+Never hand lopdf an owner password below revision 5. It derives the key as if it
+were the user password and decrypts into noise that parses cleanly. Recover the
+user password first; `load_document` does.
+
 Read page order and inherited attributes before renumbering. Both need the
 input's own page tree intact.
 

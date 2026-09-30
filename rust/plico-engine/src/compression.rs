@@ -19,7 +19,15 @@ pub struct CompressOptions {
 }
 
 pub fn compress_pdf_bytes(input: &[u8], options: CompressOptions) -> Result<Vec<u8>, String> {
-    let mut document = load_document(input, 1)?;
+    compress_pdf_bytes_with_password(input, "", options)
+}
+
+pub fn compress_pdf_bytes_with_password(
+    input: &[u8],
+    password: &str,
+    options: CompressOptions,
+) -> Result<Vec<u8>, String> {
+    let mut document = load_document(input, 1, password)?;
 
     let removed_metadata = options.remove_metadata && strip_metadata(&mut document);
     let removed_thumbnails = options.remove_thumbnails && strip_thumbnails(&mut document);
@@ -53,8 +61,11 @@ pub fn compress_pdf_bytes(input: &[u8], options: CompressOptions) -> Result<Vec<
     let output = write_compressed(document)?;
     // A rewrite that only repacks bytes should not make a file larger. When a
     // user explicitly removes metadata or thumbnails, keep that removal even
-    // if the writer's overhead exceeds the bytes it saved.
-    if output.len() < input.len() || removed_metadata || removed_thumbnails {
+    // if the writer's overhead exceeds the bytes it saved. An input that needed
+    // a password is never handed back as-is: the original is still locked,
+    // and every other tool returns an unlocked file.
+    if output.len() < input.len() || removed_metadata || removed_thumbnails || !password.is_empty()
+    {
         Ok(output)
     } else {
         Ok(input.to_vec())

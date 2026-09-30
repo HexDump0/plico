@@ -306,7 +306,7 @@
 				pointerId >= 0 ||
 				activePointer >= 0 ||
 				(event.pointerType === 'mouse' && event.button !== 0) ||
-				(event.target instanceof Element && event.target.closest('button'))
+				(event.target instanceof Element && event.target.closest('button, input'))
 			)
 				return;
 			pointerId = event.pointerId;

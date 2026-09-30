@@ -7,7 +7,8 @@ import init, {
 	merge_pdfs,
 	organize_pdfs,
 	split_pdf_every,
-	split_pdf_ranges
+	split_pdf_ranges,
+	unlock_pdf
 } from './wasm/plico_engine.js';
 import type { PdfImageOptions, PdfOutput, PdfWorkerRequest, PdfWorkerResponse } from './types';
 
@@ -102,6 +103,7 @@ class WorkerFilterFactory {
 
 async function exportPdfImages(
 	input: ArrayBuffer,
+	password: string,
 	options: PdfImageOptions
 ): Promise<PackedOutput> {
 	if (!Number.isFinite(options.dpi) || options.dpi < 36 || options.dpi > 300) {
@@ -122,6 +124,7 @@ async function exportPdfImages(
 	pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
 	const task = pdfjs.getDocument({
 		data: new Uint8Array(input),
+		password: password || undefined,
 		disableFontFace: true,
 		cMapUrl: '/pdfjs/cmaps/',
 		cMapPacked: true,
@@ -210,7 +213,17 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 
 		if (request.operation === 'pdf-to-images') {
 			if (request.files.length !== 1) throw new Error('Choose one PDF to convert.');
-			postOutput(id, await exportPdfImages(request.files[0], request.options));
+			postOutput(
+				id,
+				await exportPdfImages(request.files[0], request.passwords[0] ?? '', request.options)
+			);
+			return;
+		}
+		if (request.operation === 'unlock') {
+			postOutput(id, {
+				format: 'pdf',
+				bytes: unlock_pdf(new Uint8Array(request.files[0]), request.passwords[0] ?? '')
+			});
 			return;
 		}
 		if (request.operation === 'merge') {
@@ -223,7 +236,7 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				offset += file.byteLength;
 			}
 
-			const output = transferable(merge_pdfs(input, lengths));
+			const output = transferable(merge_pdfs(input, lengths, request.passwords));
 			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf' };
 			self.postMessage(response, { transfer: [output] });
 			return;
@@ -232,15 +245,17 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 		if (request.operation === 'split') {
 			if (request.files.length !== 1) throw new Error('Choose one PDF to split.');
 			const input = new Uint8Array(request.files[0]);
+			const password = request.passwords[0] ?? '';
 			const { options } = request;
 			const parts =
 				options.mode === 'ranges'
 					? (split_pdf_ranges(
 							input,
+							password,
 							Uint32Array.from(options.ranges.flatMap(({ from, to }) => [from, to])),
 							options.combine
 						) as Uint8Array[])
-					: (split_pdf_every(input, options.interval) as Uint8Array[]);
+					: (split_pdf_every(input, password, options.interval) as Uint8Array[]);
 			if (parts.length === 0) throw new Error('No PDF pages were produced.');
 
 			const packed = packageOutputs(parts, (index) => {
@@ -268,6 +283,7 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				bytes: organize_pdfs(
 					input,
 					lengths,
+					request.passwords,
 					Uint32Array.from(
 						pages.flatMap(({ source, number, rotation }) => [source, number, rotation])
 					)
@@ -277,9 +293,10 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 		}
 
 		const { files, options } = request;
-		const parts = files.map((file) =>
+		const parts = files.map((file, index) =>
 			compress_pdf(
 				new Uint8Array(file),
+				request.passwords[index] ?? '',
 				options.imageQuality,
 				options.maxImageDimension,
 				options.removeMetadata,

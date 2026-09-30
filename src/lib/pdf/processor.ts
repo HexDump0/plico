@@ -67,25 +67,54 @@ function pdfOrZip(output: PdfOutput): PdfOutput & { format: 'pdf' | 'zip' } {
 	return output as PdfOutput & { format: 'pdf' | 'zip' };
 }
 
-export async function processPdfs(operation: 'merge', files: File[], signal?: AbortSignal) {
+// Passwords pair with files by index; an empty string means the file opens
+// without one. They stay in memory and only travel to the local worker.
+export async function processPdfs(
+	operation: 'merge',
+	files: File[],
+	passwords: string[],
+	signal?: AbortSignal
+) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const output = await submit({ id: ++requestId, operation, files: buffers }, signal);
+	const output = await submit({ id: ++requestId, operation, files: buffers, passwords }, signal);
 	return output.bytes;
 }
 
-export async function processSplitPdf(file: File, options: SplitOptions, signal?: AbortSignal) {
+// Writes a protected PDF back without its encryption, for consumers that
+// cannot be trusted to decrypt it themselves.
+export async function unlockPdf(file: File, password: string, signal?: AbortSignal) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const output = await submit(
+		{ id: ++requestId, operation: 'unlock', files: [buffer], passwords: [password] },
+		signal
+	);
+	return output.bytes;
+}
+
+export async function processSplitPdf(
+	file: File,
+	password: string,
+	options: SplitOptions,
+	signal?: AbortSignal
+) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffer = await file.arrayBuffer();
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return pdfOrZip(
-		await submit({ id: ++requestId, operation: 'split', files: [buffer], options }, signal)
+		await submit(
+			{ id: ++requestId, operation: 'split', files: [buffer], passwords: [password], options },
+			signal
+		)
 	);
 }
 
 export async function processOrganizePdf(
 	files: File[],
+	passwords: string[],
 	pages: OrganizePage[],
 	signal?: AbortSignal
 ) {
@@ -100,7 +129,7 @@ export async function processOrganizePdf(
 	});
 	return pdfOrZip(
 		await submit(
-			{ id: ++requestId, operation: 'organize', files: buffers, pages: instructions },
+			{ id: ++requestId, operation: 'organize', files: buffers, passwords, pages: instructions },
 			signal
 		)
 	);
@@ -108,6 +137,7 @@ export async function processOrganizePdf(
 
 export async function processCompressPdf(
 	files: File[],
+	passwords: string[],
 	options: CompressOptions,
 	signal?: AbortSignal
 ) {
@@ -120,6 +150,7 @@ export async function processCompressPdf(
 				id: ++requestId,
 				operation: 'compress',
 				files: buffers,
+				passwords,
 				names: files.map((file) => file.name),
 				options
 			},
@@ -141,11 +172,21 @@ export async function processImagesToPdf(
 
 export async function processPdfToImages(
 	file: File,
+	password: string,
 	options: PdfImageOptions,
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffer = await file.arrayBuffer();
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	return submit({ id: ++requestId, operation: 'pdf-to-images', files: [buffer], options }, signal);
+	return submit(
+		{
+			id: ++requestId,
+			operation: 'pdf-to-images',
+			files: [buffer],
+			passwords: [password],
+			options
+		},
+		signal
+	);
 }

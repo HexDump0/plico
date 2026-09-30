@@ -180,39 +180,44 @@
 	);
 	const pdfToImageValid = $derived(!!currentFile);
 	const imagePdfValid = $derived(workspace.files.length > 0);
+	const locked = $derived(workspace.hasLockedFiles);
 	const actionDisabled = $derived(
-		officeTool
-			? !currentFile || processing
-			: isMerge
-				? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-				: isSplit
-					? !splitValid || processing
-					: isPageTool
-						? !pageToolValid || processing
-						: isCompress
-							? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-							: isPdfToImage
-								? !pdfToImageValid || processing
-								: isImageToPdf
-									? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-									: true
+		locked
+			? true
+			: officeTool
+				? !currentFile || processing
+				: isMerge
+					? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+					: isSplit
+						? !splitValid || processing
+						: isPageTool
+							? !pageToolValid || processing
+							: isCompress
+								? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
+								: isPdfToImage
+									? !pdfToImageValid || processing
+									: isImageToPdf
+										? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+										: true
 	);
 	const actionUnavailable = $derived(
-		officeTool
-			? !currentFile
-			: isMerge
-				? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-				: isSplit
-					? !splitValid
-					: isPageTool
-						? !pageToolValid
-						: isCompress
-							? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-							: isPdfToImage
-								? !pdfToImageValid
-								: isImageToPdf
-									? !imagePdfValid || !!dragged || !!keyboardPicked
-									: true
+		locked
+			? true
+			: officeTool
+				? !currentFile
+				: isMerge
+					? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+					: isSplit
+						? !splitValid
+						: isPageTool
+							? !pageToolValid
+							: isCompress
+								? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+								: isPdfToImage
+									? !pdfToImageValid
+									: isImageToPdf
+										? !imagePdfValid || !!dragged || !!keyboardPicked
+										: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -315,7 +320,10 @@
 		if (processing || dragged || workspace.files.length < 2) return;
 		const files = [...workspace.files];
 		await job.run(
-			async (signal) => ({ bytes: await processPdfs('merge', files, signal), format: 'pdf' }),
+			async (signal) => ({
+				bytes: await processPdfs('merge', files, workspace.passwordsFor(files), signal),
+				format: 'pdf'
+			}),
 			'Could not merge these PDFs.',
 			() => downloadLink?.click()
 		);
@@ -332,7 +340,7 @@
 					}
 				: { mode: 'fixed', interval: splitInterval };
 		await job.run(
-			(signal) => processSplitPdf(file, options, signal),
+			(signal) => processSplitPdf(file, workspace.passwordFor(file), options, signal),
 			'Could not split this PDF.',
 			() => downloadLink?.click()
 		);
@@ -352,7 +360,7 @@
 					.map((page) => page.number)
 			};
 			await job.run(
-				(signal) => processPdfToImages(file, options, signal),
+				(signal) => processPdfToImages(file, workspace.passwordFor(file), options, signal),
 				'Could not extract pages from this PDF.',
 				() => downloadLink?.click()
 			);
@@ -364,7 +372,7 @@
 			)
 			.map((page) => ({ ...page }));
 		await job.run(
-			(signal) => processOrganizePdf(files, pages, signal),
+			(signal) => processOrganizePdf(files, workspace.passwordsFor(files), pages, signal),
 			`Could not ${isExtract ? 'extract pages from' : isRemove ? 'remove pages from' : isRotate ? 'rotate pages in' : 'organize'} ${files.length > 1 ? 'these PDFs' : 'this PDF'}.`,
 			() => downloadLink?.click()
 		);
@@ -374,7 +382,7 @@
 		const files = [...workspace.files];
 		const inputSize = files.reduce((total, file) => total + file.size, 0);
 		await job.run(
-			(signal) => processCompressPdf(files, compressOptions, signal),
+			(signal) => processCompressPdf(files, workspace.passwordsFor(files), compressOptions, signal),
 			'Could not compress these PDFs.',
 			() => downloadLink?.click(),
 			inputSize
@@ -390,7 +398,7 @@
 			pages: parsePageRange(pdfToImagePageRange, pageCount)
 		};
 		await job.run(
-			(signal) => processPdfToImages(file, options, signal),
+			(signal) => processPdfToImages(file, workspace.passwordFor(file), options, signal),
 			'Could not convert this PDF to images.',
 			() => downloadLink?.click()
 		);
@@ -414,7 +422,7 @@
 		const operation = officeTool;
 		const file = currentFile;
 		await job.run(
-			(signal) => processOfficeFile(operation, file, signal),
+			(signal) => processOfficeFile(operation, file, workspace.passwordFor(file), signal),
 			`Could not convert this ${inputType.toUpperCase()} file.`,
 			() => downloadLink?.click()
 		);

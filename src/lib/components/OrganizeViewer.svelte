@@ -16,6 +16,8 @@
 	import type { OrganizePage } from '$lib/pdf/types';
 	import { pageKey, sourceColor, sourceKey } from '$lib/pdf/sources';
 	import { spring } from '$lib/motion/link';
+	import { getWorkspace } from '$lib/workspace.svelte';
+	import PdfUnlock from './PdfUnlock.svelte';
 	import OrganizeThumbnail from './OrganizeThumbnail.svelte';
 	import OrganizePageCards from './OrganizePageCards.svelte';
 
@@ -53,11 +55,13 @@
 		onremove: (file: File) => void;
 	} = $props();
 
+	const workspace = getWorkspace();
 	let sources = $state<Source[]>([]);
 	// Extract, Remove, and Rotate stay single-document tools; only Organize
 	// builds one output from several inputs.
 	const activeFiles = $derived(mode === 'organize' ? files : files.slice(0, 1));
 	const loadedCount = $derived(sources.filter((source) => source.pdf).length);
+	const lockedSources = $derived(sources.filter((source) => workspace.lockState(source.file)));
 	const status = $derived(
 		sources.length === 0
 			? ''
@@ -102,18 +106,21 @@
 		const start = sources.find((entry) => entry.key === source.key);
 		if (!start || start.pdf || start.failed || start.loading) return;
 		start.loading = true;
+		const secret = workspace.passwordFor(source.file);
 		try {
 			const pdfjs = await import('pdfjs-dist');
 			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
 			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 			const task: PDFDocumentLoadingTask = pdfjs.getDocument({
-				data: new Uint8Array(await source.file.arrayBuffer())
+				data: new Uint8Array(await source.file.arrayBuffer()),
+				password: secret || undefined
 			});
 			task.onPassword = () => {
 				const current = sources.find((entry) => entry.key === source.key);
 				if (current) {
 					current.failed = true;
-					current.status = 'Password-protected PDF';
+					current.status = 'Password protected';
+					workspace.setLock(current.file, secret ? 'incorrect' : 'locked');
 				}
 				void task.destroy();
 			};
@@ -123,6 +130,7 @@
 				void task.destroy();
 				return;
 			}
+			workspace.opened(current.file);
 			current.task = task;
 			current.pdf = pdf;
 			if (!pages.some((page) => page.source === source.key))
@@ -215,6 +223,15 @@
 	function toggleAll() {
 		if (processing || pages.length === 0) return;
 		onselectionchange(allSelected ? [] : pages.map(pageKey));
+	}
+
+	function unlockSource(source: Source, password: string) {
+		workspace.unlock(source.file, password);
+		const current = sources.find((entry) => entry.key === source.key);
+		if (!current) return;
+		current.failed = false;
+		current.status = '';
+		void load(current);
 	}
 
 	function sourceOf(page: OrganizePage) {
@@ -347,6 +364,20 @@
 				>
 			</div>
 		</div>
+		{#if lockedSources.length}
+			<div class="flex flex-wrap items-start justify-center gap-x-12 gap-y-10 py-10">
+				{#each lockedSources as source (source.key)}
+					<div class="w-full max-w-sm">
+						<PdfUnlock
+							lock={workspace.lockState(source.file) ?? 'locked'}
+							name={sources.length > 1 ? source.file.name : ''}
+							focus={lockedSources.length === 1 && !pages.length}
+							onunlock={(value) => unlockSource(source, value)}
+						/>
+					</div>
+				{/each}
+			</div>
+		{/if}
 		{#if pages.length}
 			<OrganizePageCards
 				{sources}
@@ -356,7 +387,7 @@
 				{onpageschange}
 				onremovesource={removeSource}
 			/>
-		{:else}
+		{:else if !lockedSources.length}
 			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 		{/if}
 	{:else}
@@ -366,7 +397,11 @@
 					{files[0]?.name}
 				</p>
 				<span class="shrink-0 text-xs whitespace-nowrap text-muted"
-					>{loadedCount ? `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}` : status}</span
+					>{loadedCount
+						? `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`
+						: lockedSources.length
+							? ''
+							: status}</span
 				>
 				<button
 					type="button"
@@ -443,71 +478,81 @@
 				{/if}
 			</div>
 		</div>
-		<div class="my-auto flex flex-wrap items-start justify-center gap-5 py-12 sm:gap-7">
-			{#each pages as page (pageKey(page))}
-				{@const source = sourceOf(page)}
-				{@const picked = selected.includes(pageKey(page))}
-				<div
-					class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 sm:w-64 xl:w-72 {picked
-						? mode === 'extract'
-							? 'border-merge/70 shadow-merge/10'
-							: 'border-convert/70 shadow-convert/10'
-						: 'border-white/10 hover:border-white/25'}"
-				>
-					{#if source?.pdf}<OrganizeThumbnail
-							pdf={source.pdf}
-							number={page.number}
-							rotation={page.rotation}
-						/>{/if}
-					<span
-						class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
-						>{page.number}</span
+		{#if lockedSources.length}
+			<div class="my-auto py-16">
+				<PdfUnlock
+					lock={workspace.lockState(lockedSources[0].file) ?? 'locked'}
+					focus
+					onunlock={(value) => unlockSource(lockedSources[0], value)}
+				/>
+			</div>
+		{:else}
+			<div class="my-auto flex flex-wrap items-start justify-center gap-5 py-12 sm:gap-7">
+				{#each pages as page (pageKey(page))}
+					{@const source = sourceOf(page)}
+					{@const picked = selected.includes(pageKey(page))}
+					<div
+						class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 overflow-hidden rounded-xl border-2 bg-panel shadow-lg shadow-black/20 transition-[border-color,box-shadow] duration-200 sm:w-64 xl:w-72 {picked
+							? mode === 'extract'
+								? 'border-merge/70 shadow-merge/10'
+								: 'border-convert/70 shadow-convert/10'
+							: 'border-white/10 hover:border-white/25'}"
 					>
-					{#if mode === 'extract' || mode === 'remove'}
-						<label class="absolute inset-0 cursor-pointer"
-							><span class="sr-only"
-								>{mode === 'extract' ? 'Extract' : 'Remove'} page {page.number}</span
-							><input
-								type="checkbox"
-								checked={picked}
-								disabled={processing}
-								onchange={() => toggle(page)}
-								class="peer sr-only"
-							/>
-							<span
-								aria-hidden="true"
-								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg border text-white backdrop-blur-sm transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white {picked
-									? mode === 'extract'
-										? 'border-merge bg-merge text-canvas'
-										: 'border-convert bg-convert text-canvas'
-									: 'border-white/20 bg-canvas/80 group-hover:border-white/40'}"
-								>{#if picked}<IconCheck size={18} stroke={2.5} />{/if}</span
-							></label
+						{#if source?.pdf}<OrganizeThumbnail
+								pdf={source.pdf}
+								number={page.number}
+								rotation={page.rotation}
+							/>{/if}
+						<span
+							class="absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md bg-canvas/80 px-1.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm"
+							>{page.number}</span
 						>
-					{:else}
-						<div class="absolute right-2 bottom-2 flex gap-1">
-							<button
-								type="button"
-								onclick={() => rotate(page, -90)}
-								disabled={processing}
-								aria-label={`Rotate page ${page.number} left`}
-								title="Rotate left"
-								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
-								><IconRotate size={17} /></button
+						{#if mode === 'extract' || mode === 'remove'}
+							<label class="absolute inset-0 cursor-pointer"
+								><span class="sr-only"
+									>{mode === 'extract' ? 'Extract' : 'Remove'} page {page.number}</span
+								><input
+									type="checkbox"
+									checked={picked}
+									disabled={processing}
+									onchange={() => toggle(page)}
+									class="peer sr-only"
+								/>
+								<span
+									aria-hidden="true"
+									class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg border text-white backdrop-blur-sm transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white {picked
+										? mode === 'extract'
+											? 'border-merge bg-merge text-canvas'
+											: 'border-convert bg-convert text-canvas'
+										: 'border-white/20 bg-canvas/80 group-hover:border-white/40'}"
+									>{#if picked}<IconCheck size={18} stroke={2.5} />{/if}</span
+								></label
 							>
-							<button
-								type="button"
-								onclick={() => rotate(page, 90)}
-								disabled={processing}
-								aria-label={`Rotate page ${page.number} right`}
-								title="Rotate right"
-								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
-								><IconRotateClockwise size={17} /></button
-							>
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
+						{:else}
+							<div class="absolute right-2 bottom-2 flex gap-1">
+								<button
+									type="button"
+									onclick={() => rotate(page, -90)}
+									disabled={processing}
+									aria-label={`Rotate page ${page.number} left`}
+									title="Rotate left"
+									class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+									><IconRotate size={17} /></button
+								>
+								<button
+									type="button"
+									onclick={() => rotate(page, 90)}
+									disabled={processing}
+									aria-label={`Rotate page ${page.number} right`}
+									title="Rotate right"
+									class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+									><IconRotateClockwise size={17} /></button
+								>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
 	{/if}
 </section>

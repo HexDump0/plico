@@ -1,7 +1,11 @@
 import { createContext } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
 import { acceptsFile, type OfficeInput } from './pdf/office-conversion';
 
 export type AcceptedFileType = 'pdf' | 'image' | OfficeInput;
+/// `checking` keeps the unlock form in place while pdf.js tries a password;
+/// `unlocked` holds it just long enough to fade out before the preview shows.
+export type LockState = 'locked' | 'incorrect' | 'checking' | 'unlocked';
 
 export class Workspace {
 	private pdfFiles = $state<File[]>([]);
@@ -11,6 +15,9 @@ export class Workspace {
 	private imageError = $state('');
 	private officeErrors = $state<Record<OfficeInput, string>>({ docx: '', pptx: '', xlsx: '' });
 	private activeType = $state<AcceptedFileType>('pdf');
+	// Memory only, like the files themselves: nothing here survives a reload.
+	private passwords = new SvelteMap<File, string>();
+	private locks = new SvelteMap<File, LockState>();
 	get files() {
 		return this.activeType === 'image'
 			? this.imageFiles
@@ -22,6 +29,7 @@ export class Workspace {
 		if (this.activeType === 'image') this.imageFiles = files;
 		else if (this.activeType === 'pdf') this.pdfFiles = files;
 		else this.officeFiles[this.activeType] = files;
+		this.forgetRemoved();
 	}
 	get error() {
 		return this.activeType === 'image'
@@ -63,6 +71,52 @@ export class Workspace {
 		this.files = [];
 		this.error = '';
 	}
+	passwordFor(file: File) {
+		return this.passwords.get(file) ?? '';
+	}
+	passwordsFor(files: File[]) {
+		return files.map((file) => this.passwordFor(file));
+	}
+	unlock(file: File, password: string) {
+		this.locks.set(file, 'checking');
+		// The same wrong password again changes nothing that would reload the
+		// preview, so answer it here, in a later tick so the form sees it fail.
+		if (this.passwords.get(file) === password) {
+			setTimeout(() => this.locks.has(file) && this.locks.set(file, 'incorrect'));
+			return;
+		}
+		this.passwords.set(file, password);
+	}
+	lockState(file: File) {
+		return this.locks.get(file);
+	}
+	setLock(file: File, state: LockState | undefined) {
+		if (state) this.locks.set(file, state);
+		else this.locks.delete(file);
+	}
+	/// Called whenever pdf.js opens a file. Only a password just typed fades the
+	/// form out; a file that never asked for one clears silently.
+	opened(file: File) {
+		if (this.locks.get(file) !== 'checking') {
+			this.locks.delete(file);
+			return;
+		}
+		this.locks.set(file, 'unlocked');
+		setTimeout(() => {
+			if (this.locks.get(file) === 'unlocked') this.locks.delete(file);
+		}, 200);
+	}
+	get hasLockedFiles() {
+		return this.files.some((file) => {
+			const lock = this.locks.get(file);
+			return lock !== undefined && lock !== 'unlocked';
+		});
+	}
+	private forgetRemoved() {
+		const kept = [...this.pdfFiles, ...this.imageFiles, ...Object.values(this.officeFiles).flat()];
+		for (const file of this.passwords.keys()) if (!kept.includes(file)) this.passwords.delete(file);
+		for (const file of this.locks.keys()) if (!kept.includes(file)) this.locks.delete(file);
+	}
 	remove(file: File) {
 		if (this.pdfFiles.includes(file)) this.pdfFiles = this.pdfFiles.filter((item) => item !== file);
 		if (this.imageFiles.includes(file))
@@ -71,6 +125,7 @@ export class Workspace {
 			if (this.officeFiles[format].includes(file))
 				this.officeFiles[format] = this.officeFiles[format].filter((item) => item !== file);
 		}
+		this.forgetRemoved();
 	}
 	move(from: number, to: number) {
 		if (from < 0 || to < 0 || from >= this.files.length || to >= this.files.length) return;

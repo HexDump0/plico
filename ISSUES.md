@@ -82,13 +82,22 @@ only restrict permissions and open under an empty user password, which is what
 every viewer does without asking. Plico told users to unlock a file their reader
 opens instantly.
 
-`load_document` now tries `decrypt("")` first. Decryption has to happen before
-renumbering, because below `/V 5` the encryption key is derived from each
-object's number and generation.
+lopdf 0.44 already tries the empty password while loading and drops `/Encrypt`
+when it works. The `decrypt("")` fallback that used to follow the load was dead
+code: a document lopdf cannot decrypt loads as nothing but its `/Encrypt`
+dictionary, so there is nothing left to decrypt afterwards. A password has to go
+into `LoadOptions`. Test: `opens_a_permissions_only_pdf_without_asking`.
 
-Not validated by the corpus: all 9 encrypted files in pdf.js need a real
-password, so the empty-password path never runs there. The change follows the
-spec but wants a fixture of its own.
+### An owner password decrypted every object into garbage
+
+For revisions 2 to 4 lopdf authenticates an owner password and then derives the
+file key from it as if it were the user password. The load succeeds, every
+stream decrypts to noise, and the output still parses: split with the owner
+password of a generated RC4 file produced pages of random bytes. `load_document`
+now recovers the user password from the owner password (ISO 32000-1, 7.6.3.4,
+algorithm 7) and hands lopdf that instead. Revisions 5 and 6 were already right.
+Tests: `accepts_the_owner_password_for_split_and_organize`,
+`accepts_the_owner_password_of_a_revision_2_pdf`.
 
 ### Smaller ones
 
@@ -142,6 +151,26 @@ Deliberate, and currently the honest choice, since an outline covering only the
 first input is more misleading than none. The real fix is to re-root each
 input's outline tree under one synthetic parent, which is a feature rather than
 a repair.
+
+### Some encryption is refused
+
+`npm run test:corpus` unlocks the 7 password-protected pdf.js files using the
+passwords from pdf.js's own test manifest. 3 unlock with page content identical
+to lopdf's decrypted read. 4 are refused, never written out as noise:
+
+- `issue6010_1.pdf`, `issue6010_2.pdf` keep `/Encrypt` as a direct dictionary,
+  which lopdf does not treat as encryption. Detected by a leftover `/Encrypt`
+  in the trailer.
+- `saslprep-r6.pdf`: lopdf rejects the correct R6 password after SASLprep.
+- `issue15893_reduced.pdf` does not load at all (one of the 49).
+
+pdf.js opens all four, so the preview unlocks and the tool then reports "could
+not be unlocked with that password". The wording is deliberately true in both
+cases.
+
+pdf-oxide, used for the Office conversions, accepts a password and then converts
+encrypted files into empty documents. Protected PDFs are unlocked by the Rust
+engine (`unlock_pdf`) before they reach it.
 
 ### The output has no `/ID`
 

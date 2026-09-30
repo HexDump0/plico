@@ -7,6 +7,8 @@
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { SplitRange } from '$lib/split-ranges';
 	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
+	import { getWorkspace } from '$lib/workspace.svelte';
+	import PdfUnlock from './PdfUnlock.svelte';
 	import SplitThumbnail from './SplitThumbnail.svelte';
 
 	let {
@@ -27,6 +29,9 @@
 		onremove: () => void;
 	} = $props();
 
+	const workspace = getWorkspace();
+	const password = $derived(workspace.passwordFor(file));
+	const lock = $derived(workspace.lockState(file));
 	let pdf = $state<PDFDocumentProxy | null>(null);
 	let status = $state('Loading PDF...');
 	let picker = $state<{ id: number; edge: 'from' | 'to' } | null>(null);
@@ -93,6 +98,7 @@
 
 	$effect(() => {
 		const source = file;
+		const secret = password;
 		let cancelled = false;
 		let loadingTask: PDFDocumentLoadingTask | undefined;
 		pdf = null;
@@ -105,18 +111,22 @@
 				pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 				const data = new Uint8Array(await source.arrayBuffer());
 				if (cancelled) return;
-				loadingTask = pdfjs.getDocument({ data });
+				loadingTask = pdfjs.getDocument({ data, password: secret || undefined });
 				loadingTask.onPassword = () => {
-					if (!cancelled) status = 'Password-protected PDF';
+					if (!cancelled) {
+						status = '';
+						workspace.setLock(source, secret ? 'incorrect' : 'locked');
+					}
 					void loadingTask?.destroy();
 				};
 				const document = await loadingTask.promise;
 				if (cancelled) return;
+				workspace.opened(source);
 				pdf = document;
 				status = '';
 				onload(document.numPages);
 			} catch {
-				if (!cancelled && status !== 'Password-protected PDF') status = 'Preview unavailable';
+				if (!cancelled && !workspace.lockState(source)) status = 'Preview unavailable';
 			}
 		}
 		void load();
@@ -296,6 +306,10 @@
 			>
 				And {fixedCount - visibleRanges.length} more parts.
 			</p>{/if}
+	{:else if lock}
+		<div class="py-16">
+			<PdfUnlock {lock} focus onunlock={(value) => workspace.unlock(file, value)} />
+		</div>
 	{:else if status}
 		<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 	{/if}

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { IconFileTypePdf } from '@tabler/icons-svelte-runes';
+	import { getWorkspace } from '$lib/workspace.svelte';
+	import PdfUnlock from './PdfUnlock.svelte';
 	let {
 		file,
 		pageNumber = 1,
@@ -11,12 +13,16 @@
 		width?: number;
 		onload?: (count: number) => void;
 	} = $props();
+	const workspace = getWorkspace();
+	const password = $derived(workspace.passwordFor(file));
+	const lock = $derived(workspace.lockState(file));
 	let canvas = $state<HTMLCanvasElement>();
 	let status = $state('Loading preview...');
 	let imageUrl = $state('');
 	$effect(() => {
 		const source = file;
 		const number = pageNumber;
+		const secret = password;
 		let cancelled = false;
 
 		if (source.type.startsWith('image/') || /\.(jpe?g|png)$/i.test(source.name)) {
@@ -41,16 +47,21 @@
 				const data = new Uint8Array(await source.arrayBuffer());
 				task = pdfjs.getDocument({
 					data,
+					password: secret || undefined,
 					cMapUrl: '/pdfjs/cmaps/',
 					cMapPacked: true,
 					standardFontDataUrl: '/pdfjs/standard_fonts/'
 				});
 				task.onPassword = () => {
-					if (!cancelled) status = 'Password-protected PDF';
+					if (!cancelled) {
+						status = '';
+						workspace.setLock(source, secret ? 'incorrect' : 'locked');
+					}
 					void task?.destroy();
 				};
 				const pdf = await task.promise;
 				if (cancelled) return;
+				workspace.opened(source);
 				onload(pdf.numPages);
 				const page = await pdf.getPage(Math.min(number, pdf.numPages));
 				if (cancelled || !canvas) return;
@@ -69,7 +80,7 @@
 				}).promise;
 				if (!cancelled) status = '';
 			} catch {
-				if (!cancelled && status !== 'Password-protected PDF') status = 'Preview unavailable';
+				if (!cancelled && !workspace.lockState(source)) status = 'Preview unavailable';
 			}
 		}
 		void render();
@@ -81,7 +92,8 @@
 </script>
 
 <div
-	class="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden {status
+	class="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden {status ||
+	lock
 		? 'bg-canvas/60 p-4'
 		: 'bg-white'}"
 >
@@ -96,10 +108,14 @@
 		<canvas
 			bind:this={canvas}
 			aria-label={`Page ${pageNumber} of ${file.name}`}
-			class="max-h-full max-w-full object-contain shadow-lg {status ? 'hidden' : ''}"
+			class="max-h-full max-w-full object-contain shadow-lg {status || lock ? 'hidden' : ''}"
 		></canvas>
 	{/if}
-	{#if status}<div class="flex flex-col items-center gap-3 text-center text-muted">
+	{#if lock}<PdfUnlock
+			{lock}
+			compact
+			onunlock={(value) => workspace.unlock(file, value)}
+		/>{:else if status}<div class="flex flex-col items-center gap-3 text-center text-muted">
 			<IconFileTypePdf size={40} stroke={1.2} /><span class="text-xs">{status}</span>
 		</div>{/if}
 </div>

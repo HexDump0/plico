@@ -1,10 +1,15 @@
 use std::collections::BTreeMap;
 
-use lopdf::{Document, Object, Stream, dictionary};
+use lopdf::{
+    Document, EncryptionState, EncryptionVersion, Object, Permissions, Stream, dictionary,
+};
 
 use super::{
-    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes, organize_pdf_bytes, organize_pdfs_bytes, split_pdf_bytes,
+    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes,
+    compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes,
+    merge_pdf_bytes_with_passwords, organize_pdf_bytes, organize_pdfs_bytes,
+    organize_pdfs_bytes_with_passwords, split_pdf_bytes, split_pdf_bytes_with_password,
+    unlock_pdf_bytes,
 };
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
@@ -1031,4 +1036,130 @@ fn orders_versions_numerically() {
     assert!(parse_version("1.10") > parse_version("1.5"));
     assert!(parse_version("2.0") > parse_version("1.7"));
     assert_eq!(parse_version("nonsense"), (1, 0));
+}
+
+/// RC4 128-bit (revision 3), the most common legacy handler. An empty `user`
+/// is the permissions-only case: it opens without asking, as viewers do.
+fn locked_pdf(bytes: &[u8], user: &str) -> Vec<u8> {
+    lock_with(bytes, |document| {
+        EncryptionState::try_from(EncryptionVersion::V2 {
+            document,
+            owner_password: "owner",
+            user_password: user,
+            key_length: 128,
+            permissions: Permissions::all(),
+        })
+        .unwrap()
+    })
+}
+
+fn lock_with(bytes: &[u8], state: impl FnOnce(&Document) -> EncryptionState) -> Vec<u8> {
+    let mut document = Document::load_mem(bytes).unwrap();
+    document.trailer.set(
+        "ID",
+        vec![
+            Object::string_literal(b"plico-fixture".to_vec()),
+            Object::string_literal(b"plico-fixture".to_vec()),
+        ],
+    );
+    let state = state(&document);
+    document.encrypt(&state).unwrap();
+    let mut output = Vec::new();
+    document.save_to(&mut output).unwrap();
+    output
+}
+
+#[test]
+fn merges_a_locked_pdf_with_its_password_and_writes_it_unlocked() {
+    let locked = locked_pdf(&numbered_pdf(3), "secret");
+    let plain = one_page_pdf("first");
+    let merged = merge_pdf_bytes_with_passwords(&[&locked, &plain], &["secret"]).unwrap();
+
+    let document = Document::load_mem(&merged).unwrap();
+    assert!(!document.is_encrypted());
+    assert!(document.trailer.get(b"Encrypt").is_err());
+    assert_eq!(page_contents(&merged), ["1", "2", "3", "first"]);
+}
+
+#[test]
+fn names_the_locked_pdf_when_its_password_is_missing_or_wrong() {
+    let locked = locked_pdf(&numbered_pdf(2), "secret");
+    let plain = one_page_pdf("first");
+
+    let missing = merge_pdf_bytes(&[&plain, &locked]).unwrap_err();
+    assert!(missing.contains("PDF 2 is password protected"), "{missing}");
+
+    let wrong = merge_pdf_bytes_with_passwords(&[&locked, &plain], &["nope"]).unwrap_err();
+    assert!(
+        wrong.contains("PDF 1 could not be unlocked with that password"),
+        "{wrong}"
+    );
+}
+
+#[test]
+fn opens_a_permissions_only_pdf_without_asking() {
+    let restricted = locked_pdf(&numbered_pdf(2), "");
+    let plain = one_page_pdf("first");
+    let merged = merge_pdf_bytes(&[&restricted, &plain]).unwrap();
+    assert_eq!(page_contents(&merged), ["1", "2", "first"]);
+}
+
+#[test]
+fn accepts_the_owner_password_for_split_and_organize() {
+    let locked = locked_pdf(&numbered_pdf(3), "secret");
+
+    let parts =
+        split_pdf_bytes_with_password(&locked, "owner", SplitMode::Ranges(&[(2, 3)], false))
+            .unwrap();
+    assert_eq!(page_contents(&parts[0]), ["2", "3"]);
+
+    let organized =
+        organize_pdfs_bytes_with_passwords(&[&locked], &["secret"], &[(0, 3, 0), (0, 1, 0)])
+            .unwrap();
+    assert_eq!(page_contents(&organized), ["3", "1"]);
+}
+
+#[test]
+fn compressing_a_locked_pdf_never_returns_the_locked_original() {
+    let locked = locked_pdf(&numbered_pdf(1), "secret");
+    let output = compress_pdf_bytes_with_password(
+        &locked,
+        "secret",
+        CompressOptions {
+            reflate: true,
+            image_quality: 0,
+            max_image_dimension: 0,
+            remove_metadata: false,
+            remove_thumbnails: false,
+        },
+    )
+    .unwrap();
+    assert!(!Document::load_mem(&output).unwrap().is_encrypted());
+    assert_eq!(page_contents(&output), ["1"]);
+}
+
+/// Revision 2 recovers the user password with one RC4 pass instead of twenty.
+#[test]
+fn accepts_the_owner_password_of_a_revision_2_pdf() {
+    let locked = lock_with(&numbered_pdf(2), |document| {
+        EncryptionState::try_from(EncryptionVersion::V1 {
+            document,
+            owner_password: "owner",
+            user_password: "secret",
+            permissions: Permissions::all(),
+        })
+        .unwrap()
+    });
+    let parts = split_pdf_bytes_with_password(&locked, "owner", SplitMode::Every(1)).unwrap();
+    assert_eq!(page_contents(&parts[1]), ["2"]);
+}
+
+#[test]
+fn unlocking_keeps_every_page_and_drops_only_the_encryption() {
+    let locked = locked_pdf(&numbered_pdf(3), "secret");
+    let unlocked = unlock_pdf_bytes(&locked, "secret").unwrap();
+    let document = Document::load_mem(&unlocked).unwrap();
+    assert!(document.trailer.get(b"Encrypt").is_err());
+    assert_eq!(page_contents(&unlocked), ["1", "2", "3"]);
+    assert!(unlock_pdf_bytes(&locked, "").is_err());
 }

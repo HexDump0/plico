@@ -1,4 +1,5 @@
 import { officeTools, type OfficeOperation } from './office-conversion';
+import { unlockPdf } from './processor';
 import type { PdfOutput } from './types';
 
 type WorkerResponse =
@@ -7,10 +8,15 @@ type WorkerResponse =
 export async function processOfficeFile(
 	operation: OfficeOperation,
 	file: File,
+	password: string,
 	signal?: AbortSignal
 ): Promise<PdfOutput> {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const input = await file.arrayBuffer();
+	// pdf-oxide accepts a password but converts encrypted files to empty
+	// documents, so the Rust engine unlocks them first.
+	const input = password
+		? ((await unlockPdf(file, password, signal)).slice().buffer as ArrayBuffer)
+		: await file.arrayBuffer();
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const worker = new Worker(new URL('./office-worker.ts', import.meta.url), { type: 'module' });
 	return new Promise((resolve, reject) => {

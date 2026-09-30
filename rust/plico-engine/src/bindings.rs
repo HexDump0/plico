@@ -2,12 +2,21 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes, organize_pdfs_bytes, split_pdf_bytes,
+    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes_with_password,
+    images_to_pdf_bytes, merge_pdf_bytes_with_passwords, organize_pdfs_bytes_with_passwords,
+    split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
+fn as_strs(passwords: &[String]) -> Vec<&str> {
+    passwords.iter().map(String::as_str).collect()
+}
+
 #[wasm_bindgen]
-pub fn merge_pdfs(input: &[u8], lengths: &[u32]) -> Result<Vec<u8>, JsValue> {
+pub fn merge_pdfs(
+    input: &[u8],
+    lengths: &[u32],
+    passwords: Vec<String>,
+) -> Result<Vec<u8>, JsValue> {
     let expected_length = lengths
         .iter()
         .try_fold(0usize, |total, length| total.checked_add(*length as usize));
@@ -26,7 +35,8 @@ pub fn merge_pdfs(input: &[u8], lengths: &[u32]) -> Result<Vec<u8>, JsValue> {
         })
         .collect::<Vec<_>>();
 
-    merge_pdf_bytes(&files).map_err(|error| JsValue::from_str(&error))
+    merge_pdf_bytes_with_passwords(&files, &as_strs(&passwords))
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
@@ -73,20 +83,25 @@ fn split_outputs_to_js(outputs: Vec<Vec<u8>>) -> Array {
 }
 
 #[wasm_bindgen]
-pub fn split_pdf_ranges(input: &[u8], bounds: &[u32], combine: bool) -> Result<Array, JsValue> {
+pub fn split_pdf_ranges(
+    input: &[u8],
+    password: &str,
+    bounds: &[u32],
+    combine: bool,
+) -> Result<Array, JsValue> {
     let chunks = bounds.chunks_exact(2);
     if !chunks.remainder().is_empty() {
         return Err(JsValue::from_str("A page range is incomplete."));
     }
     let ranges = chunks.map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
-    split_pdf_bytes(input, SplitMode::Ranges(&ranges, combine))
+    split_pdf_bytes_with_password(input, password, SplitMode::Ranges(&ranges, combine))
         .map(split_outputs_to_js)
         .map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
-pub fn split_pdf_every(input: &[u8], interval: u32) -> Result<Array, JsValue> {
-    split_pdf_bytes(input, SplitMode::Every(interval))
+pub fn split_pdf_every(input: &[u8], password: &str, interval: u32) -> Result<Array, JsValue> {
+    split_pdf_bytes_with_password(input, password, SplitMode::Every(interval))
         .map(split_outputs_to_js)
         .map_err(|error| JsValue::from_str(&error))
 }
@@ -95,6 +110,7 @@ pub fn split_pdf_every(input: &[u8], interval: u32) -> Result<Array, JsValue> {
 pub fn organize_pdfs(
     input: &[u8],
     lengths: &[u32],
+    passwords: Vec<String>,
     instructions: &[u32],
 ) -> Result<Vec<u8>, JsValue> {
     let expected_length = lengths
@@ -123,19 +139,27 @@ pub fn organize_pdfs(
         .map(|chunk| (chunk[0] as usize, chunk[1], chunk[2] as i32))
         .collect::<Vec<_>>();
 
-    organize_pdfs_bytes(&files, &pages).map_err(|error| JsValue::from_str(&error))
+    organize_pdfs_bytes_with_passwords(&files, &as_strs(&passwords), &pages)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+pub fn unlock_pdf(input: &[u8], password: &str) -> Result<Vec<u8>, JsValue> {
+    unlock_pdf_bytes(input, password).map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
 pub fn compress_pdf(
     input: &[u8],
+    password: &str,
     image_quality: u32,
     max_image_dimension: u32,
     remove_metadata: bool,
     remove_thumbnails: bool,
 ) -> Result<Vec<u8>, JsValue> {
-    compress_pdf_bytes(
+    compress_pdf_bytes_with_password(
         input,
+        password,
         CompressOptions {
             reflate: true,
             image_quality: image_quality.min(100) as u8,
