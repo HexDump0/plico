@@ -2,10 +2,11 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, ImagePdfOptions, OrganizeItem, PageOrientation, ProtectOptions, Protection,
-    SplitMode, compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes_with_options,
-    organize_pdf_items, protect_pdf_bytes, protection_of, split_pdf_bytes_with_password,
-    unlock_pdf_bytes,
+    CompressOptions, FontFamily, ImagePdfOptions, OrganizeItem, PageNumberOptions, PageOrientation,
+    Position, ProtectOptions, Protection, SplitMode, TextStyle, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_watermark_bytes, compress_pdf_bytes_with_password,
+    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes,
+    protection_of, split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -240,6 +241,118 @@ pub fn protect_pdf(
             allow_printing,
             allow_copying,
             allow_editing,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
+/// 0 Helvetica, 1 Times, 2 Courier. `color` is 0xRRGGBB.
+fn text_style(font: u8, bold: bool, size: f32, color: u32) -> TextStyle {
+    TextStyle {
+        family: match font {
+            1 => FontFamily::Times,
+            2 => FontFamily::Courier,
+            _ => FontFamily::Helvetica,
+        },
+        bold,
+        size,
+        color: [16, 8, 0].map(|shift| ((color >> shift) & 0xFF) as f32 / 255.0),
+    }
+}
+
+/// Row by row from the top left: 0 top left, 4 centre, 8 bottom right.
+fn position(index: u8) -> Position {
+    match index {
+        0 => Position::TopLeft,
+        1 => Position::Top,
+        2 => Position::TopRight,
+        3 => Position::Left,
+        5 => Position::Right,
+        6 => Position::BottomLeft,
+        7 => Position::Bottom,
+        8 => Position::BottomRight,
+        _ => Position::Center,
+    }
+}
+
+/// An empty `pages` numbers every page.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn add_page_numbers(
+    input: &[u8],
+    password: &str,
+    pages: &[u32],
+    first_number: u32,
+    template: &str,
+    position_index: u8,
+    margin: f32,
+    font: u8,
+    bold: bool,
+    size: f32,
+    color: u32,
+    opacity: f32,
+) -> Result<Vec<u8>, JsValue> {
+    add_page_numbers_bytes(
+        input,
+        password,
+        PageNumberOptions {
+            template,
+            first_number,
+            pages,
+            position: position(position_index),
+            margin,
+            style: text_style(font, bold, size, color),
+            opacity,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
+/// A non-empty `image` is the watermark and the text settings are ignored;
+/// otherwise `text` is. An empty `pages` marks every page.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn add_watermark(
+    input: &[u8],
+    password: &str,
+    pages: &[u32],
+    text: &str,
+    font: u8,
+    bold: bool,
+    size: f32,
+    color: u32,
+    image: &[u8],
+    image_width: f32,
+    position_index: u8,
+    margin: f32,
+    rotation: f32,
+    opacity: f32,
+    behind: bool,
+    tile: bool,
+) -> Result<Vec<u8>, JsValue> {
+    let content = if image.is_empty() {
+        WatermarkContent::Text {
+            text,
+            style: text_style(font, bold, size, color),
+        }
+    } else {
+        WatermarkContent::Image {
+            bytes: image,
+            width: image_width,
+        }
+    };
+    add_watermark_bytes(
+        input,
+        password,
+        WatermarkOptions {
+            content,
+            pages,
+            position: position(position_index),
+            margin,
+            rotation,
+            opacity,
+            behind,
+            tile,
         },
     )
     .map_err(|error| JsValue::from_str(&error))

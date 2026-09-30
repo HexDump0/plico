@@ -13,6 +13,8 @@
 		"test:corpus": "cargo test --release --test corpus -- --ignored --nocapture",
 		"test:raster": "node scripts/raster-compare.mjs",
 		"pretest:raster": "npm run build:wasm",
+		"test:raster:stamp": "node scripts/raster-stamp.mjs",
+		"pretest:raster:stamp": "npm run build:wasm",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"precheck": "npm run build:wasm",

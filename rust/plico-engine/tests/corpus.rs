@@ -22,8 +22,10 @@ use std::path::{Path, PathBuf};
 
 use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 use plico_engine::{
-    CompressOptions, ProtectOptions, SplitMode, compress_pdf_bytes, merge_pdf_bytes,
-    protect_pdf_bytes, split_pdf_bytes, split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, FontFamily, PageNumberOptions, Position, ProtectOptions, SplitMode, TextStyle,
+    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
+    compress_pdf_bytes, merge_pdf_bytes, protect_pdf_bytes, split_pdf_bytes,
+    split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
@@ -588,4 +590,159 @@ fn protects_every_loadable_document() {
         println!("  {failure}");
     }
     assert!(failures.is_empty(), "protecting failed on real PDFs");
+}
+
+/// Numbers every page of every loadable corpus file, then watermarks it, and
+/// requires the result to reparse with the same pages, every page's original
+/// content intact and in place, both stamps drawn once each, and nothing left
+/// unreachable.
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn stamps_every_loadable_document() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+
+    let style = TextStyle {
+        family: FontFamily::Helvetica,
+        bold: true,
+        size: 12.0,
+        color: [0.2, 0.2, 0.2],
+    };
+    let mut checked = 0usize;
+    let mut damaged_trees = Vec::new();
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(mut source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.is_encrypted() && source.decrypt("").is_err() {
+            continue;
+        }
+        let pages = source.get_pages();
+        if pages.is_empty() {
+            continue;
+        }
+        let contents = pages
+            .values()
+            .map(|id| source.get_page_content(*id))
+            .collect::<Vec<_>>();
+        drop(source);
+
+        let stamped = add_page_numbers_bytes(
+            &bytes,
+            "",
+            PageNumberOptions {
+                template: "Page {n} of {total}",
+                first_number: 1,
+                pages: &[],
+                position: Position::BottomRight,
+                margin: 24.0,
+                style,
+                opacity: 1.0,
+            },
+        )
+        .and_then(|numbered| {
+            add_watermark_bytes(
+                &numbered,
+                "",
+                WatermarkOptions {
+                    content: WatermarkContent::Text {
+                        text: "CONFIDENTIAL",
+                        style: TextStyle {
+                            size: 48.0,
+                            ..style
+                        },
+                    },
+                    pages: &[],
+                    position: Position::Center,
+                    margin: 24.0,
+                    rotation: 45.0,
+                    opacity: 0.3,
+                    behind: false,
+                    tile: false,
+                },
+            )
+        });
+        let stamped = match stamped {
+            Ok(stamped) => stamped,
+            // A page lopdf cannot read is refused rather than miscounted.
+            Err(error) if error.contains("damaged") => {
+                damaged_trees.push(name);
+                continue;
+            }
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let Ok(mut result) = Document::load_mem(&stamped) else {
+            failures.push(format!("{name}: stamped output would not reparse"));
+            continue;
+        };
+        let pages = result.get_pages();
+        if pages.len() != contents.len() {
+            failures.push(format!(
+                "{name}: {} pages, expected {}",
+                pages.len(),
+                contents.len()
+            ));
+            continue;
+        }
+        let draws = |content: &[u8]| content.windows(3).filter(|window| window == b" Do").count();
+        let damaged =
+            pages
+                .values()
+                .zip(&contents)
+                .enumerate()
+                .find_map(|(index, (id, before))| {
+                    let after = result.get_page_content(*id);
+                    if draws(&after) != draws(before) + 2 {
+                        Some(format!(
+                            "page {} draws {} times, expected {} + 2",
+                            index + 1,
+                            draws(&after),
+                            draws(before)
+                        ))
+                    } else if !before.is_empty()
+                        && !after
+                            .windows(before.len())
+                            .any(|window| window == &before[..])
+                    {
+                        Some(format!("page {} lost its content", index + 1))
+                    } else {
+                        None
+                    }
+                });
+        if let Some(damage) = damaged {
+            failures.push(format!("{name}: {damage}"));
+            continue;
+        }
+        let types = result
+            .objects
+            .iter()
+            .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
+            .collect::<BTreeMap<_, _>>();
+        let leaked = result
+            .prune_objects()
+            .into_iter()
+            .filter(|id| types[id] != b"XRef" && types[id] != b"ObjStm")
+            .count();
+        if leaked > 0 {
+            failures.push(format!("{name}: {leaked} unreachable objects"));
+            continue;
+        }
+        checked += 1;
+    }
+
+    println!("\nstamp corpus: {checked} files numbered and watermarked");
+    println!("  refused, page tree lists an unreadable page: {damaged_trees:?}");
+    for failure in failures.iter().take(15) {
+        println!("  {failure}");
+    }
+    if failures.len() > 15 {
+        println!("  ... and {} more", failures.len() - 15);
+    }
+    assert!(failures.is_empty(), "stamping failed on real PDFs");
 }

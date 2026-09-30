@@ -32,7 +32,7 @@ pub(crate) const MAX_DECOMPRESSED_STREAM: usize = 256 * 1024 * 1024;
 
 /// Matches lopdf's own page tree traversal limit. Guards against a /Parent cycle
 /// in a malformed file.
-const MAX_PAGE_TREE_DEPTH: usize = 256;
+pub(crate) const MAX_PAGE_TREE_DEPTH: usize = 256;
 
 pub fn merge_pdf_bytes(files: &[&[u8]]) -> Result<Vec<u8>, String> {
     merge_pdf_bytes_with_passwords(files, &[])
@@ -657,7 +657,10 @@ fn assemble_documents_in_order(
 /// ancestors these attributes would have been read from out of reach. Without
 /// this, a page that inherited /MediaBox silently adopts whatever the merged
 /// root carries instead, or loses it entirely and becomes non-conformant.
-fn inheritable_attributes(document: &Document, page: &Dictionary) -> Vec<(&'static [u8], Object)> {
+pub(crate) fn inheritable_attributes(
+    document: &Document,
+    page: &Dictionary,
+) -> Vec<(&'static [u8], Object)> {
     let mut found: Vec<(&'static [u8], Object)> = Vec::new();
     let mut ancestor = page.get(b"Parent").and_then(Object::as_reference).ok();
 

@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use lopdf::content::Content;
 use lopdf::{
-    Document, EncryptionState, EncryptionVersion, Object, Permissions, Stream, dictionary,
+    Dictionary, Document, EncryptionState, EncryptionVersion, Object, Permissions, Stream,
+    dictionary,
 };
 
 use super::{
@@ -14,7 +16,11 @@ use super::{
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
-use crate::{ProtectOptions, Protection, protect_pdf_bytes, protection_of};
+use crate::{
+    FontFamily, PageNumberOptions, Position, ProtectOptions, Protection, TextStyle,
+    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
+    protect_pdf_bytes, protection_of,
+};
 
 fn image_pdf_options() -> ImagePdfOptions {
     ImagePdfOptions {
@@ -1445,4 +1451,707 @@ fn protect_refuses_options_that_protect_nothing() {
     assert!(attempt("", "", true).is_err());
     assert!(attempt("same", "same", false).is_err());
     assert!(attempt(&"x".repeat(128), "", true).is_err());
+}
+
+fn helvetica(size: f32) -> TextStyle {
+    TextStyle {
+        family: FontFamily::Helvetica,
+        bold: false,
+        size,
+        color: [0.0, 0.0, 0.0],
+    }
+}
+
+fn number_options(template: &str) -> PageNumberOptions<'_> {
+    PageNumberOptions {
+        template,
+        first_number: 1,
+        pages: &[],
+        position: Position::Bottom,
+        margin: 20.0,
+        style: helvetica(10.0),
+        opacity: 1.0,
+    }
+}
+
+fn watermark_options(text: &str) -> WatermarkOptions<'_> {
+    WatermarkOptions {
+        content: WatermarkContent::Text {
+            text,
+            style: helvetica(20.0),
+        },
+        pages: &[],
+        position: Position::Center,
+        margin: 20.0,
+        rotation: 0.0,
+        opacity: 1.0,
+        behind: false,
+        tile: false,
+    }
+}
+
+/// One page per entry, each with its content and any other page entries.
+/// `tree` adds entries to the single page tree node.
+fn pdf_with_pages(pages: &[(&str, Dictionary)], tree: Dictionary) -> Vec<u8> {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let kids = pages
+        .iter()
+        .map(|(content, entries)| {
+            let content_id =
+                document.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+            let mut page = entries.clone();
+            page.set("Type", "Page");
+            page.set("Parent", pages_id);
+            page.set("Contents", content_id);
+            Object::Reference(document.add_object(page))
+        })
+        .collect::<Vec<_>>();
+    let mut node = tree;
+    node.set("Type", "Pages");
+    node.set("Count", kids.len() as i64);
+    node.set("Kids", kids);
+    document.objects.insert(pages_id, Object::Dictionary(node));
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn square_page(size: i64) -> Dictionary {
+    dictionary! { "MediaBox" => vec![0.into(), 0.into(), size.into(), size.into()] }
+}
+
+/// The ids of the forms a page draws, in drawing order.
+fn stamp_forms(document: &Document, page: lopdf::ObjectId) -> Vec<lopdf::ObjectId> {
+    let content = Content::decode(&document.get_page_content(page)).unwrap();
+    let xobjects = document
+        .get_page_resources(page)
+        .unwrap()
+        .0
+        .and_then(|resources| resources.get(b"XObject").ok())
+        .and_then(|xobjects| match xobjects {
+            Object::Reference(id) => document.get_dictionary(*id).ok(),
+            xobjects => xobjects.as_dict().ok(),
+        });
+    content
+        .operations
+        .iter()
+        .filter(|operation| operation.operator == "Do")
+        .filter_map(|operation| {
+            let name = operation.operands[0].as_name().ok()?;
+            xobjects?.get(name).and_then(Object::as_reference).ok()
+        })
+        .collect()
+}
+
+/// Applies `first`, then `second`.
+fn then(first: [f32; 6], second: [f32; 6]) -> [f32; 6] {
+    let [a, b, c, d, e, f] = first;
+    let [a2, b2, c2, d2, e2, f2] = second;
+    [
+        a * a2 + b * c2,
+        a * b2 + b * d2,
+        c * a2 + d * c2,
+        c * b2 + d * d2,
+        e * a2 + f * c2 + e2,
+        e * b2 + f * d2 + f2,
+    ]
+}
+
+/// Every string a page's stamps show, with where it starts in the page's own
+/// coordinates.
+fn stamped_text(document: &Document, page: lopdf::ObjectId) -> Vec<(String, f32, f32)> {
+    let mut shown = Vec::new();
+    for form in stamp_forms(document, page) {
+        let stream = document
+            .get_object(form)
+            .and_then(Object::as_stream)
+            .unwrap();
+        let content = Content::decode(&stream.decompressed_content().unwrap()).unwrap();
+        let mut transform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let mut origin = (0.0, 0.0);
+        for operation in content.operations {
+            let numbers = || {
+                operation
+                    .operands
+                    .iter()
+                    .map(|operand| operand.as_float().unwrap())
+                    .collect::<Vec<_>>()
+            };
+            match operation.operator.as_str() {
+                "cm" => transform = then(numbers().try_into().unwrap(), transform),
+                "Tm" => origin = (numbers()[4], numbers()[5]),
+                "Tj" => {
+                    let text = operation.operands[0]
+                        .as_str()
+                        .unwrap()
+                        .iter()
+                        .map(|&byte| char::from(byte))
+                        .collect();
+                    let [a, b, c, d, e, f] = transform;
+                    shown.push((
+                        text,
+                        a * origin.0 + c * origin.1 + e,
+                        b * origin.0 + d * origin.1 + f,
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    shown
+}
+
+fn page_texts(bytes: &[u8]) -> Vec<Vec<String>> {
+    let document = Document::load_mem(bytes).unwrap();
+    document
+        .get_pages()
+        .into_values()
+        .map(|page| {
+            stamped_text(&document, page)
+                .into_iter()
+                .map(|(text, _, _)| text)
+                .collect()
+        })
+        .collect()
+}
+
+fn first_stamp_origin(bytes: &[u8]) -> (f32, f32) {
+    let document = Document::load_mem(bytes).unwrap();
+    let page = document.get_pages()[&1];
+    let (_, x, y) = stamped_text(&document, page).remove(0);
+    (x, y)
+}
+
+fn assert_near((x, y): (f32, f32), (expected_x, expected_y): (f32, f32)) {
+    assert!(
+        (x - expected_x).abs() < 0.01 && (y - expected_y).abs() < 0.01,
+        "({x}, {y}) is not ({expected_x}, {expected_y})"
+    );
+}
+
+#[test]
+fn numbers_every_page_centred_at_the_bottom() {
+    let output =
+        add_page_numbers_bytes(&numbered_pdf(3), "", number_options("Page {n} of {total}"))
+            .unwrap();
+    assert_eq!(
+        page_texts(&output),
+        [["Page 1 of 3"], ["Page 2 of 3"], ["Page 3 of 3"]]
+    );
+    // "Page 1 of 3" is 511.5 thousandths of an em wide in Helvetica; the
+    // baseline sits on the margin.
+    assert_near(first_stamp_origin(&output), (200.0 - 51.15 / 2.0, 20.0));
+    for (content, original) in page_contents(&output).iter().zip(["1", "2", "3"]) {
+        assert!(content.contains(original), "{content}");
+    }
+}
+
+#[test]
+fn numbers_chosen_pages_counting_the_ones_skipped() {
+    let output = add_page_numbers_bytes(
+        &numbered_pdf(4),
+        "",
+        PageNumberOptions {
+            pages: &[4, 2],
+            first_number: 1,
+            ..number_options("{n}/{total}")
+        },
+    )
+    .unwrap();
+    let texts = page_texts(&output);
+    assert_eq!(texts[0], Vec::<String>::new());
+    assert_eq!(texts[1], ["1/3"]);
+    assert_eq!(texts[2], Vec::<String>::new());
+    assert_eq!(texts[3], ["3/3"]);
+    assert_eq!(page_contents(&output)[0], "1");
+}
+
+#[test]
+fn places_numbers_at_the_bottom_the_reader_sees_on_a_turned_page() {
+    // "7" is 5.56 points wide at 10 points; the page is 200 by 400.
+    for (rotation, expected) in [
+        (0, (100.0 - 2.78, 20.0)),
+        (90, (180.0, 200.0 - 2.78)),
+        (180, (100.0 + 2.78, 380.0)),
+        (270, (20.0, 200.0 + 2.78)),
+    ] {
+        let input = pdf_with_pages(
+            &[(
+                "",
+                dictionary! {
+                    "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()],
+                    "Rotate" => rotation,
+                },
+            )],
+            dictionary! {},
+        );
+        let output = add_page_numbers_bytes(
+            &input,
+            "",
+            PageNumberOptions {
+                first_number: 7,
+                ..number_options("{n}")
+            },
+        )
+        .unwrap();
+        assert_near(first_stamp_origin(&output), expected);
+    }
+}
+
+#[test]
+fn keeps_numbers_inside_the_crop_box_and_honours_user_units() {
+    let cropped = pdf_with_pages(
+        &[(
+            "",
+            dictionary! {
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+                "CropBox" => vec![50.into(), 60.into(), 150.into(), 160.into()],
+            },
+        )],
+        dictionary! {},
+    );
+    let options = PageNumberOptions {
+        position: Position::BottomLeft,
+        margin: 10.0,
+        ..number_options("{n}")
+    };
+    let output = add_page_numbers_bytes(&cropped, "", options).unwrap();
+    assert_near(first_stamp_origin(&output), (60.0, 70.0));
+
+    // Each unit is two points, so a 10 point margin is 5 units.
+    let mut large = square_page(200);
+    large.set("UserUnit", 2);
+    let options = PageNumberOptions {
+        position: Position::BottomLeft,
+        margin: 10.0,
+        ..number_options("{n}")
+    };
+    let output =
+        add_page_numbers_bytes(&pdf_with_pages(&[("", large)], dictionary! {}), "", options)
+            .unwrap();
+    assert_near(first_stamp_origin(&output), (5.0, 5.0));
+}
+
+#[test]
+fn measures_text_with_the_font_it_draws_with() {
+    // "Hello" is 2278 thousandths wide in Helvetica, 2222 in Times, and 3000
+    // in Courier; cap heights are 718, 662 and 562.
+    for (family, width, cap) in [
+        (FontFamily::Helvetica, 22.78, 7.18),
+        (FontFamily::Times, 22.22, 6.62),
+        (FontFamily::Courier, 30.0, 5.62),
+    ] {
+        let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+        let output = add_page_numbers_bytes(
+            &input,
+            "",
+            PageNumberOptions {
+                position: Position::TopRight,
+                margin: 10.0,
+                style: TextStyle {
+                    family,
+                    ..helvetica(10.0)
+                },
+                ..number_options("Hello")
+            },
+        )
+        .unwrap();
+        assert_near(first_stamp_origin(&output), (190.0 - width, 190.0 - cap));
+    }
+}
+
+#[test]
+fn closes_states_the_page_left_open_before_drawing() {
+    let input = pdf_with_pages(
+        &[("q 2 0 0 2 0 0 cm q 1 0 0 1 5 5 cm 0 0 m", square_page(200))],
+        dictionary! {},
+    );
+    let output = add_page_numbers_bytes(&input, "", number_options("{n}")).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let content = Content::decode(&document.get_page_content(document.get_pages()[&1])).unwrap();
+    let mut depth = 0usize;
+    for operation in content.operations {
+        match operation.operator.as_str() {
+            "q" => depth += 1,
+            "Q" => depth = depth.saturating_sub(1),
+            "Do" => {
+                assert_eq!(depth, 0, "the stamp inherits the page's transform");
+                return;
+            }
+            _ => {}
+        }
+    }
+    panic!("the stamp is never drawn");
+}
+
+#[test]
+fn keeps_resources_the_page_inherited() {
+    let output = add_page_numbers_bytes(
+        &inheriting_pdf("BT /F1 12 Tf ET", 300),
+        "",
+        number_options("{n}"),
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let page = document.get_pages()[&1];
+    let resources = document.get_page_resources(page).unwrap().0.unwrap();
+    let fonts = match resources.get(b"Font").unwrap() {
+        Object::Reference(id) => document.get_dictionary(*id).unwrap(),
+        fonts => fonts.as_dict().unwrap(),
+    };
+    let font = fonts.get(b"F1").and_then(Object::as_reference).unwrap();
+    assert_eq!(
+        document
+            .get_dictionary(font)
+            .and_then(|font| font.get(b"BaseFont"))
+            .and_then(Object::as_name)
+            .unwrap(),
+        b"Helvetica"
+    );
+    assert_eq!(stamp_forms(&document, page).len(), 1);
+    // Centred on the 300 point width the page inherits.
+    assert_near(first_stamp_origin(&output), (150.0 - 2.78, 20.0));
+}
+
+#[test]
+fn leaves_resources_shared_with_unstamped_pages_alone() {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let font = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let shared = document.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font },
+    });
+    let kids = ["first", "second"]
+        .into_iter()
+        .map(|label| {
+            let content = document.add_object(Stream::new(dictionary! {}, label.into()));
+            Object::Reference(document.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content,
+                "Resources" => shared,
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            }))
+        })
+        .collect::<Vec<_>>();
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 2 }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+
+    let output = add_page_numbers_bytes(
+        &input,
+        "",
+        PageNumberOptions {
+            pages: &[1],
+            ..number_options("{n}")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let pages = document.get_pages();
+    let resources_of = |page| {
+        document
+            .get_dictionary(pages[&page])
+            .unwrap()
+            .get(b"Resources")
+    };
+
+    let second = resources_of(2).and_then(Object::as_reference).unwrap();
+    let second = document.get_dictionary(second).unwrap();
+    assert!(!second.has(b"XObject"));
+    // The first page's copy refers to the same font dictionary rather than
+    // carrying its own.
+    let first = resources_of(1).and_then(Object::as_dict).unwrap();
+    assert_eq!(
+        first.get(b"Font").and_then(Object::as_reference).unwrap(),
+        second.get(b"Font").and_then(Object::as_reference).unwrap()
+    );
+    assert_eq!(page_texts(&output), [vec!["1"], vec![]]);
+}
+
+#[test]
+fn draws_a_watermark_behind_the_page_when_asked() {
+    let output = add_watermark_bytes(
+        &numbered_pdf(1),
+        "",
+        WatermarkOptions {
+            behind: true,
+            ..watermark_options("DRAFT")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let content = Content::decode(&document.get_page_content(document.get_pages()[&1])).unwrap();
+    assert_eq!(content.operations[0].operator, "Do");
+}
+
+#[test]
+fn watermark_shares_one_form_between_pages_of_one_size() {
+    let output = add_watermark_bytes(
+        &numbered_pdf(3),
+        "",
+        WatermarkOptions {
+            opacity: 0.25,
+            rotation: 45.0,
+            ..watermark_options("DRAFT")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let forms = document
+        .get_pages()
+        .into_values()
+        .flat_map(|page| stamp_forms(&document, page))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(forms.len(), 1);
+    let form = document
+        .get_object(*forms.first().unwrap())
+        .and_then(Object::as_stream)
+        .unwrap();
+    let state = form
+        .dict
+        .get(b"Resources")
+        .and_then(Object::as_dict)
+        .and_then(|resources| resources.get(b"ExtGState"))
+        .and_then(Object::as_dict)
+        .and_then(|states| states.get(b"G0"))
+        .and_then(Object::as_reference)
+        .unwrap();
+    let opacity = document
+        .get_dictionary(state)
+        .and_then(|state| state.get(b"ca"))
+        .and_then(Object::as_float)
+        .unwrap();
+    assert!((opacity - 0.25).abs() < 1e-6);
+}
+
+#[test]
+fn transparency_raises_an_old_version_to_1_4() {
+    let mut document = Document::load_mem(&one_page_pdf("old")).unwrap();
+    document.version = "1.3".into();
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+    let output = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            opacity: 0.5,
+            ..watermark_options("DRAFT")
+        },
+    )
+    .unwrap();
+    let version = Document::load_mem(&output).unwrap().version;
+    assert!(parse_version(&version) >= (1, 4), "{version}");
+}
+
+#[test]
+fn turns_a_watermark_about_its_centre() {
+    // "X" is 13.34 points wide at 20 points and its capitals 14.36 tall, so
+    // the unturned baseline starts 6.67 left of and 7.18 below the centre.
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    let output = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            rotation: 90.0,
+            ..watermark_options("X")
+        },
+    )
+    .unwrap();
+    assert_near(first_stamp_origin(&output), (107.18, 93.33));
+}
+
+#[test]
+fn tiles_a_watermark_but_not_into_dust() {
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    let output = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            tile: true,
+            rotation: 30.0,
+            ..watermark_options("X")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let shown = stamped_text(&document, document.get_pages()[&1]);
+    assert!(shown.len() > 4, "{} tiles", shown.len());
+
+    let dust = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            tile: true,
+            margin: 0.0,
+            content: WatermarkContent::Text {
+                text: ".",
+                style: helvetica(1.0),
+            },
+            ..watermark_options("")
+        },
+    )
+    .unwrap_err();
+    assert!(dust.contains("too small"), "{dust}");
+}
+
+#[test]
+fn image_watermark_keeps_png_transparency() {
+    let png = rgba_png();
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    let output = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            content: WatermarkContent::Image {
+                bytes: &png,
+                width: 0.5,
+            },
+            ..watermark_options("")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let form = stamp_forms(&document, document.get_pages()[&1])[0];
+    let form = document
+        .get_object(form)
+        .and_then(Object::as_stream)
+        .unwrap();
+    let image = form
+        .dict
+        .get(b"Resources")
+        .and_then(Object::as_dict)
+        .and_then(|resources| resources.get(b"XObject"))
+        .and_then(Object::as_dict)
+        .and_then(|images| images.get(b"I0"))
+        .and_then(Object::as_reference)
+        .unwrap();
+    assert!(
+        document
+            .get_object(image)
+            .and_then(Object::as_stream)
+            .unwrap()
+            .dict
+            .has(b"SMask")
+    );
+    // A 2 by 1 image at half the page width, centred.
+    let content = String::from_utf8(form.decompressed_content().unwrap()).unwrap();
+    assert!(
+        content.contains("1 0 0 1 50 75 cm\n100 0 0 50 0 0 cm\n/I0 Do"),
+        "{content}"
+    );
+}
+
+#[test]
+fn refuses_what_it_cannot_draw() {
+    let input = numbered_pdf(4);
+    let error = add_watermark_bytes(&input, "", watermark_options("日本")).unwrap_err();
+    assert!(error.contains("cannot be drawn"), "{error}");
+    let error = add_page_numbers_bytes(
+        &input,
+        "",
+        PageNumberOptions {
+            pages: &[5],
+            ..number_options("{n}")
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("between 1 and 4"), "{error}");
+    assert!(add_page_numbers_bytes(&input, "", number_options(" ")).is_err());
+    assert!(add_watermark_bytes(&input, "", watermark_options(" \n ")).is_err());
+    for options in [
+        WatermarkOptions {
+            opacity: 1.5,
+            ..watermark_options("A")
+        },
+        WatermarkOptions {
+            margin: f32::NAN,
+            ..watermark_options("A")
+        },
+        WatermarkOptions {
+            rotation: f32::INFINITY,
+            ..watermark_options("A")
+        },
+        WatermarkOptions {
+            content: WatermarkContent::Text {
+                text: "A",
+                style: helvetica(0.0),
+            },
+            ..watermark_options("A")
+        },
+        WatermarkOptions {
+            content: WatermarkContent::Image {
+                bytes: b"not an image",
+                width: 0.5,
+            },
+            ..watermark_options("")
+        },
+        WatermarkOptions {
+            content: WatermarkContent::Image {
+                bytes: &rgba_png(),
+                width: 0.0,
+            },
+            ..watermark_options("")
+        },
+    ] {
+        assert!(add_watermark_bytes(&input, "", options).is_err());
+    }
+}
+
+#[test]
+fn stamps_a_locked_pdf_with_its_password_and_writes_it_unlocked() {
+    let locked = locked_pdf(&numbered_pdf(2), "secret");
+    let missing = add_page_numbers_bytes(&locked, "", number_options("{n}")).unwrap_err();
+    assert!(missing.contains("password protected"), "{missing}");
+
+    let output = add_page_numbers_bytes(&locked, "secret", number_options("{n}")).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert!(document.trailer.get(b"Encrypt").is_err());
+    assert_eq!(page_texts(&output), [["1"], ["2"]]);
+}
+
+#[test]
+fn refuses_to_stamp_a_page_tree_listing_a_page_it_cannot_read() {
+    let mut document = Document::with_version("1.4");
+    let pages_id = document.new_object_id();
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            // (9, 0) is never written.
+            "Kids" => vec![Object::Reference((9, 0)), page_id.into()],
+            "Count" => 2,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut broken = Vec::new();
+    document.save_to(&mut broken).unwrap();
+
+    let error = add_page_numbers_bytes(&broken, "", number_options("{n}")).unwrap_err();
+    assert!(error.contains("damaged"), "{error}");
+    assert!(add_watermark_bytes(&broken, "", watermark_options("DRAFT")).is_err());
 }

@@ -16,6 +16,7 @@ rust/plico-engine/src/compression.rs                        compression pipeline
 rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
+rust/plico-engine/src/stamps.rs                             page numbers and watermarks drawn onto existing pages
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
 rust/plico-engine/src/tests.rs                              generated-fixture unit tests
 rust/plico-engine/tests/corpus.rs                           structural checks over a real PDF corpus
@@ -27,6 +28,7 @@ src/lib/pdf/worker.ts                                       worker side, calls i
 src/lib/pdf/wasm/                                           generated, gitignored, never edit
 src/lib/tool-catalog.ts                                     the ~40 advertised tools
 scripts/raster-compare.mjs                                  rendered-output comparison over the corpus
+scripts/raster-stamp.mjs                                    rendered check of page numbers and watermarks
 testing/                                                    local corpus, gitignored
 ```
 
@@ -45,6 +47,7 @@ npm run lint          # prettier and eslint
 npm run test:engine   # cargo test
 npm run test:corpus   # needs a corpus, see below
 npm run test:raster   # needs a corpus, renders and compares output
+npm run test:raster:stamp  # needs a corpus, renders stamped output
 ```
 
 First-time requirements beyond node: `rustup target add wasm32-unknown-unknown`,
@@ -66,7 +69,12 @@ If your change moves any of those numbers, say so.
 
 The raster harness is currently red on 9 files. Do not be surprised by that; it
 is the point. See `ISSUES.md` for which files and why. If your change moves that
-number, say so.
+number, say so. (It is also currently comparing nothing; see `ISSUES.md`.)
+
+The stamp raster harness is red on 7 files, all lopdf load/save losses shared
+with merge, and reports 37 pages where the number drew nothing visible, each
+explained in `ISSUES.md`. The stamp corpus check numbers and watermarks 923
+files and refuses `issue7229.pdf`.
 
 ## Engine invariants
 
@@ -101,6 +109,13 @@ first deletes the entire document.
 
 Give each input a disjoint id range, and reserve one id past each range for
 unresolvable references.
+
+Stamping edits pages in place: no page tree rebuild, no renumbering. Lay a
+stamp out in the page's visible frame, which is `/CropBox` (clipped to
+`/MediaBox`) turned by `/Rotate` and scaled by `/UserUnit`, never raw
+`/MediaBox` coordinates. Wrap existing content in `q`/`Q` and close any states
+the page left open, or the stamp is drawn through the page's last transform.
+Never add to `/Resources` other pages share; give the page its own shallow copy.
 
 ## lopdf notes
 

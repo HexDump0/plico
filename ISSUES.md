@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 30 unit tests against
+Evidence comes from two places. `cargo test` runs 68 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -130,6 +130,43 @@ case.
 ---
 
 ## Open, engine correctness
+
+### A dangling reference can still land on a real object when written
+
+`renumber()` points a reference to a missing object at a reserved id so it stays
+dangling. `write_document` then calls lopdf's `renumber_objects()` after
+pruning, which compacts ids and leaves references it has no mapping for alone,
+the exact behaviour `renumber()` exists to avoid. The reserved id is free, so
+compaction moves a real object onto it.
+
+Reproduced 2026-09-30: a page with `/Annots [50 0 R]`, object 50 missing,
+merged with a three page PDF. In the output that annotation reference resolves
+to a content stream from the second file. It parses cleanly. Merge, Split and
+Organize all write through `write_document`. The likely fix is to compact with
+`renumber(&mut document, 1)` instead, which keeps missing references past the
+last object, plus a regression test shaped like the reproduction. Not fixed
+yet.
+
+### Page numbers and watermarks only draw Western European text
+
+Stamps use the standard 14 fonts (Helvetica, Times, Courier, regular and bold),
+which every reader has, so nothing is embedded. They only cover
+WinAnsiEncoding. Text outside it is refused by name ("“日” cannot be drawn with
+the built-in PDF fonts."), never drawn as the wrong glyphs. Widths come from
+Adobe's Core 14 AFM files, so placement is exact for what is supported. Other
+scripts need an embedded, subset font, which is a size and licensing decision.
+
+Standard 14 fonts without embedding are also not allowed in PDF/A, which does
+not matter until PDF/A output exists.
+
+### Stamping refuses a page tree it cannot fully read
+
+`issue7229.pdf` lists a first page that only a repairing reader finds. Merge
+rebuilds the page tree and drops it (see the raster section below). Stamping
+edits the tree in place, so it would write the unreadable entry back and number
+"Page 1 of 1" on what readers show as two pages; pdf.js then refuses the whole
+file. It refuses instead: "Some pages of this PDF are damaged and could not be
+read."
 
 ### Catalog structure survives only for the first input
 
@@ -363,6 +400,35 @@ byte-identical. The 9 differences fall into four buckets:
   have byte-identical content streams and resources after merging yet render
   differently in pdf.js. Settling which is right needs a second renderer.
 
+### The merge raster harness currently compares nothing
+
+`merge_pdfs` gained `passwords` and `bookmarks` arguments, and
+`scripts/raster-compare.mjs` still calls it with two. The wasm binding throws
+on the missing arrays, every file is counted as "engine refused the merge", and
+the run reports 0 failures. The 9 file baseline above predates that and has not
+been re-measured. The fix is passing `[], []`.
+
+### Stamps are checked by rendering, with 7 known failures
+
+`npm run test:raster:stamp` renders every corpus file three ways with pdf.js:
+as is, with an opacity 0 watermark, and with page numbers at the bottom right.
+The invisible watermark must match the source; it goes through the same
+wrapping and resource copying as a visible one. The numbered render must differ
+from the invisible one only in the bottom right corner as displayed, which is
+what exercises `/CropBox`, `/Rotate` and `/UserUnit`.
+
+Baseline 2026-09-30: 921 files compared, 7 failures, all load/save losses
+shared with merge above: the five stream decoding files, `freeculture.pdf`, and
+`issue13147.pdf`. Stamping keeps each page's original streams, but lopdf has
+already lost those bytes on load. `issue7229.pdf` is refused.
+
+37 pages show no number, all explained: pages smaller than the margin and text
+(`issue11878_reduced.pdf` is 3 by 3 points, several are under 35 points tall),
+a form field whose widget covers the corner (`issue19083.pdf`), a fuzzed file,
+and pages where pdf.js under Node stops drawing before the end of the content
+(`images_1bit_grayscale.pdf`, `issue4706.pdf`, `issue7821.pdf`,
+`issue20294_reduced.pdf`), where poppler shows the number in the right place.
+
 ### No fuzzing
 
 `cargo-fuzz` over `merge_pdf_bytes`, seeded from the corpus. Two invariants:
@@ -387,6 +453,12 @@ lopdf's parser. Nobody has checked which is which.
 `svelte/prefer-svelte-reactivity`. These predate this work and sit in dialog and
 motion code where a naive fix risks changing behaviour, so they are listed rather
 than patched. `npm run lint` fails until they are dealt with.
+
+### Two clippy warnings from a newer toolchain
+
+`cargo clippy --all-targets` flags `chunks_exact` with a constant size in
+`split_pdf_ranges` and `organize_pdfs` in `bindings.rs`. The code predates the
+lint; it was clean on the toolchain that wrote it.
 
 ### Worker lifecycle
 

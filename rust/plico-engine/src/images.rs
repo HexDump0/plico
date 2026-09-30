@@ -29,12 +29,12 @@ pub enum PageOrientation {
 /// CSS pixels to points: 72 / 96.
 const POINTS_PER_PIXEL: f32 = 0.75;
 
-struct PreparedImage {
-    stream: Stream,
-    mask: Option<Stream>,
-    width: u32,
-    height: u32,
-    orientation: u8,
+pub(crate) struct PreparedImage {
+    pub(crate) stream: Stream,
+    pub(crate) mask: Option<Stream>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) orientation: u8,
 }
 
 pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result<Vec<u8>, String> {
@@ -135,7 +135,7 @@ pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result
     write_compressed(document)
 }
 
-fn image_matrix(orientation: u8, x: f32, y: f32, width: f32, height: f32) -> [f32; 6] {
+pub(crate) fn image_matrix(orientation: u8, x: f32, y: f32, width: f32, height: f32) -> [f32; 6] {
     match orientation {
         2 => [-width, 0.0, 0.0, height, x + width, y],
         3 => [-width, 0.0, 0.0, -height, x + width, y + height],
@@ -148,7 +148,7 @@ fn image_matrix(orientation: u8, x: f32, y: f32, width: f32, height: f32) -> [f3
     }
 }
 
-fn prepare_image(bytes: &[u8]) -> Result<PreparedImage, String> {
+pub(crate) fn prepare_image(bytes: &[u8]) -> Result<PreparedImage, String> {
     if bytes.starts_with(b"\xFF\xD8") {
         prepare_jpeg(bytes)
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
