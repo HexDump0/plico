@@ -8,7 +8,9 @@ import init, {
 	organize_pdfs,
 	split_pdf_every,
 	split_pdf_ranges,
-	unlock_pdf
+	unlock_pdf,
+	pdf_protection,
+	protect_pdf
 } from './wasm/plico_engine.js';
 import type { PdfImageOptions, PdfOutput, PdfWorkerRequest, PdfWorkerResponse } from './types';
 
@@ -224,6 +226,31 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				id,
 				await exportPdfImages(request.files[0], request.passwords[0] ?? '', request.options)
 			);
+			return;
+		}
+		if (request.operation === 'protection') {
+			const response: PdfWorkerResponse = {
+				id,
+				ok: true,
+				value: pdf_protection(new Uint8Array(request.files[0]))
+			};
+			self.postMessage(response);
+			return;
+		}
+		if (request.operation === 'protect') {
+			const { options } = request;
+			postOutput(id, {
+				format: 'pdf',
+				bytes: protect_pdf(
+					new Uint8Array(request.files[0]),
+					request.passwords[0] ?? '',
+					options.userPassword,
+					options.ownerPassword,
+					options.allowPrinting,
+					options.allowCopying,
+					options.allowEditing
+				)
+			});
 			return;
 		}
 		if (request.operation === 'unlock') {

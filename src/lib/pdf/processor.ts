@@ -7,14 +7,17 @@ import type {
 	PdfImageOptions,
 	PdfWorkerRequest,
 	PdfWorkerResponse,
+	Protection,
+	ProtectOptions,
 	SplitOptions
 } from './types';
 
 let worker: Worker | undefined;
 let requestId = 0;
+type PdfWorkerSuccess = Extract<PdfWorkerResponse, { ok: true }>;
 const pending = new Map<
 	number,
-	{ resolve: (output: PdfOutput) => void; reject: (error: Error) => void }
+	{ resolve: (response: PdfWorkerSuccess) => void; reject: (error: Error) => void }
 >();
 
 function getWorker() {
@@ -24,8 +27,7 @@ function getWorker() {
 		const request = pending.get(event.data.id);
 		if (!request) return;
 		pending.delete(event.data.id);
-		if (event.data.ok)
-			request.resolve({ bytes: new Uint8Array(event.data.bytes), format: event.data.format });
+		if (event.data.ok) request.resolve(event.data);
 		else request.reject(new Error(event.data.error));
 	};
 	worker.onerror = () => stopWorker('The local PDF engine stopped unexpectedly.');
@@ -39,8 +41,14 @@ function stopWorker(message: string) {
 	pending.clear();
 }
 
-function submit(request: PdfWorkerRequest, signal?: AbortSignal) {
-	return new Promise<PdfOutput>((resolve, reject) => {
+async function submit(request: PdfWorkerRequest, signal?: AbortSignal): Promise<PdfOutput> {
+	const response = await send(request, signal);
+	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');
+	return { bytes: new Uint8Array(response.bytes), format: response.format };
+}
+
+function send(request: PdfWorkerRequest, signal?: AbortSignal) {
+	return new Promise<PdfWorkerSuccess>((resolve, reject) => {
 		const abort = () => {
 			stopWorker('The operation was cancelled.');
 			reject(new DOMException('The operation was cancelled.', 'AbortError'));
@@ -85,6 +93,31 @@ export async function processPdfs(
 		signal
 	);
 	return output.bytes;
+}
+
+export async function pdfProtection(file: File, signal?: AbortSignal): Promise<Protection> {
+	const buffer = await file.arrayBuffer();
+	const response = await send(
+		{ id: ++requestId, operation: 'protection', files: [buffer] },
+		signal
+	);
+	const value = 'value' in response ? response.value : -1;
+	return value === 2 ? 'password' : value === 1 ? 'restricted' : 'none';
+}
+
+export async function processProtectPdf(
+	file: File,
+	password: string,
+	options: ProtectOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'protect', files: [buffer], passwords: [password], options },
+		signal
+	);
 }
 
 // Writes a protected PDF back without its encryption, for consumers that

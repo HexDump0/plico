@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { cubicIn, cubicOut } from 'svelte/easing';
-	import { fade } from 'svelte/transition';
+	import { fade, slide } from 'svelte/transition';
 	import {
 		IconArrowRight,
 		IconArrowsSort,
@@ -15,6 +15,9 @@
 	import { pageKey } from '$lib/pdf/sources';
 	import { getWorkspace } from '$lib/workspace.svelte';
 	import {
+		pdfProtection,
+		processProtectPdf,
+		unlockPdf,
 		processCompressPdf,
 		processImagesToPdf,
 		processOrganizePdf,
@@ -22,7 +25,7 @@
 		processPdfs,
 		processSplitPdf
 	} from '$lib/pdf/processor';
-	import type { ImagePdfOptions, PdfImageOptions } from '$lib/pdf/types';
+	import type { ImagePdfOptions, PdfImageOptions, Protection } from '$lib/pdf/types';
 	import { DownloadJob } from '$lib/pdf/download-job.svelte';
 	import { parsePageRange } from '$lib/pdf/page-range';
 	import {
@@ -45,6 +48,7 @@
 	import AdvancedOptions from './AdvancedOptions.svelte';
 	import ToggleSwitch from './ToggleSwitch.svelte';
 	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
+	import PasswordInput from './PasswordInput.svelte';
 	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
@@ -57,6 +61,8 @@
 	const isRotate = $derived(tool.id === 'rotate');
 	const isPageTool = $derived(isOrganize || isExtract || isRemove || isRotate);
 	const isCompress = $derived(tool.id === 'compress');
+	const isProtect = $derived(tool.id === 'protect');
+	const isUnlock = $derived(tool.id === 'unlock');
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
 			tool.id === 'pdf-to-png' ||
@@ -108,6 +114,17 @@
 	let selectedPages = $state<string[]>([]);
 	let extractOutput = $state<'pdf' | 'separate' | 'images'>('pdf');
 	let mergeBookmarks = $state(false);
+	let protectPassword = $state('');
+	let protectConfirm = $state('');
+	let protectOwner = $state('');
+	let allowPrinting = $state(true);
+	let allowCopying = $state(true);
+	let allowEditing = $state(true);
+	let unlockProtection = $state<Protection | 'checking'>('checking');
+	let unlockPassword = $state('');
+	// The password the engine last rejected; the error clears once it is edited.
+	let rejectedPassword = $state('');
+	const unlockWrong = $derived(rejectedPassword !== '' && rejectedPassword === unlockPassword);
 	let organizeViewer = $state<{ addBlankPage: () => Promise<void> }>();
 	let officeStage = $state<'loading' | 'converting'>('loading');
 	let extractImageFormat = $state<'jpg' | 'png'>('jpg');
@@ -166,7 +183,19 @@
 		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
 	const imagePdfSignature = $derived(
-		JSON.stringify([imagePdfPageSize, imagePdfOrientation, imagePdfMargin, mergeBookmarks])
+		JSON.stringify([
+			imagePdfPageSize,
+			imagePdfOrientation,
+			imagePdfMargin,
+			mergeBookmarks,
+			protectPassword,
+			protectConfirm,
+			protectOwner,
+			unlockPassword,
+			allowPrinting,
+			allowCopying,
+			allowEditing
+		])
 	);
 	const compressOptions = $derived({
 		// clarification here
@@ -194,67 +223,109 @@
 				: Number.isInteger(splitInterval) && splitInterval > 0)
 	);
 	const pdfToImageValid = $derived(!!currentFile);
+	const protectRestricted = $derived(!(allowPrinting && allowCopying && allowEditing));
+	// Only once the confirmation is as long as the password, so typing it does
+	// not flash an error at every keystroke.
+	const protectMismatch = $derived(
+		protectConfirm.length >= protectPassword.length &&
+			protectConfirm.length > 0 &&
+			protectConfirm !== protectPassword
+	);
+	const protectOwnerSame = $derived(
+		protectRestricted && protectOwner.length > 0 && protectOwner === protectPassword
+	);
+	// AES-256 passwords are at most 127 bytes of UTF-8.
+	const protectTooLong = $derived(
+		new TextEncoder().encode(protectPassword).length > 127 ||
+			new TextEncoder().encode(protectOwner).length > 127
+	);
+	const protectValid = $derived(
+		!!currentFile &&
+			protectPassword.length > 0 &&
+			protectConfirm === protectPassword &&
+			!protectOwnerSame &&
+			!protectTooLong
+	);
+	const unlockValid = $derived(
+		!!currentFile &&
+			(unlockProtection === 'restricted' ||
+				(unlockProtection === 'password' && unlockPassword.length > 0 && !unlockWrong))
+	);
 	const imagePdfValid = $derived(workspace.files.length > 0);
-	const locked = $derived(workspace.hasLockedFiles);
+	// Unlock also takes the password in its sidebar, so a locked file there is
+	// the expected input rather than something to clear first.
+	const locked = $derived(workspace.hasLockedFiles && !isUnlock);
 	const actionDisabled = $derived(
 		locked
 			? true
-			: officeTool
-				? !currentFile || processing
-				: isMerge
-					? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-					: isSplit
-						? !splitValid || processing
-						: isPageTool
-							? !pageToolValid || processing
-							: isCompress
-								? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-								: isPdfToImage
-									? !pdfToImageValid || processing
-									: isImageToPdf
-										? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-										: true
+			: isProtect
+				? !protectValid || processing
+				: isUnlock
+					? !unlockValid || processing
+					: officeTool
+						? !currentFile || processing
+						: isMerge
+							? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+							: isSplit
+								? !splitValid || processing
+								: isPageTool
+									? !pageToolValid || processing
+									: isCompress
+										? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
+										: isPdfToImage
+											? !pdfToImageValid || processing
+											: isImageToPdf
+												? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+												: true
 	);
 	const actionUnavailable = $derived(
 		locked
 			? true
-			: officeTool
-				? !currentFile
-				: isMerge
-					? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-					: isSplit
-						? !splitValid
-						: isPageTool
-							? !pageToolValid
-							: isCompress
-								? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-								: isPdfToImage
-									? !pdfToImageValid
-									: isImageToPdf
-										? !imagePdfValid || !!dragged || !!keyboardPicked
-										: true
+			: isProtect
+				? !protectValid
+				: isUnlock
+					? !unlockValid
+					: officeTool
+						? !currentFile
+						: isMerge
+							? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+							: isSplit
+								? !splitValid
+								: isPageTool
+									? !pageToolValid
+									: isCompress
+										? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+										: isPdfToImage
+											? !pdfToImageValid
+											: isImageToPdf
+												? !imagePdfValid || !!dragged || !!keyboardPicked
+												: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
 		officeTool
 			? baseName
-			: isMerge
-				? 'plico-merged'
-				: isImageToPdf
-					? 'plico-images'
-					: isSplit
-						? `${baseName}-split`
-						: isOrganize
-							? `${baseName}-organized`
-							: isExtract
-								? `${baseName}-extracted`
-								: isRemove
-									? `${baseName}-pages-removed`
-									: isRotate
-										? `${baseName}-rotated`
-										: isCompress
-											? `${baseName}-compressed`
-											: `${baseName}-images`
+			: isProtect
+				? `${baseName}-protected`
+				: isUnlock
+					? `${baseName}-unlocked`
+					: isMerge
+						? 'plico-merged'
+						: isImageToPdf
+							? 'plico-images'
+							: isSplit
+								? `${baseName}-split`
+								: isOrganize
+									? `${baseName}-organized`
+									: isExtract
+										? `${baseName}-extracted`
+										: isRemove
+											? `${baseName}-pages-removed`
+											: isRotate
+												? `${baseName}-rotated`
+												: isCompress
+													? `${baseName}-compressed`
+													: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -331,8 +402,76 @@
 		organizePages = [];
 		selectedPages = [];
 		filename = '';
+		protectPassword = '';
+		protectConfirm = '';
+		protectOwner = '';
+		allowPrinting = allowCopying = allowEditing = true;
+	});
+	// pdf.js cannot tell a restricted PDF from an unprotected one, so Unlock
+	// asks the engine what the file actually carries.
+	$effect(() => {
+		const file = currentFile;
+		if (!isUnlock || !file) return;
+		let cancelled = false;
+		unlockProtection = 'checking';
+		unlockPassword = '';
+		rejectedPassword = '';
+		pdfProtection(file)
+			.then((protection) => {
+				if (!cancelled) unlockProtection = protection;
+			})
+			.catch(() => {
+				if (!cancelled) unlockProtection = 'none';
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+	// A password accepted in the card fills the sidebar field, so either place
+	// works and Unlock is ready to press.
+	$effect(() => {
+		if (!isUnlock || !currentFile) return;
+		const known = workspace.passwordFor(currentFile);
+		const lock = workspace.lockState(currentFile);
+		if (known && (!lock || lock === 'unlocked')) untrack(() => (unlockPassword = known));
 	});
 	onDestroy(() => job.clear());
+	async function protect() {
+		if (processing || !protectValid || !currentFile) return;
+		const file = currentFile;
+		const options = {
+			userPassword: protectPassword,
+			ownerPassword: protectRestricted ? protectOwner : '',
+			allowPrinting,
+			allowCopying,
+			allowEditing
+		};
+		await job.run(
+			(signal) => processProtectPdf(file, workspace.passwordFor(file), options, signal),
+			'Could not protect this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function unlock() {
+		if (processing || !unlockValid || !currentFile) return;
+		const file = currentFile;
+		const password = unlockProtection === 'password' ? unlockPassword : '';
+		await job.run(
+			async (signal) => ({
+				bytes: await unlockPdf(file, password, signal),
+				format: 'pdf'
+			}),
+			'Could not unlock this PDF.',
+			() => downloadLink?.click()
+		);
+		if (job.error.includes('could not be unlocked with that password')) {
+			rejectedPassword = password;
+			job.error = '';
+		} else if (job.result && password) {
+			// Lets the card show its pages now that the password is known.
+			workspace.unlock(file, password);
+		}
+	}
 	async function merge() {
 		if (processing || dragged || workspace.files.length < 2) return;
 		const files = [...workspace.files];
@@ -532,7 +671,14 @@
 					) {
 						event.preventDefault();
 						if (!processing) {
-							if (isSplit || isPdfToImage || officeTool || (isPageTool && !isOrganize))
+							if (
+								isSplit ||
+								isPdfToImage ||
+								isProtect ||
+								isUnlock ||
+								officeTool ||
+								(isPageTool && !isOrganize)
+							)
 								replace(event.dataTransfer.files);
 							else workspace.add(event.dataTransfer.files, inputType);
 						}
@@ -560,7 +706,7 @@
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
-							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !officeTool)}<input
+							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !officeTool)}<input
 									bind:this={input}
 									type="file"
 									accept={inputAccept[inputType]}
@@ -646,7 +792,63 @@
 					<h1 class="flex items-center gap-3 text-xl font-semibold tracking-tight">
 						<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
 					</h1>
-					{#if isOrganize}
+					{#if isProtect}
+						<div class="space-y-4">
+							<PasswordInput
+								label="Password"
+								bind:value={protectPassword}
+								invalid={protectTooLong}
+								disabled={processing}
+							/>
+							<div>
+								<PasswordInput
+									label="Confirm password"
+									bind:value={protectConfirm}
+									invalid={protectMismatch}
+									disabled={processing}
+									onenter={() => void protect()}
+								/>
+								{#if protectMismatch}<p
+										role="alert"
+										transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+										class="pt-2 text-xs text-convert"
+									>
+										Passwords don't match
+									</p>{/if}
+							</div>
+						</div>
+					{:else if isUnlock && currentFile}
+						<div class="flex items-center justify-between">
+							<h2 class="text-sm font-semibold">Protection</h2>
+							<span class="text-xs text-muted" role="status"
+								>{unlockProtection === 'checking'
+									? 'Checking...'
+									: unlockProtection === 'password'
+										? 'Password'
+										: unlockProtection === 'restricted'
+											? 'Restrictions only'
+											: 'None'}</span
+							>
+						</div>
+						{#if unlockProtection === 'password'}<div
+								transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+							>
+								<PasswordInput
+									label="Password"
+									bind:value={unlockPassword}
+									invalid={unlockWrong}
+									disabled={processing}
+									onenter={() => void unlock()}
+								/>
+								{#if unlockWrong}<p
+										role="alert"
+										transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+										class="pt-2 text-xs text-convert"
+									>
+										Incorrect password
+									</p>{/if}
+							</div>{/if}
+					{:else if isOrganize}
 						<div>
 							<h2 class="mb-3 text-sm font-semibold">Pages</h2>
 							<div
@@ -721,6 +923,27 @@
 								tone="merge"
 							/>
 						</AdvancedOptions>
+					{:else if isProtect}
+						<AdvancedOptions {reducedMotion}>
+							<ToggleSwitch bind:checked={allowPrinting} label="Allow printing" tone="merge" />
+							<ToggleSwitch bind:checked={allowCopying} label="Allow copying text" tone="merge" />
+							<ToggleSwitch bind:checked={allowEditing} label="Allow editing" tone="merge" />
+							{#if protectRestricted}<div
+									transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+									class="pt-3"
+								>
+									<PasswordInput
+										label="Permissions password"
+										placeholder="Optional"
+										bind:value={protectOwner}
+										invalid={protectOwnerSame}
+										disabled={processing}
+									/>
+									{#if protectOwnerSame}<p role="alert" class="pt-2 text-xs text-convert">
+											Must differ from the password
+										</p>{/if}
+								</div>{/if}
+						</AdvancedOptions>
 					{:else if isCompress}
 						<AdvancedOptions {reducedMotion}>
 							<ToggleSwitch
@@ -767,37 +990,45 @@
 						onclick={() =>
 							result
 								? downloadLink?.click()
-								: isSplit
-									? void split()
-									: isPageTool
-										? void organize()
-										: officeTool
-											? void convertOffice()
-											: isCompress
-												? void compress()
-												: isPdfToImage
-													? void convertPdfToImage()
-													: isImageToPdf
-														? void convertImagesToPdf()
-														: void merge()}
+								: isProtect
+									? void protect()
+									: isUnlock
+										? void unlock()
+										: isSplit
+											? void split()
+											: isPageTool
+												? void organize()
+												: officeTool
+													? void convertOffice()
+													: isCompress
+														? void compress()
+														: isPdfToImage
+															? void convertPdfToImage()
+															: isImageToPdf
+																? void convertImagesToPdf()
+																: void merge()}
 						aria-label={result
 							? `Download ${resultFormat.toUpperCase()} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 							: processing
-								? isSplit
-									? 'Splitting PDF'
-									: isPageTool
-										? `${tool.label} in progress`
-										: officeTool
-											? officeStage === 'loading'
-												? 'Loading converter...'
-												: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
-											: isCompress
-												? 'Compressing PDF'
-												: isPdfToImage
-													? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-													: isImageToPdf
-														? 'Converting images to PDF...'
-														: 'Merging PDF'
+								? isProtect
+									? 'Protecting PDF'
+									: isUnlock
+										? 'Unlocking PDF'
+										: isSplit
+											? 'Splitting PDF'
+											: isPageTool
+												? `${tool.label} in progress`
+												: officeTool
+													? officeStage === 'loading'
+														? 'Loading converter...'
+														: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
+													: isCompress
+														? 'Compressing PDF'
+														: isPdfToImage
+															? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+															: isImageToPdf
+																? 'Converting images to PDF...'
+																: 'Merging PDF'
 								: tool.label}
 						class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 							? 'opacity-40'
@@ -819,17 +1050,21 @@
 										? officeStage === 'loading'
 											? 'Loading converter...'
 											: 'Converting...'
-										: isSplit
-											? 'Splitting...'
-											: isPageTool
-												? 'Processing...'
-												: isCompress
-													? 'Compressing...'
-													: isPdfToImage
-														? 'Converting...'
-														: isImageToPdf
-															? 'Converting...'
-															: 'Merging...'}{:else}
+										: isProtect
+											? 'Protecting...'
+											: isUnlock
+												? 'Unlocking...'
+												: isSplit
+													? 'Splitting...'
+													: isPageTool
+														? 'Processing...'
+														: isCompress
+															? 'Compressing...'
+															: isPdfToImage
+																? 'Converting...'
+																: isImageToPdf
+																	? 'Converting...'
+																	: 'Merging...'}{:else}
 									{tool.label}<IconArrowRight size={20} />{/if}</span
 							>
 							<span

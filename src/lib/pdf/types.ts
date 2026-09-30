@@ -47,6 +47,14 @@ export type PdfWorkerRequest =
 			bookmarks: string[];
 	  }
 	| { id: number; operation: 'unlock'; files: ArrayBuffer[]; passwords: string[] }
+	| { id: number; operation: 'protection'; files: ArrayBuffer[] }
+	| {
+			id: number;
+			operation: 'protect';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: ProtectOptions;
+	  }
 	| {
 			id: number;
 			operation: 'split';
@@ -91,4 +99,18 @@ export type PdfOutput = {
 
 export type PdfWorkerResponse =
 	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format'] }
+	| { id: number; ok: true; value: number }
 	| { id: number; ok: false; error: string };
+
+// An empty `userPassword` opens without asking; an empty `ownerPassword` is
+// replaced by a random one, so the permissions cannot be lifted.
+export type ProtectOptions = {
+	userPassword: string;
+	ownerPassword: string;
+	allowPrinting: boolean;
+	allowCopying: boolean;
+	allowEditing: boolean;
+};
+
+/// What opening a PDF takes, as `pdf_protection` reports it.
+export type Protection = 'none' | 'restricted' | 'password';

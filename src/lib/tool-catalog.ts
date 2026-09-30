@@ -45,6 +45,8 @@ const supportedToolIds = new Set([
 	'merge',
 	'compress',
 	'split',
+	'protect',
+	'unlock',
 	'organize',
 	'extract',
 	'remove',
