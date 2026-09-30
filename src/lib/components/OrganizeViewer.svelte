@@ -14,7 +14,7 @@
 	} from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
-	import { pageKey, sourceColor, sourceKey } from '$lib/pdf/sources';
+	import { BLANK_SOURCE, pageKey, sourceColor, sourceKey } from '$lib/pdf/sources';
 	import { spring } from '$lib/motion/link';
 	import { getWorkspace } from '$lib/workspace.svelte';
 	import PdfUnlock from './PdfUnlock.svelte';
@@ -94,8 +94,8 @@
 		}
 		const known = new Set(keys);
 		untrack(() => {
-			if (pages.some((page) => !known.has(page.source)))
-				onpageschange(pages.filter((page) => known.has(page.source)));
+			const kept = (page: OrganizePage) => page.source === BLANK_SOURCE || known.has(page.source);
+			if (!pages.every(kept)) onpageschange(pages.filter(kept));
 		});
 		for (const source of next) {
 			if (!source.pdf && !source.failed && !source.loading) void load(source);
@@ -225,6 +225,25 @@
 		onselectionchange(allSelected ? [] : pages.map(pageKey));
 	}
 
+	// Appends a blank page the size of the last page as shown, which the user
+	// then drags into place. Called from the settings sidebar.
+	export async function addBlankPage() {
+		if (processing) return;
+		const last = pages.at(-1);
+		let size = last?.size ?? { width: 595.28, height: 841.89 };
+		const pdf = last && sourceOf(last)?.pdf;
+		if (last && pdf) {
+			const { width, height } = (await pdf.getPage(last.number)).getViewport({ scale: 1 });
+			size = { width, height };
+		}
+		const number =
+			Math.max(
+				0,
+				...pages.filter((page) => page.source === BLANK_SOURCE).map((page) => page.number)
+			) + 1;
+		onpageschange([...pages, { source: BLANK_SOURCE, number, rotation: 0, size }]);
+	}
+
 	function unlockSource(source: Source, password: string) {
 		workspace.unlock(source.file, password);
 		const current = sources.find((entry) => entry.key === source.key);
@@ -310,9 +329,9 @@
 	class="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6"
 >
 	{#if mode === 'organize'}
-		<div class="flex flex-wrap items-start justify-between gap-3">
+		<div class="flex items-start justify-between gap-3">
 			<ul
-				class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2"
+				class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2"
 				aria-label="PDFs in this project"
 			>
 				{#each sources as source, index (source.key)}
@@ -391,8 +410,8 @@
 			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 		{/if}
 	{:else}
-		<div class="flex flex-wrap items-start justify-between gap-3">
-			<div class="flex min-w-0 items-center gap-2 px-1">
+		<div class="flex items-start justify-between gap-3">
+			<div class="flex min-w-0 flex-1 items-center gap-2 px-1">
 				<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={files[0]?.name}>
 					{files[0]?.name}
 				</p>

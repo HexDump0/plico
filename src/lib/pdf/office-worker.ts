@@ -4,7 +4,9 @@ import type { OfficeOperation } from './office-conversion';
 
 type Request = { id: number; operation: OfficeOperation; input: ArrayBuffer };
 type Response =
-	{ id: number; ok: true; bytes: ArrayBuffer } | { id: number; ok: false; error: string };
+	| { id: number; ready: true }
+	| { id: number; ok: true; bytes: ArrayBuffer }
+	| { id: number; ok: false; error: string };
 
 self.onmessage = async (event: MessageEvent<Request>) => {
 	const { id, operation, input } = event.data;
@@ -12,6 +14,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
 		// This import keeps the large Office engine out of the ordinary PDF worker.
 		const { default: init, WasmPdfDocument } = await import('pdf-oxide-wasm/web');
 		await init();
+		self.postMessage({ id, ready: true } satisfies Response);
 		const data = new Uint8Array(input);
 		const document =
 			operation === 'word-to-pdf'

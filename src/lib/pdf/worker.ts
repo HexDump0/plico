@@ -206,7 +206,14 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			}
 			postOutput(id, {
 				format: 'pdf',
-				bytes: images_to_pdf(input, lengths, options.pageWidth, options.pageHeight, options.margin)
+				bytes: images_to_pdf(
+					input,
+					lengths,
+					options.pageWidth,
+					options.pageHeight,
+					options.margin,
+					options.orientation === 'portrait' ? 1 : options.orientation === 'landscape' ? 2 : 0
+				)
 			});
 			return;
 		}
@@ -236,7 +243,7 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				offset += file.byteLength;
 			}
 
-			const output = transferable(merge_pdfs(input, lengths, request.passwords));
+			const output = transferable(merge_pdfs(input, lengths, request.passwords, request.bookmarks));
 			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf' };
 			self.postMessage(response, { transfer: [output] });
 			return;
@@ -262,7 +269,9 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				const digits = Math.max(2, String(parts.length).length);
 				const prefix = `part-${String(index + 1).padStart(digits, '0')}`;
 				return options.mode === 'ranges'
-					? `${prefix}-pages-${options.ranges[index].from}-${options.ranges[index].to}.pdf`
+					? options.ranges[index].from === options.ranges[index].to
+						? `${prefix}-page-${options.ranges[index].from}.pdf`
+						: `${prefix}-pages-${options.ranges[index].from}-${options.ranges[index].to}.pdf`
 					: `${prefix}.pdf`;
 			});
 			postOutput(id, packed);
@@ -286,7 +295,8 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					request.passwords,
 					Uint32Array.from(
 						pages.flatMap(({ source, number, rotation }) => [source, number, rotation])
-					)
+					),
+					Float32Array.from(request.blanks)
 				)
 			});
 			return;

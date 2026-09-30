@@ -44,8 +44,21 @@ pub fn merge_pdf_bytes_with_passwords(
     files: &[&[u8]],
     passwords: &[&str],
 ) -> Result<Vec<u8>, String> {
+    merge_pdf_bytes_with_options(files, passwords, None)
+}
+
+/// `bookmarks`, when given, holds one title per file: the output gets an
+/// outline with one entry per input pointing at its first page.
+pub fn merge_pdf_bytes_with_options(
+    files: &[&[u8]],
+    passwords: &[&str],
+    bookmarks: Option<&[&str]>,
+) -> Result<Vec<u8>, String> {
     if files.len() < 2 {
         return Err("Choose at least two PDFs to merge.".into());
+    }
+    if bookmarks.is_some_and(|titles| titles.len() != files.len()) {
+        return Err("Every PDF needs a bookmark title.".into());
     }
 
     let mut documents = Vec::with_capacity(files.len());
@@ -56,8 +69,16 @@ pub fn merge_pdf_bytes_with_passwords(
             password_at(passwords, index),
         )?);
     }
+    let counts = documents
+        .iter()
+        .map(|document| document.get_pages().len())
+        .collect::<Vec<_>>();
 
-    write_document(merge_documents(documents)?)
+    let mut merged = merge_documents(documents)?;
+    if let Some(titles) = bookmarks {
+        add_file_bookmarks(&mut merged, titles, &counts)?;
+    }
+    write_document(merged)
 }
 
 pub enum SplitMode<'a> {
@@ -153,10 +174,45 @@ pub fn organize_pdfs_bytes_with_passwords(
     passwords: &[&str],
     pages: &[(usize, u32, i32)],
 ) -> Result<Vec<u8>, String> {
+    organize_pdf_items(
+        files,
+        passwords,
+        &pages
+            .iter()
+            .map(|&(source, number, turn)| OrganizeItem::Page {
+                source,
+                number,
+                turn,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// One entry of an organized output, in output order. A blank page has no
+/// source; its size is in points, before `turn`.
+#[derive(Clone, Copy, Debug)]
+pub enum OrganizeItem {
+    Page {
+        source: usize,
+        number: u32,
+        turn: i32,
+    },
+    Blank {
+        width: f32,
+        height: f32,
+        turn: i32,
+    },
+}
+
+pub fn organize_pdf_items(
+    files: &[&[u8]],
+    passwords: &[&str],
+    items: &[OrganizeItem],
+) -> Result<Vec<u8>, String> {
     if files.is_empty() {
         return Err("Choose at least one PDF to organize.".into());
     }
-    if pages.is_empty() {
+    if items.is_empty() {
         return Err("Keep at least one page in the PDF.".into());
     }
 
@@ -172,8 +228,30 @@ pub fn organize_pdfs_bytes_with_passwords(
     let mut selections = vec![Vec::new(); files.len()];
 
     let mut seen = BTreeSet::new();
-    let mut order = Vec::with_capacity(pages.len());
-    for &(source, number, turn) in pages {
+    let mut order = Vec::with_capacity(items.len());
+    let mut blanks = Vec::new();
+    for (position, &item) in items.iter().enumerate() {
+        let (source, number, turn) = match item {
+            OrganizeItem::Page {
+                source,
+                number,
+                turn,
+            } => (source, number, turn),
+            OrganizeItem::Blank {
+                width,
+                height,
+                turn,
+            } => {
+                if !(1.0..=14_400.0).contains(&width) || !(1.0..=14_400.0).contains(&height) {
+                    return Err("A blank page needs a size between 1 and 14,400 points.".into());
+                }
+                if !matches!(turn, 0 | 90 | 180 | 270) {
+                    return Err("Page rotations must be 0, 90, 180, or 270 degrees.".into());
+                }
+                blanks.push((position, width, height, turn));
+                continue;
+            }
+        };
         let Some(&page_id) = available.get(source).and_then(|pages| pages.get(&number)) else {
             return Err(format!(
                 "Page {number} of PDF {} could not be read.",
@@ -218,13 +296,132 @@ pub fn organize_pdfs_bytes_with_passwords(
         order.push((source, number));
     }
 
-    write_document(assemble_documents_in_order(
+    let mut organized = assemble_documents_in_order(
         documents
             .into_iter()
             .zip(selections.into_iter().map(Some))
             .collect(),
         Some(&order),
-    )?)
+    )?;
+    // Ascending positions, so each insert lands at its final index.
+    for (position, width, height, turn) in blanks {
+        insert_blank_page(&mut organized, position, width, height, turn)?;
+    }
+    write_document(organized)
+}
+
+/// The kids of the single flat page tree `assemble_documents_in_order` builds.
+fn root_pages(document: &Document) -> Result<(ObjectId, Vec<Object>), String> {
+    let pages_id = document
+        .catalog()
+        .and_then(|catalog| catalog.get(b"Pages"))
+        .and_then(Object::as_reference)
+        .map_err(|error| format!("The page tree could not be read: {error}"))?;
+    let kids = document
+        .get_dictionary(pages_id)
+        .and_then(|pages| pages.get(b"Kids"))
+        .and_then(Object::as_array)
+        .map_err(|error| format!("The page tree could not be read: {error}"))?
+        .clone();
+    Ok((pages_id, kids))
+}
+
+fn insert_blank_page(
+    document: &mut Document,
+    position: usize,
+    width: f32,
+    height: f32,
+    turn: i32,
+) -> Result<(), String> {
+    let (pages_id, mut kids) = root_pages(document)?;
+    let mut page = dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), Object::Real(width), Object::Real(height)],
+        "Resources" => dictionary! {},
+    };
+    if turn != 0 {
+        page.set("Rotate", i64::from(turn));
+    }
+    let page_id = document.add_object(page);
+    kids.insert(position.min(kids.len()), Object::Reference(page_id));
+    let count = kids.len() as i64;
+    let pages = document
+        .get_dictionary_mut(pages_id)
+        .map_err(|error| format!("The page tree could not be read: {error}"))?;
+    pages.set("Kids", kids);
+    pages.set("Count", count);
+    Ok(())
+}
+
+/// One outline entry per input, in input order, each opening at that input's
+/// first page. `counts` are the inputs' page counts, which is how their first
+/// pages are found in the merged, flat page tree.
+fn add_file_bookmarks(
+    document: &mut Document,
+    titles: &[&str],
+    counts: &[usize],
+) -> Result<(), String> {
+    let (_, kids) = root_pages(document)?;
+    let outlines_id = document.new_object_id();
+    let item_ids = titles
+        .iter()
+        .map(|_| document.new_object_id())
+        .collect::<Vec<_>>();
+
+    let mut first_page = 0;
+    for (index, (&title, &count)) in titles.iter().zip(counts).enumerate() {
+        let page = kids
+            .get(first_page)
+            .cloned()
+            .ok_or("A bookmark points past the last page.")?;
+        first_page += count;
+        let mut item = dictionary! {
+            "Title" => text_string(title),
+            "Parent" => outlines_id,
+            "Dest" => vec![page, "Fit".into()],
+        };
+        if index > 0 {
+            item.set("Prev", item_ids[index - 1]);
+        }
+        if let Some(&next) = item_ids.get(index + 1) {
+            item.set("Next", next);
+        }
+        document
+            .objects
+            .insert(item_ids[index], Object::Dictionary(item));
+    }
+
+    let (Some(&first), Some(&last)) = (item_ids.first(), item_ids.last()) else {
+        return Ok(());
+    };
+    document.objects.insert(
+        outlines_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Outlines",
+            "First" => first,
+            "Last" => last,
+            "Count" => item_ids.len() as i64,
+        }),
+    );
+    let catalog = document
+        .catalog_mut()
+        .map_err(|error| format!("The catalog could not be read: {error}"))?;
+    catalog.set("Outlines", outlines_id);
+    // Opens with the bookmarks showing, since asking for them is the point.
+    catalog.set("PageMode", "UseOutlines");
+    Ok(())
+}
+
+/// PDF text strings are PDFDocEncoding or UTF-16BE with a byte order mark.
+/// ASCII is valid PDFDocEncoding as-is; anything else goes out as UTF-16.
+fn text_string(text: &str) -> Object {
+    if text.is_ascii() {
+        return Object::string_literal(text);
+    }
+    let mut bytes = Vec::new();
+    lopdf::encode_utf16_be(text, &mut bytes);
+    Object::String(bytes, lopdf::StringFormat::Hexadecimal)
 }
 
 /// Lossless stream recompression is always safe, so `reflate` is not optional.

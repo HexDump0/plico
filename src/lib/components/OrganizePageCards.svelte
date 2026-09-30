@@ -6,7 +6,7 @@
 	import { IconRotate, IconRotateClockwise, IconX } from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
-	import { pageKey, sourceColor } from '$lib/pdf/sources';
+	import { BLANK_SOURCE, blankColor, pageKey, sourceColor } from '$lib/pdf/sources';
 	import OrganizeThumbnail from './OrganizeThumbnail.svelte';
 	import DragTrashZone from './DragTrashZone.svelte';
 	import { edgeScroll } from '$lib/motion/edge-scroll';
@@ -40,7 +40,12 @@
 		return sources.find((source) => source.key === page.source);
 	}
 
+	function nameOf(page: OrganizePage) {
+		return page.source === BLANK_SOURCE ? 'blank page' : `page ${page.number}`;
+	}
+
 	function colorOf(page: OrganizePage) {
+		if (page.source === BLANK_SOURCE) return blankColor;
 		return sourceColor(
 			Math.max(
 				0,
@@ -50,13 +55,13 @@
 	}
 
 	function deletePage(page: OrganizePage) {
-		if (pages.length === 1) onremovesource(page.source);
+		if (pages.length === 1 && page.source !== BLANK_SOURCE) onremovesource(page.source);
 		else onpageschange(pages.filter((entry) => pageKey(entry) !== pageKey(page)));
 	}
 	function remove(page: OrganizePage) {
 		if (processing || dragged !== null) return;
 		deletePage(page);
-		orderAnnouncement = `Page ${page.number} removed.`;
+		orderAnnouncement = `Removed ${nameOf(page)}.`;
 	}
 	function rotate(page: OrganizePage, by: number) {
 		if (processing || dragged !== null) return;
@@ -112,7 +117,8 @@
 	}
 	function describe(key: string) {
 		const page = pages.find((entry) => pageKey(entry) === key);
-		return page ? `Page ${page.number}` : 'Page';
+		const name = page ? nameOf(page) : 'page';
+		return name[0].toUpperCase() + name.slice(1);
 	}
 	function cardFlip(
 		node: Element,
@@ -274,7 +280,7 @@
 				trashHovered = false;
 			});
 			if (removePage) {
-				if (page) orderAnnouncement = `Page ${page.number} removed.`;
+				if (page) orderAnnouncement = `Removed ${nameOf(page)}.`;
 				return;
 			}
 			if (shouldCommit)
@@ -457,8 +463,9 @@
 								? `${color.strong} shadow-lg`
 								: `${color.border} group-hover:border-white/25`}"
 					>
-						{#if source?.pdf}<OrganizeThumbnail
-								pdf={source.pdf}
+						{#if source?.pdf || page.size}<OrganizeThumbnail
+								pdf={source?.pdf ?? undefined}
+								size={page.size}
 								number={page.number}
 								rotation={page.rotation}
 							/>{/if}
@@ -469,7 +476,7 @@
 								(keyboardPicked !== null && keyboardPicked !== key)}
 							onclick={() => toggleKeyboardOrder(key)}
 							onkeydown={(event) => handleOrderKey(event, key)}
-							aria-label={`Order ${index + 1}: page ${page.number}. ${keyboardPicked === key ? 'Use arrow keys to move, Enter to place, or Escape to cancel.' : 'Press Enter to reorder.'}`}
+							aria-label={`Order ${index + 1}: ${nameOf(page)}. ${keyboardPicked === key ? 'Use arrow keys to move, Enter to place, or Escape to cancel.' : 'Press Enter to reorder.'}`}
 							aria-pressed={keyboardPicked === key}
 							class="{color.dot} absolute top-2 left-2 flex min-w-7 items-center justify-center rounded-md px-1.5 py-1 text-[11px] font-bold text-canvas backdrop-blur-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
 							>{index + 1}</button
@@ -478,8 +485,12 @@
 							type="button"
 							disabled={processing || dragged !== null || keyboardPicked !== null}
 							onclick={() => remove(page)}
-							aria-label={pages.length === 1 ? 'Remove PDF' : `Remove page ${page.number}`}
-							title={pages.length === 1 ? 'Remove PDF' : 'Remove page'}
+							aria-label={pages.length === 1 && page.source !== BLANK_SOURCE
+								? 'Remove PDF'
+								: `Remove ${nameOf(page)}`}
+							title={pages.length === 1 && page.source !== BLANK_SOURCE
+								? 'Remove PDF'
+								: 'Remove page'}
 							class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
 							><IconX size={18} stroke={2.5} /></button
 						>
@@ -488,7 +499,7 @@
 								type="button"
 								disabled={processing || dragged !== null || keyboardPicked !== null}
 								onclick={() => rotate(page, -90)}
-								aria-label={`Rotate page ${page.number} left`}
+								aria-label={`Rotate ${nameOf(page)} left`}
 								title="Rotate left"
 								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40"
 								><IconRotate size={17} /></button
@@ -497,7 +508,7 @@
 								type="button"
 								disabled={processing || dragged !== null || keyboardPicked !== null}
 								onclick={() => rotate(page, 90)}
-								aria-label={`Rotate page ${page.number} right`}
+								aria-label={`Rotate ${nameOf(page)} right`}
 								title="Rotate right"
 								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40"
 								><IconRotateClockwise size={17} /></button

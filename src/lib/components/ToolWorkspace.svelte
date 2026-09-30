@@ -2,7 +2,13 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { cubicIn, cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
-	import { IconArrowRight, IconDownload, IconLoader2 } from '@tabler/icons-svelte-runes';
+	import {
+		IconArrowRight,
+		IconArrowsSort,
+		IconDownload,
+		IconFilePlus,
+		IconLoader2
+	} from '@tabler/icons-svelte-runes';
 	import { isToolSupported, toolCategoryColor, type CatalogTool } from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { OrganizePage, SplitOptions } from '$lib/pdf/types';
@@ -36,6 +42,9 @@
 	import PdfToImageSettings from './PdfToImageSettings.svelte';
 	import ImageToPdfSettings from './ImageToPdfSettings.svelte';
 	import OutputFilename from './OutputFilename.svelte';
+	import AdvancedOptions from './AdvancedOptions.svelte';
+	import ToggleSwitch from './ToggleSwitch.svelte';
+	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
 	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
@@ -97,7 +106,10 @@
 	let pageCount = $state(0);
 	let organizePages = $state<OrganizePage[]>([]);
 	let selectedPages = $state<string[]>([]);
-	let extractOutput = $state<'pdf' | 'images'>('pdf');
+	let extractOutput = $state<'pdf' | 'separate' | 'images'>('pdf');
+	let mergeBookmarks = $state(false);
+	let organizeViewer = $state<{ addBlankPage: () => Promise<void> }>();
+	let officeStage = $state<'loading' | 'converting'>('loading');
 	let extractImageFormat = $state<'jpg' | 'png'>('jpg');
 	let extractDpi = $state(150);
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
@@ -119,7 +131,8 @@
 	let pdfToImageDpi = $state(150);
 	let pdfToImageQuality = $state(80);
 	let pdfToImagePageRange = $state('');
-	let imagePdfPageSize = $state<'a4' | 'letter'>('a4');
+	let imagePdfPageSize = $state<'a4' | 'letter' | 'fit'>('a4');
+	let imagePdfOrientation = $state<'auto' | 'portrait' | 'landscape'>('auto');
 	let imagePdfMargin = $state(18);
 	const resultFormat = $derived(job.format);
 	const resultSize = $derived(job.size);
@@ -152,7 +165,9 @@
 	const pdfToImageSignature = $derived(
 		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
-	const imagePdfSignature = $derived(JSON.stringify([imagePdfPageSize, imagePdfMargin]));
+	const imagePdfSignature = $derived(
+		JSON.stringify([imagePdfPageSize, imagePdfOrientation, imagePdfMargin, mergeBookmarks])
+	);
 	const compressOptions = $derived({
 		// clarification here
 		// 0 = preserve original, no changes; a higher compression value means better quality otherwise
@@ -258,13 +273,15 @@
 					? selectedPages.length === 1
 						? extractImageFormat
 						: 'zip'
-					: isPdfToImage
-						? (parsePageRange(pdfToImagePageRange, pageCount)?.length ?? pageCount) === 1
-							? pdfToImageFormat
-							: 'zip'
-						: isCompress && workspace.files.length > 1
-							? 'zip'
-							: 'pdf'
+					: isExtract && extractOutput === 'separate' && selectedPages.length > 1
+						? 'zip'
+						: isPdfToImage
+							? (parsePageRange(pdfToImagePageRange, pageCount)?.length ?? pageCount) === 1
+								? pdfToImageFormat
+								: 'zip'
+							: isCompress && workspace.files.length > 1
+								? 'zip'
+								: 'pdf'
 	);
 	const outputExtension = $derived(result ? resultFormat : expectedFormat);
 	const downloadName = $derived(
@@ -321,7 +338,13 @@
 		const files = [...workspace.files];
 		await job.run(
 			async (signal) => ({
-				bytes: await processPdfs('merge', files, workspace.passwordsFor(files), signal),
+				bytes: await processPdfs(
+					'merge',
+					files,
+					workspace.passwordsFor(files),
+					mergeBookmarks ? files.map((file) => file.name.replace(/\.pdf$/i, '')) : [],
+					signal
+				),
 				format: 'pdf'
 			}),
 			'Could not merge these PDFs.',
@@ -349,6 +372,24 @@
 		if (processing || !pageToolValid) return;
 		const files = [...workspace.files];
 		const selected = new Set(selectedPages);
+		if (isExtract && extractOutput === 'separate') {
+			const file = files[0];
+			const ranges = organizePages
+				.filter((page) => selected.has(pageKey(page)))
+				.map((page) => ({ from: page.number, to: page.number }));
+			await job.run(
+				(signal) =>
+					processSplitPdf(
+						file,
+						workspace.passwordFor(file),
+						{ mode: 'ranges', ranges, combine: false },
+						signal
+					),
+				'Could not extract pages from this PDF.',
+				() => downloadLink?.click()
+			);
+			return;
+		}
 		if (isExtract && extractOutput === 'images') {
 			const file = files[0];
 			const options: PdfImageOptions = {
@@ -407,9 +448,10 @@
 		if (processing || !imagePdfValid) return;
 		const files = [...workspace.files];
 		const options: ImagePdfOptions = {
-			pageWidth: imagePdfPageSize === 'letter' ? 612.0 : 595.28,
-			pageHeight: imagePdfPageSize === 'letter' ? 792.0 : 841.89,
-			margin: imagePdfMargin
+			pageWidth: imagePdfPageSize === 'fit' ? 0 : imagePdfPageSize === 'letter' ? 612.0 : 595.28,
+			pageHeight: imagePdfPageSize === 'fit' ? 0 : imagePdfPageSize === 'letter' ? 792.0 : 841.89,
+			margin: imagePdfMargin,
+			orientation: imagePdfOrientation
 		};
 		await job.run(
 			(signal) => processImagesToPdf(files, options, signal),
@@ -421,8 +463,16 @@
 		if (!officeTool || !currentFile || processing) return;
 		const operation = officeTool;
 		const file = currentFile;
+		officeStage = 'loading';
 		await job.run(
-			(signal) => processOfficeFile(operation, file, workspace.passwordFor(file), signal),
+			(signal) =>
+				processOfficeFile(
+					operation,
+					file,
+					workspace.passwordFor(file),
+					signal,
+					() => (officeStage = 'converting')
+				),
 			`Could not convert this ${inputType.toUpperCase()} file.`,
 			() => downloadLink?.click()
 		);
@@ -545,6 +595,7 @@
 							{:else if isPageTool && currentFile}
 								<div class="flex min-h-0 w-full flex-1 flex-col py-6 lg:py-0">
 									{#key isOrganize ? 'organize' : currentFile}<OrganizeViewer
+											bind:this={organizeViewer}
 											files={workspace.files}
 											pages={organizePages}
 											mode={isExtract
@@ -595,7 +646,31 @@
 					<h1 class="flex items-center gap-3 text-xl font-semibold tracking-tight">
 						<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
 					</h1>
-					{#if isSplit}
+					{#if isOrganize}
+						<div>
+							<h2 class="mb-3 text-sm font-semibold">Pages</h2>
+							<div
+								class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
+								role="group"
+								aria-label="Pages"
+							>
+								<button
+									type="button"
+									onclick={() => (organizePages = [...organizePages].reverse())}
+									disabled={processing || organizePages.length < 2}
+									class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
+									><IconArrowsSort size={16} />Reverse</button
+								>
+								<button
+									type="button"
+									onclick={() => void organizeViewer?.addBlankPage()}
+									disabled={processing || organizePages.length === 0}
+									class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
+									><IconFilePlus size={16} />Blank page</button
+								>
+							</div>
+						</div>
+					{:else if isSplit}
 						{#key currentFile}<SplitSettings
 								{pageCount}
 								{reducedMotion}
@@ -616,23 +691,16 @@
 							bind:dpi={extractDpi}
 						/>
 					{:else if isCompress}
-						<CompressSettings
-							{reducedMotion}
-							bind:level={compressLevel}
-							bind:removeMetadata={compressRemoveMetadata}
-							bind:removeThumbnails={compressRemoveThumbnails}
-						/>
+						<CompressSettings bind:level={compressLevel} />
 					{:else if isPdfToImage}
-						<PdfToImageSettings
-							{reducedMotion}
-							bind:format={pdfToImageFormat}
-							bind:dpi={pdfToImageDpi}
-							bind:quality={pdfToImageQuality}
-							bind:pageRange={pdfToImagePageRange}
-							{pageCount}
-						/>
+						<PdfToImageSettings bind:format={pdfToImageFormat} bind:dpi={pdfToImageDpi} />
 					{:else if isImageToPdf}
-						<ImageToPdfSettings bind:pageSize={imagePdfPageSize} bind:margin={imagePdfMargin} />
+						<ImageToPdfSettings
+							{reducedMotion}
+							bind:pageSize={imagePdfPageSize}
+							bind:orientation={imagePdfOrientation}
+							bind:margin={imagePdfMargin}
+						/>
 					{/if}
 					{#if workspace.files.length}<div
 							in:rangeReveal={{ reducedMotion, preview: true }}
@@ -644,6 +712,38 @@
 								extension={outputExtension}
 							/>
 						</div>{/if}
+					<!-- Advanced options always close the settings, below the filename. -->
+					{#if isMerge}
+						<AdvancedOptions {reducedMotion}>
+							<ToggleSwitch
+								bind:checked={mergeBookmarks}
+								label="Add a bookmark for each file"
+								tone="merge"
+							/>
+						</AdvancedOptions>
+					{:else if isCompress}
+						<AdvancedOptions {reducedMotion}>
+							<ToggleSwitch
+								bind:checked={compressRemoveMetadata}
+								label="Remove metadata"
+								tone="compress"
+							/>
+							<ToggleSwitch
+								bind:checked={compressRemoveThumbnails}
+								label="Remove page thumbnails"
+								tone="compress"
+							/>
+						</AdvancedOptions>
+					{:else if isPdfToImage}
+						<AdvancedOptions {reducedMotion} spacing="space-y-4">
+							<PdfToImageAdvanced
+								format={pdfToImageFormat}
+								bind:quality={pdfToImageQuality}
+								bind:pageRange={pdfToImagePageRange}
+								{pageCount}
+							/>
+						</AdvancedOptions>
+					{/if}
 				</div>
 				<!-- On phones the action stays pinned to the bottom once there is
 				something to process, instead of sitting below every page card. -->
@@ -688,7 +788,9 @@
 									: isPageTool
 										? `${tool.label} in progress`
 										: officeTool
-											? `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
+											? officeStage === 'loading'
+												? 'Loading converter...'
+												: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
 											: isCompress
 												? 'Compressing PDF'
 												: isPdfToImage
@@ -714,7 +816,9 @@
 									? '-translate-y-2 opacity-0'
 									: 'translate-y-0 opacity-100'}"
 								>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
-										? 'Converting...'
+										? officeStage === 'loading'
+											? 'Loading converter...'
+											: 'Converting...'
 										: isSplit
 											? 'Splitting...'
 											: isPageTool

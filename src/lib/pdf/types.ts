@@ -4,7 +4,14 @@ export type SplitOptions =
 
 // `source` identifies the input PDF, so one organize pass can mix pages from
 // several documents. See `sources.ts`.
-export type OrganizePage = { source: string; number: number; rotation: 0 | 90 | 180 | 270 };
+// A blank page has `source` BLANK_SOURCE, a `number` unique among blanks, and
+// its size in points as the page would be shown before `rotation`.
+export type OrganizePage = {
+	source: string;
+	number: number;
+	rotation: 0 | 90 | 180 | 270;
+	size?: { width: number; height: number };
+};
 
 // The worker has the files in hand and only needs their position.
 export type OrganizeInstruction = { source: number; number: number; rotation: number };
@@ -16,10 +23,12 @@ export type CompressOptions = {
 	removeThumbnails: boolean;
 };
 
+// A width and height of 0 fits each page to its image.
 export type ImagePdfOptions = {
 	pageWidth: number;
 	pageHeight: number;
 	margin: number;
+	orientation: 'auto' | 'portrait' | 'landscape';
 };
 
 export type PdfImageOptions = {
@@ -30,7 +39,13 @@ export type PdfImageOptions = {
 };
 
 export type PdfWorkerRequest =
-	| { id: number; operation: 'merge'; files: ArrayBuffer[]; passwords: string[] }
+	| {
+			id: number;
+			operation: 'merge';
+			files: ArrayBuffer[];
+			passwords: string[];
+			bookmarks: string[];
+	  }
 	| { id: number; operation: 'unlock'; files: ArrayBuffer[]; passwords: string[] }
 	| {
 			id: number;
@@ -45,6 +60,7 @@ export type PdfWorkerRequest =
 			files: ArrayBuffer[];
 			passwords: string[];
 			pages: OrganizeInstruction[];
+			blanks: number[];
 	  }
 	| {
 			id: number;

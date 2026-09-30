@@ -1,11 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import gsap from 'gsap';
-	import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
+	import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 	import { spring } from '$lib/motion/link';
 
-	let { pdf, number, rotation }: { pdf: PDFDocumentProxy; number: number; rotation: number } =
-		$props();
+	// A blank page has no `pdf`, only the `size` it will be written at.
+	let {
+		pdf,
+		number,
+		rotation,
+		size
+	}: {
+		pdf?: PDFDocumentProxy;
+		number: number;
+		rotation: number;
+		size?: { width: number; height: number };
+	} = $props();
 	let holder: HTMLDivElement;
 	let canvas: HTMLCanvasElement;
 	let visible = $state(false);
@@ -34,6 +44,7 @@
 	$effect(() => {
 		if (!visible) return;
 		const source = pdf;
+		const blank = size;
 		const pageNumber = number;
 		const turn = rotation;
 		let cancelled = false;
@@ -43,23 +54,36 @@
 		const spin = shownRotation === null || !step ? Promise.resolve() : turnCanvas(step);
 		async function render() {
 			try {
-				const page = await source.getPage(pageNumber);
-				if (cancelled) return;
-				const base = page.getViewport({ scale: 1, rotation: page.rotate + turn });
-				const viewport = page.getViewport({
-					scale: Math.min(320 / base.width, 426 / base.height),
-					rotation: page.rotate + turn
-				});
+				let page: PDFPageProxy | undefined;
+				let width: number;
+				let height: number;
+				if (source) {
+					page = await source.getPage(pageNumber);
+					if (cancelled) return;
+					({ width, height } = page.getViewport({ scale: 1, rotation: page.rotate + turn }));
+				} else if (blank) {
+					[width, height] = turn % 180 ? [blank.height, blank.width] : [blank.width, blank.height];
+				} else return;
+				const fit = Math.min(320 / width, 426 / height);
+				const viewport = { width: width * fit, height: height * fit };
 				const scale = Math.min(window.devicePixelRatio || 1, 2);
 				const nextCanvas = document.createElement('canvas');
 				nextCanvas.width = Math.max(1, Math.floor(viewport.width * scale));
 				nextCanvas.height = Math.max(1, Math.floor(viewport.height * scale));
-				task = page.render({
-					canvas: nextCanvas,
-					viewport,
-					transform: [scale, 0, 0, scale, 0, 0]
-				});
-				await task.promise;
+				if (page) {
+					task = page.render({
+						canvas: nextCanvas,
+						viewport: page.getViewport({ scale: fit, rotation: page.rotate + turn }),
+						transform: [scale, 0, 0, scale, 0, 0]
+					});
+					await task.promise;
+				} else {
+					const context = nextCanvas.getContext('2d');
+					if (context) {
+						context.fillStyle = '#fff';
+						context.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+					}
+				}
 				await spin;
 				if (!cancelled) {
 					// No CSS size: left auto, max-width and max-height scale the canvas

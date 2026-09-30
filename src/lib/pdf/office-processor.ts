@@ -3,13 +3,18 @@ import { unlockPdf } from './processor';
 import type { PdfOutput } from './types';
 
 type WorkerResponse =
-	{ id: number; ok: true; bytes: ArrayBuffer } | { id: number; ok: false; error: string };
+	| { id: number; ready: true }
+	| { id: number; ok: true; bytes: ArrayBuffer }
+	| { id: number; ok: false; error: string };
 
 export async function processOfficeFile(
 	operation: OfficeOperation,
 	file: File,
 	password: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	// The converter is a ~17 MB download on first use; this fires once it has
+	// loaded and the conversion itself begins.
+	onready?: () => void
 ): Promise<PdfOutput> {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	// pdf-oxide accepts a password but converts encrypted files to empty
@@ -33,7 +38,8 @@ export async function processOfficeFile(
 			finish(new Error('The local Office converter returned an unreadable result.'));
 		worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
 			if (event.data.id !== 1) return;
-			if (!event.data.ok) finish(new Error(event.data.error));
+			if ('ready' in event.data) onready?.();
+			else if (!event.data.ok) finish(new Error(event.data.error));
 			else
 				finish(undefined, {
 					bytes: new Uint8Array(event.data.bytes),

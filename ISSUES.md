@@ -148,9 +148,11 @@ tree merging is a much larger job.
 ### Outlines are discarded
 
 Deliberate, and currently the honest choice, since an outline covering only the
-first input is more misleading than none. The real fix is to re-root each
-input's outline tree under one synthetic parent, which is a feature rather than
-a repair.
+first input is more misleading than none. Merge can instead write a new outline
+with one entry per input file, opening at its first page ("Add a bookmark for
+each file", off by default). Each input's own outline is still dropped: the
+real fix is to re-root those trees under the per-file entries, which is a
+feature rather than a repair.
 
 ### Some encryption is refused
 

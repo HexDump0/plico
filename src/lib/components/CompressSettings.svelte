@@ -1,19 +1,8 @@
 <script lang="ts">
-	import { slide } from 'svelte/transition';
-	import { IconChevronDown } from '@tabler/icons-svelte-runes';
-	import ToggleSwitch from './ToggleSwitch.svelte';
-
-	let advancedOpen = $state(false);
 	let {
-		level = $bindable<'light' | 'balanced' | 'strong'>(),
-		removeMetadata = $bindable<boolean>(),
-		removeThumbnails = $bindable<boolean>(),
-		reducedMotion
+		level = $bindable<'light' | 'balanced' | 'strong'>()
 	}: {
 		level: 'light' | 'balanced' | 'strong';
-		removeMetadata: boolean;
-		removeThumbnails: boolean;
-		reducedMotion: boolean;
 	} = $props();
 	const levels = [
 		{ id: 'light', label: 'Light' },
@@ -46,36 +35,5 @@
 					onclick={() => (level = option.id)}>{option.label}</button
 				>{/each}
 		</div>
-	</div>
-	<div>
-		<button
-			type="button"
-			aria-expanded={advancedOpen}
-			aria-controls="compress-advanced-options"
-			class="flex w-full items-center justify-between text-sm font-medium text-muted hover:text-white"
-			onclick={() => (advancedOpen = !advancedOpen)}
-		>
-			Advanced options
-			<IconChevronDown
-				size={16}
-				stroke={1.75}
-				aria-hidden="true"
-				class="motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
-			/>
-		</button>
-		{#if advancedOpen}
-			<div
-				id="compress-advanced-options"
-				class="space-y-2 pt-4"
-				transition:slide={{ duration: reducedMotion ? 0 : 300 }}
-			>
-				<ToggleSwitch bind:checked={removeMetadata} label="Remove metadata" tone="compress" />
-				<ToggleSwitch
-					bind:checked={removeThumbnails}
-					label="Remove page thumbnails"
-					tone="compress"
-				/>
-			</div>
-		{/if}
 	</div>
 </div>

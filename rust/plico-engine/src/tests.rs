@@ -5,11 +5,11 @@ use lopdf::{
 };
 
 use super::{
-    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes,
+    CompressOptions, ImagePdfOptions, OrganizeItem, PageOrientation, SplitMode, compress_pdf_bytes,
     compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes,
-    merge_pdf_bytes_with_passwords, organize_pdf_bytes, organize_pdfs_bytes,
-    organize_pdfs_bytes_with_passwords, split_pdf_bytes, split_pdf_bytes_with_password,
-    unlock_pdf_bytes,
+    merge_pdf_bytes_with_options, merge_pdf_bytes_with_passwords, organize_pdf_bytes,
+    organize_pdf_items, organize_pdfs_bytes, organize_pdfs_bytes_with_passwords, split_pdf_bytes,
+    split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
@@ -20,6 +20,7 @@ fn image_pdf_options() -> ImagePdfOptions {
         page_width: 595.0,
         page_height: 842.0,
         margin: 18.0,
+        orientation: PageOrientation::Auto,
     }
 }
 
@@ -1162,4 +1163,167 @@ fn unlocking_keeps_every_page_and_drops_only_the_encryption() {
     assert!(document.trailer.get(b"Encrypt").is_err());
     assert_eq!(page_contents(&unlocked), ["1", "2", "3"]);
     assert!(unlock_pdf_bytes(&locked, "").is_err());
+}
+
+fn media_box(document: &Document, page: lopdf::ObjectId) -> Vec<f32> {
+    document
+        .get_dictionary(page)
+        .and_then(|page| page.get(b"MediaBox"))
+        .and_then(Object::as_array)
+        .unwrap()
+        .iter()
+        .map(|value| value.as_float().unwrap())
+        .collect()
+}
+
+#[test]
+fn merge_bookmarks_open_each_file_at_its_first_page() {
+    let first = numbered_pdf(2);
+    let second = one_page_pdf("second");
+    let merged =
+        merge_pdf_bytes_with_options(&[&first, &second], &[], Some(&["Report", "Été"])).unwrap();
+    let document = Document::load_mem(&merged).unwrap();
+    let pages = document.get_pages();
+    let catalog = document.catalog().unwrap();
+    assert_eq!(
+        catalog.get(b"PageMode").and_then(Object::as_name).unwrap(),
+        b"UseOutlines"
+    );
+    let outlines = document
+        .get_dictionary(
+            catalog
+                .get(b"Outlines")
+                .and_then(Object::as_reference)
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(outlines.get(b"Count").and_then(Object::as_i64).unwrap(), 2);
+
+    let mut item_id = outlines
+        .get(b"First")
+        .and_then(Object::as_reference)
+        .unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let item = document.get_dictionary(item_id).unwrap();
+        let target = item.get(b"Dest").and_then(Object::as_array).unwrap()[0]
+            .as_reference()
+            .unwrap();
+        let number = pages.iter().find(|(_, id)| **id == target).map(|(n, _)| *n);
+        let title = lopdf::decode_text_string(item.get(b"Title").unwrap()).unwrap();
+        seen.push((title, number));
+        match item.get(b"Next").and_then(Object::as_reference) {
+            Ok(next) => item_id = next,
+            Err(_) => break,
+        }
+    }
+    assert_eq!(
+        seen,
+        [("Report".to_owned(), Some(1)), ("Été".to_owned(), Some(3))]
+    );
+}
+
+#[test]
+fn merges_without_an_outline_unless_asked() {
+    let merged = merge_pdf_bytes(&[&one_page_pdf("a"), &one_page_pdf("b")]).unwrap();
+    let document = Document::load_mem(&merged).unwrap();
+    assert!(document.catalog().unwrap().get(b"Outlines").is_err());
+}
+
+#[test]
+fn organize_inserts_blank_pages_where_asked() {
+    let source = numbered_pdf(2);
+    let output = organize_pdf_items(
+        &[&source],
+        &[],
+        &[
+            OrganizeItem::Blank {
+                width: 300.0,
+                height: 500.0,
+                turn: 90,
+            },
+            OrganizeItem::Page {
+                source: 0,
+                number: 2,
+                turn: 0,
+            },
+            OrganizeItem::Blank {
+                width: 300.0,
+                height: 500.0,
+                turn: 0,
+            },
+            OrganizeItem::Page {
+                source: 0,
+                number: 1,
+                turn: 0,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(page_contents(&output), ["", "2", "", "1"]);
+    let document = Document::load_mem(&output).unwrap();
+    let pages = document.get_pages();
+    assert_eq!(media_box(&document, pages[&1]), [0.0, 0.0, 300.0, 500.0]);
+    let rotate = |number| {
+        document
+            .get_dictionary(pages[&number])
+            .and_then(|page| page.get(b"Rotate"))
+            .and_then(Object::as_i64)
+            .unwrap_or(0)
+    };
+    assert_eq!((rotate(1), rotate(3)), (90, 0));
+
+    let bad = organize_pdf_items(
+        &[&source],
+        &[],
+        &[OrganizeItem::Blank {
+            width: 0.0,
+            height: 500.0,
+            turn: 0,
+        }],
+    );
+    assert!(bad.is_err());
+}
+
+#[test]
+fn fits_each_page_to_its_image() {
+    let wide = jpeg_bytes(40, 20, 90);
+    let tall = jpeg_bytes(20, 40, 90);
+    let output = images_to_pdf_bytes(
+        &[&wide, &tall],
+        ImagePdfOptions {
+            page_width: 0.0,
+            page_height: 0.0,
+            margin: 10.0,
+            orientation: PageOrientation::Auto,
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let pages = document.get_pages();
+    assert_eq!(media_box(&document, pages[&1]), [0.0, 0.0, 50.0, 35.0]);
+    assert_eq!(media_box(&document, pages[&2]), [0.0, 0.0, 35.0, 50.0]);
+}
+
+#[test]
+fn forced_orientation_applies_to_every_image() {
+    let wide = jpeg_bytes(40, 20, 90);
+    let tall = jpeg_bytes(20, 40, 90);
+    for (orientation, expected) in [
+        (PageOrientation::Portrait, [595.0, 842.0]),
+        (PageOrientation::Landscape, [842.0, 595.0]),
+    ] {
+        let output = images_to_pdf_bytes(
+            &[&wide, &tall],
+            ImagePdfOptions {
+                orientation,
+                ..image_pdf_options()
+            },
+        )
+        .unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        for page in document.get_pages().into_values() {
+            assert_eq!(media_box(&document, page)[2..], expected);
+        }
+    }
 }

@@ -1,4 +1,4 @@
-import { sourceKey } from './sources';
+import { BLANK_SOURCE, sourceKey } from './sources';
 import type {
 	CompressOptions,
 	ImagePdfOptions,
@@ -69,16 +69,21 @@ function pdfOrZip(output: PdfOutput): PdfOutput & { format: 'pdf' | 'zip' } {
 
 // Passwords pair with files by index; an empty string means the file opens
 // without one. They stay in memory and only travel to the local worker.
+// `bookmarks` holds one outline title per file, or nothing for no outline.
 export async function processPdfs(
 	operation: 'merge',
 	files: File[],
 	passwords: string[],
+	bookmarks: string[],
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const output = await submit({ id: ++requestId, operation, files: buffers, passwords }, signal);
+	const output = await submit(
+		{ id: ++requestId, operation, files: buffers, passwords, bookmarks },
+		signal
+	);
 	return output.bytes;
 }
 
@@ -122,14 +127,28 @@ export async function processOrganizePdf(
 	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const sources = new Map(files.map((file, index) => [sourceKey(file), index]));
+	// The engine marks a blank page with the largest u32 as its source and
+	// reads its size from `blanks` by index.
+	const blanks: number[] = [];
 	const instructions = pages.map((page) => {
+		if (page.source === BLANK_SOURCE && page.size) {
+			blanks.push(page.size.width, page.size.height);
+			return { source: 0xffffffff, number: blanks.length / 2 - 1, rotation: page.rotation };
+		}
 		const source = sources.get(page.source);
 		if (source === undefined) throw new Error('A page belongs to a PDF that is no longer loaded.');
 		return { source, number: page.number, rotation: page.rotation };
 	});
 	return pdfOrZip(
 		await submit(
-			{ id: ++requestId, operation: 'organize', files: buffers, passwords, pages: instructions },
+			{
+				id: ++requestId,
+				operation: 'organize',
+				files: buffers,
+				passwords,
+				pages: instructions,
+				blanks
+			},
 			signal
 		)
 	);
@@ -161,7 +180,12 @@ export async function processCompressPdf(
 
 export async function processImagesToPdf(
 	files: File[],
-	options: ImagePdfOptions = { pageWidth: 595.28, pageHeight: 841.89, margin: 18 },
+	options: ImagePdfOptions = {
+		pageWidth: 595.28,
+		pageHeight: 841.89,
+		margin: 18,
+		orientation: 'auto'
+	},
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');

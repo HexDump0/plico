@@ -11,7 +11,7 @@
 		mode,
 		processing,
 		reducedMotion,
-		output = $bindable<'pdf' | 'images'>('pdf'),
+		output = $bindable<'pdf' | 'separate' | 'images'>('pdf'),
 		imageFormat = $bindable<'jpg' | 'png'>('jpg'),
 		dpi = $bindable<number>(150)
 	}: {
@@ -20,12 +20,13 @@
 		mode: 'extract' | 'remove';
 		processing: boolean;
 		reducedMotion: boolean;
-		output?: 'pdf' | 'images';
+		output?: 'pdf' | 'separate' | 'images';
 		imageFormat?: 'jpg' | 'png';
 		dpi?: number;
 	} = $props();
 	const outputs = [
-		{ id: 'pdf', label: 'PDF' },
+		{ id: 'pdf', label: 'One PDF' },
+		{ id: 'separate', label: 'Separate' },
 		{ id: 'images', label: 'Images' }
 	] as const;
 	const formats = [
@@ -106,16 +107,18 @@
 		<div>
 			<h2 class="mb-3 text-sm font-semibold">Extract as</h2>
 			<div
-				class="relative grid grid-cols-2 gap-2 rounded-xl bg-canvas p-1"
+				class="relative grid grid-cols-3 gap-2 rounded-xl bg-canvas p-1"
 				role="group"
 				aria-label="Extract as"
 			>
 				<span
 					aria-hidden="true"
-					class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1rem)/2)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {output ===
-					'images'
+					class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1.5rem)/3)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {output ===
+					'separate'
 						? 'translate-x-[calc(100%+0.5rem)]'
-						: ''}"
+						: output === 'images'
+							? 'translate-x-[calc(200%+1rem)]'
+							: ''}"
 				></span>
 				{#each outputs as option (option.id)}<button
 						type="button"

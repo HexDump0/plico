@@ -2,20 +2,26 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, ImagePdfOptions, SplitMode, compress_pdf_bytes_with_password,
-    images_to_pdf_bytes, merge_pdf_bytes_with_passwords, organize_pdfs_bytes_with_passwords,
-    split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, ImagePdfOptions, OrganizeItem, PageOrientation, SplitMode,
+    compress_pdf_bytes_with_password, images_to_pdf_bytes, merge_pdf_bytes_with_options,
+    organize_pdf_items, split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
+
+/// Marks an organize instruction as a blank page; its page number then indexes
+/// the width and height pairs in `blanks`.
+const BLANK_PAGE: u32 = u32::MAX;
 
 fn as_strs(passwords: &[String]) -> Vec<&str> {
     passwords.iter().map(String::as_str).collect()
 }
 
 #[wasm_bindgen]
+/// An empty `bookmarks` merges without an outline.
 pub fn merge_pdfs(
     input: &[u8],
     lengths: &[u32],
     passwords: Vec<String>,
+    bookmarks: Vec<String>,
 ) -> Result<Vec<u8>, JsValue> {
     let expected_length = lengths
         .iter()
@@ -35,8 +41,13 @@ pub fn merge_pdfs(
         })
         .collect::<Vec<_>>();
 
-    merge_pdf_bytes_with_passwords(&files, &as_strs(&passwords))
-        .map_err(|error| JsValue::from_str(&error))
+    let titles = as_strs(&bookmarks);
+    merge_pdf_bytes_with_options(
+        &files,
+        &as_strs(&passwords),
+        (!titles.is_empty()).then_some(&titles[..]),
+    )
+    .map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
@@ -46,6 +57,7 @@ pub fn images_to_pdf(
     page_width: f32,
     page_height: f32,
     margin: f32,
+    orientation: u8,
 ) -> Result<Vec<u8>, JsValue> {
     let expected_length = lengths
         .iter()
@@ -69,6 +81,11 @@ pub fn images_to_pdf(
             page_width,
             page_height,
             margin,
+            orientation: match orientation {
+                1 => PageOrientation::Portrait,
+                2 => PageOrientation::Landscape,
+                _ => PageOrientation::Auto,
+            },
         },
     )
     .map_err(|error| JsValue::from_str(&error))
@@ -112,6 +129,7 @@ pub fn organize_pdfs(
     lengths: &[u32],
     passwords: Vec<String>,
     instructions: &[u32],
+    blanks: &[f32],
 ) -> Result<Vec<u8>, JsValue> {
     let expected_length = lengths
         .iter()
@@ -135,11 +153,29 @@ pub fn organize_pdfs(
             bytes
         })
         .collect::<Vec<_>>();
-    let pages = chunks
-        .map(|chunk| (chunk[0] as usize, chunk[1], chunk[2] as i32))
-        .collect::<Vec<_>>();
+    let items = chunks
+        .map(|chunk| {
+            let turn = chunk[2] as i32;
+            if chunk[0] != BLANK_PAGE {
+                return Ok(OrganizeItem::Page {
+                    source: chunk[0] as usize,
+                    number: chunk[1],
+                    turn,
+                });
+            }
+            let size = blanks
+                .get(chunk[1] as usize * 2..chunk[1] as usize * 2 + 2)
+                .ok_or("A blank page has no size.")?;
+            Ok(OrganizeItem::Blank {
+                width: size[0],
+                height: size[1],
+                turn,
+            })
+        })
+        .collect::<Result<Vec<_>, &str>>()
+        .map_err(JsValue::from_str)?;
 
-    organize_pdfs_bytes_with_passwords(&files, &as_strs(&passwords), &pages)
+    organize_pdf_items(&files, &as_strs(&passwords), &items)
         .map_err(|error| JsValue::from_str(&error))
 }
 

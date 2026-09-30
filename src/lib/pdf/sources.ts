@@ -5,6 +5,8 @@ export function sourceKey(file: File) {
 	return `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
 }
 
+export const BLANK_SOURCE = 'blank';
+
 export function pageKey(page: { source: string; number: number }) {
 	return `${page.source}\u0000${page.number}`;
 }
@@ -48,6 +50,14 @@ export const sourceColors = [
 		text: 'text-brand'
 	}
 ] as const;
+
+export const blankColor = {
+	dot: 'bg-white/80',
+	border: 'border-white/20',
+	strong: 'border-white/60',
+	soft: 'bg-white/5',
+	text: 'text-white'
+} as const;
 
 export function sourceColor(index: number) {
 	return sourceColors[index % sourceColors.length];

@@ -1,22 +1,10 @@
 <script lang="ts">
-	import { slide } from 'svelte/transition';
-	import { IconChevronDown } from '@tabler/icons-svelte-runes';
-
-	let advancedOpen = $state(false);
 	let {
 		format = $bindable<'jpg' | 'png'>(),
-		dpi = $bindable<number>(),
-		quality = $bindable<number>(),
-		pageRange = $bindable<string>(),
-		pageCount = 0,
-		reducedMotion
+		dpi = $bindable<number>()
 	}: {
 		format: 'jpg' | 'png';
 		dpi: number;
-		quality: number;
-		pageRange: string;
-		pageCount?: number;
-		reducedMotion: boolean;
 	} = $props();
 
 	const formats = [
@@ -77,70 +65,5 @@
 				>
 			{/each}
 		</div>
-	</div>
-
-	<div>
-		<button
-			type="button"
-			aria-expanded={advancedOpen}
-			aria-controls="image-advanced-options"
-			class="flex w-full items-center justify-between text-sm font-medium text-muted hover:text-white"
-			onclick={() => (advancedOpen = !advancedOpen)}
-		>
-			Advanced options
-			<IconChevronDown
-				size={16}
-				stroke={1.75}
-				aria-hidden="true"
-				class="motion-safe:transition-transform {advancedOpen ? 'rotate-180' : ''}"
-			/>
-		</button>
-
-		{#if advancedOpen}
-			<div
-				id="image-advanced-options"
-				class="space-y-4 pt-4"
-				transition:slide={{ duration: reducedMotion ? 0 : 250 }}
-			>
-				{#if format === 'jpg'}
-					<div class="space-y-2">
-						<div class="flex items-center justify-between text-xs font-medium text-muted">
-							<span>JPG quality</span>
-							<span class="font-mono text-white">{quality}%</span>
-						</div>
-						<input
-							type="range"
-							min="30"
-							max="100"
-							step="5"
-							bind:value={quality}
-							aria-label="JPG image quality"
-							class="w-full cursor-pointer accent-split"
-						/>
-					</div>
-				{/if}
-
-				<div class="space-y-1.5">
-					<label for="page-range-input" class="block text-xs font-medium text-muted">
-						Page range
-						{#if pageCount > 0}
-							<span class="text-[11px] text-muted/70">({pageCount} pages total)</span>
-						{/if}
-					</label>
-					<div
-						class="flex items-center rounded-xl border border-white/10 bg-canvas px-3 focus-within:border-split/50"
-					>
-						<input
-							id="page-range-input"
-							type="text"
-							bind:value={pageRange}
-							placeholder="All pages (e.g. 1-3, 5)"
-							aria-label="Page range"
-							class="min-w-0 flex-1 bg-transparent py-2.5 text-xs text-white outline-none placeholder:text-white/25"
-						/>
-					</div>
-				</div>
-			</div>
-		{/if}
 	</div>
 </div>

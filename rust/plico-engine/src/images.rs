@@ -8,12 +8,26 @@ use zune_jpeg::{JpegDecoder, zune_core::colorspace::ColorSpace};
 
 const MAX_DECODED_IMAGE: usize = 128 * 1024 * 1024;
 
+/// A page width and height of 0 fits each page to its image: the image at
+/// 96 DPI, with `margin` around it.
 #[derive(Clone, Copy)]
 pub struct ImagePdfOptions {
     pub page_width: f32,
     pub page_height: f32,
     pub margin: f32,
+    pub orientation: PageOrientation,
 }
+
+/// Auto turns the page to match each image; the others force one way for all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PageOrientation {
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+/// CSS pixels to points: 72 / 96.
+const POINTS_PER_PIXEL: f32 = 0.75;
 
 struct PreparedImage {
     stream: Stream,
@@ -27,14 +41,17 @@ pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result
     if images.is_empty() {
         return Err("Choose at least one JPG or PNG image.".into());
     }
-    if !options.page_width.is_finite()
-        || !options.page_height.is_finite()
-        || !options.margin.is_finite()
-        || options.page_width <= 0.0
-        || options.page_height <= 0.0
-        || options.margin < 0.0
-        || options.margin * 2.0 >= options.page_width.min(options.page_height)
-        || options.page_width.max(options.page_height) > 14_400.0
+    let fit = options.page_width == 0.0 && options.page_height == 0.0;
+    if !options.margin.is_finite() || options.margin < 0.0 || options.margin > 1_000.0 {
+        return Err("Choose a valid page size and margin.".into());
+    }
+    if !fit
+        && (!options.page_width.is_finite()
+            || !options.page_height.is_finite()
+            || options.page_width <= 0.0
+            || options.page_height <= 0.0
+            || options.margin * 2.0 >= options.page_width.min(options.page_height)
+            || options.page_width.max(options.page_height) > 14_400.0)
     {
         return Err("Choose a valid page size and margin.".into());
     }
@@ -46,13 +63,35 @@ pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result
     for (index, bytes) in images.iter().enumerate() {
         let mut image = prepare_image(bytes)
             .map_err(|error| format!("Image {} could not be added: {error}", index + 1))?;
-        let landscape = matches!(image.orientation, 5..=8)
-            .then_some(image.height > image.width)
-            .unwrap_or(image.width > image.height);
-        let (page_width, page_height) = if landscape {
-            (options.page_height, options.page_width)
+        let (logical_width, logical_height) = if matches!(image.orientation, 5..=8) {
+            (image.height as f32, image.width as f32)
         } else {
-            (options.page_width, options.page_height)
+            (image.width as f32, image.height as f32)
+        };
+        let (page_width, page_height) = if fit {
+            // The PDF limit is 14,400 points a side, so very large images are
+            // placed smaller rather than refused.
+            let margin = 2.0 * options.margin;
+            let shrink = ((14_400.0 - margin) / (logical_width * POINTS_PER_PIXEL))
+                .min((14_400.0 - margin) / (logical_height * POINTS_PER_PIXEL))
+                .min(1.0);
+            (
+                logical_width * POINTS_PER_PIXEL * shrink + margin,
+                logical_height * POINTS_PER_PIXEL * shrink + margin,
+            )
+        } else {
+            let short = options.page_width.min(options.page_height);
+            let long = options.page_width.max(options.page_height);
+            let landscape = match options.orientation {
+                PageOrientation::Auto => logical_width > logical_height,
+                PageOrientation::Portrait => false,
+                PageOrientation::Landscape => true,
+            };
+            if landscape {
+                (long, short)
+            } else {
+                (short, long)
+            }
         };
 
         if let Some(mask) = image.mask.take() {
@@ -60,11 +99,6 @@ pub fn images_to_pdf_bytes(images: &[&[u8]], options: ImagePdfOptions) -> Result
             image.stream.dict.set("SMask", mask_id);
         }
         let image_id = document.add_object(image.stream);
-        let (logical_width, logical_height) = if matches!(image.orientation, 5..=8) {
-            (image.height as f32, image.width as f32)
-        } else {
-            (image.width as f32, image.height as f32)
-        };
         let scale = ((page_width - 2.0 * options.margin) / logical_width)
             .min((page_height - 2.0 * options.margin) / logical_height);
         let draw_width = logical_width * scale;
