@@ -1,3 +1,6 @@
+import type { FontFamily } from './standard-fonts';
+import type { StampPosition } from './stamp-layout';
+
 export type SplitOptions =
 	| { mode: 'ranges'; ranges: { from: number; to: number }[]; combine: boolean }
 	| { mode: 'fixed'; interval: number };
@@ -86,6 +89,21 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'page-numbers';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: PageNumberOptions;
+	  }
+	| {
+			id: number;
+			operation: 'watermark';
+			// The PDF, then the watermark image when there is one.
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: WatermarkOptions;
+	  }
+	| {
+			id: number;
 			operation: 'pdf-to-images';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -114,3 +132,35 @@ export type ProtectOptions = {
 
 /// What opening a PDF takes, as `pdf_protection` reports it.
 export type Protection = 'none' | 'restricted' | 'password';
+
+/// Text drawn with a standard PDF font; `color` is 0xRRGGBB.
+export type StampText = {
+	family: FontFamily;
+	bold: boolean;
+	size: number;
+	color: number;
+};
+
+/// `pages` lists the pages to stamp, from 1; empty stamps every page.
+export type PageNumberOptions = StampText & {
+	template: string;
+	firstNumber: number;
+	pages: number[];
+	position: StampPosition;
+	margin: number;
+	opacity: number;
+};
+
+/// An image watermark travels as the request's second file, and `imageWidth`
+/// is a fraction of the page width. Without one, `text` is drawn.
+export type WatermarkOptions = StampText & {
+	text: string;
+	imageWidth: number;
+	pages: number[];
+	position: StampPosition;
+	margin: number;
+	rotation: number;
+	opacity: number;
+	behind: boolean;
+	tile: boolean;
+};

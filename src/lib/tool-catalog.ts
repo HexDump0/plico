@@ -47,6 +47,8 @@ const supportedToolIds = new Set([
 	'split',
 	'protect',
 	'unlock',
+	'page-numbers',
+	'watermark',
 	'organize',
 	'extract',
 	'remove',

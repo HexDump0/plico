@@ -10,11 +10,15 @@ import init, {
 	split_pdf_ranges,
 	unlock_pdf,
 	pdf_protection,
-	protect_pdf
+	protect_pdf,
+	add_page_numbers,
+	add_watermark
 } from './wasm/plico_engine.js';
 import type { PdfImageOptions, PdfOutput, PdfWorkerRequest, PdfWorkerResponse } from './types';
 
 const ready = init();
+
+const fontIndex = { helvetica: 0, times: 1, courier: 2 } as const;
 
 type PackedOutput = PdfOutput;
 
@@ -249,6 +253,52 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.allowPrinting,
 					options.allowCopying,
 					options.allowEditing
+				)
+			});
+			return;
+		}
+		if (request.operation === 'page-numbers') {
+			const { options } = request;
+			postOutput(id, {
+				format: 'pdf',
+				bytes: add_page_numbers(
+					new Uint8Array(request.files[0]),
+					request.passwords[0] ?? '',
+					Uint32Array.from(options.pages),
+					options.firstNumber,
+					options.template,
+					options.position,
+					options.margin,
+					fontIndex[options.family],
+					options.bold,
+					options.size,
+					options.color,
+					options.opacity
+				)
+			});
+			return;
+		}
+		if (request.operation === 'watermark') {
+			const { options } = request;
+			postOutput(id, {
+				format: 'pdf',
+				bytes: add_watermark(
+					new Uint8Array(request.files[0]),
+					request.passwords[0] ?? '',
+					Uint32Array.from(options.pages),
+					options.text,
+					fontIndex[options.family],
+					options.bold,
+					options.size,
+					options.color,
+					request.files[1] ? new Uint8Array(request.files[1]) : new Uint8Array(),
+					options.imageWidth,
+					options.position,
+					options.margin,
+					options.rotation,
+					options.opacity,
+					options.behind,
+					options.tile
 				)
 			});
 			return;

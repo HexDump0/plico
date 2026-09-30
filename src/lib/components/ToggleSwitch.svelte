@@ -6,13 +6,14 @@
 	}: {
 		checked: boolean;
 		label: string;
-		tone: 'compress' | 'split' | 'merge';
+		tone: 'compress' | 'split' | 'merge' | 'brand';
 	} = $props();
 	// Whole class names so Tailwind's scanner sees them.
 	const tones = {
 		compress: 'peer-checked:bg-compress peer-focus-visible:outline-compress',
 		split: 'peer-checked:bg-split peer-focus-visible:outline-split',
-		merge: 'peer-checked:bg-merge peer-focus-visible:outline-merge'
+		merge: 'peer-checked:bg-merge peer-focus-visible:outline-merge',
+		brand: 'peer-checked:bg-brand peer-focus-visible:outline-brand'
 	};
 </script>
 

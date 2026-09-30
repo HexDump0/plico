@@ -22,8 +22,10 @@
 		processImagesToPdf,
 		processOrganizePdf,
 		processPdfToImages,
+		processPageNumbers,
 		processPdfs,
-		processSplitPdf
+		processSplitPdf,
+		processWatermark
 	} from '$lib/pdf/processor';
 	import type { ImagePdfOptions, PdfImageOptions, Protection } from '$lib/pdf/types';
 	import { DownloadJob } from '$lib/pdf/download-job.svelte';
@@ -49,6 +51,14 @@
 	import ToggleSwitch from './ToggleSwitch.svelte';
 	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
 	import PasswordInput from './PasswordInput.svelte';
+	import StampPreview from './StampPreview.svelte';
+	import StampOverlay from './StampOverlay.svelte';
+	import PageNumberSettings from './PageNumberSettings.svelte';
+	import WatermarkSettings from './WatermarkSettings.svelte';
+	import StampTextSettings from './StampTextSettings.svelte';
+	import StampAdvanced from './StampAdvanced.svelte';
+	import { undrawable, type FontFamily } from '$lib/pdf/standard-fonts';
+	import type { PreviewPage, StampImage, StampMark, StampPosition } from '$lib/pdf/stamp-layout';
 	import { rangeCollapse, rangeReveal } from '$lib/motion/range';
 	let { tool }: { tool: CatalogTool } = $props();
 	const workspace = getWorkspace();
@@ -63,6 +73,9 @@
 	const isCompress = $derived(tool.id === 'compress');
 	const isProtect = $derived(tool.id === 'protect');
 	const isUnlock = $derived(tool.id === 'unlock');
+	const isPageNumbers = $derived(tool.id === 'page-numbers');
+	const isWatermark = $derived(tool.id === 'watermark');
+	const isStamp = $derived(isPageNumbers || isWatermark);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
 			tool.id === 'pdf-to-png' ||
@@ -136,6 +149,31 @@
 	let compressLevel = $state<'light' | 'balanced' | 'strong'>('balanced');
 	let compressRemoveMetadata = $state(false);
 	let compressRemoveThumbnails = $state(false);
+	let numberPosition = $state<StampPosition>(7);
+	let numberTemplate = $state('{n}');
+	let numberFirst = $state(1);
+	let numberPages = $state('');
+	let numberFamily = $state<FontFamily>('helvetica');
+	let numberBold = $state(false);
+	let numberSize = $state(11);
+	let numberColor = $state('#000000');
+	let numberMargin = $state(36);
+	let watermarkKind = $state<'text' | 'image'>('text');
+	let watermarkText = $state('CONFIDENTIAL');
+	let watermarkFamily = $state<FontFamily>('helvetica');
+	let watermarkBold = $state(true);
+	let watermarkSize = $state(56);
+	let watermarkColor = $state('#6b7280');
+	let watermarkImage = $state<StampImage | null>(null);
+	let watermarkImageWidth = $state(40);
+	let watermarkPosition = $state<StampPosition>(4);
+	let watermarkTile = $state(false);
+	let watermarkRotation = $state(45);
+	let watermarkOpacity = $state(40);
+	let watermarkBehind = $state(false);
+	let watermarkMargin = $state(36);
+	let watermarkPages = $state('');
+	let watermarkTooDense = $state(false);
 	let filename = $state('');
 	let downloadLink: HTMLAnchorElement;
 	const job = new DownloadJob();
@@ -252,6 +290,80 @@
 				(unlockProtection === 'password' && unlockPassword.length > 0 && !unlockWrong))
 	);
 	const imagePdfValid = $derived(workspace.files.length > 0);
+	const stampPagesText = $derived(isPageNumbers ? numberPages : watermarkPages);
+	const stampPageList = $derived(parsePageRange(stampPagesText, pageCount) ?? []);
+	const stampPagesInvalid = $derived(
+		stampPagesText.trim() !== '' && pageCount > 0 && stampPageList.length === 0
+	);
+	// Numbers follow the document's pages from the first one numbered, so a
+	// page skipped between two numbered ones still counts.
+	const firstNumbered = $derived(stampPageList[0] ?? 1);
+	const numberFirstValid = $derived(
+		Number.isInteger(numberFirst) && numberFirst >= 0 && numberFirst <= 99999
+	);
+	const lastNumber = $derived(
+		(numberFirstValid ? numberFirst : 1) + (stampPageList.at(-1) ?? pageCount) - firstNumbered
+	);
+	const watermarkUndrawable = $derived(
+		watermarkKind === 'text' ? undrawable(watermarkText) : undefined
+	);
+	const watermarkMark = $derived<StampMark>(
+		watermarkKind === 'text'
+			? {
+					kind: 'text',
+					text: watermarkText,
+					family: watermarkFamily,
+					bold: watermarkBold,
+					size: watermarkSize
+				}
+			: { kind: 'image', aspect: watermarkImage?.aspect ?? 1, width: watermarkImageWidth / 100 }
+	);
+	const stampValid = $derived(
+		!!currentFile &&
+			pageCount > 0 &&
+			!stampPagesInvalid &&
+			(isPageNumbers
+				? numberFirstValid
+				: watermarkKind === 'text'
+					? watermarkText.trim() !== '' && !watermarkUndrawable
+					: !!watermarkImage)
+	);
+	const stampSignature = $derived(
+		JSON.stringify([
+			numberPosition,
+			numberTemplate,
+			numberFirst,
+			numberPages,
+			numberFamily,
+			numberBold,
+			numberSize,
+			numberColor,
+			numberMargin,
+			watermarkKind,
+			watermarkText,
+			watermarkFamily,
+			watermarkBold,
+			watermarkSize,
+			watermarkColor,
+			watermarkImage?.url,
+			watermarkImageWidth,
+			watermarkPosition,
+			watermarkTile,
+			watermarkRotation,
+			watermarkOpacity,
+			watermarkBehind,
+			watermarkMargin,
+			watermarkPages
+		])
+	);
+	function stamped(page: number) {
+		return stampPageList.length === 0 || stampPageList.includes(page);
+	}
+	function numberText(page: number) {
+		return numberTemplate
+			.replace('{total}', String(lastNumber))
+			.replace('{n}', String((numberFirstValid ? numberFirst : 1) + page - firstNumbered));
+	}
 	// Unlock also takes the password in its sidebar, so a locked file there is
 	// the expected input rather than something to clear first.
 	const locked = $derived(workspace.hasLockedFiles && !isUnlock);
@@ -262,21 +374,23 @@
 				? !protectValid || processing
 				: isUnlock
 					? !unlockValid || processing
-					: officeTool
-						? !currentFile || processing
-						: isMerge
-							? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-							: isSplit
-								? !splitValid || processing
-								: isPageTool
-									? !pageToolValid || processing
-									: isCompress
-										? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-										: isPdfToImage
-											? !pdfToImageValid || processing
-											: isImageToPdf
-												? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-												: true
+					: isStamp
+						? !stampValid || processing
+						: officeTool
+							? !currentFile || processing
+							: isMerge
+								? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+								: isSplit
+									? !splitValid || processing
+									: isPageTool
+										? !pageToolValid || processing
+										: isCompress
+											? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
+											: isPdfToImage
+												? !pdfToImageValid || processing
+												: isImageToPdf
+													? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+													: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -285,21 +399,23 @@
 				? !protectValid
 				: isUnlock
 					? !unlockValid
-					: officeTool
-						? !currentFile
-						: isMerge
-							? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-							: isSplit
-								? !splitValid
-								: isPageTool
-									? !pageToolValid
-									: isCompress
-										? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-										: isPdfToImage
-											? !pdfToImageValid
-											: isImageToPdf
-												? !imagePdfValid || !!dragged || !!keyboardPicked
-												: true
+					: isStamp
+						? !stampValid
+						: officeTool
+							? !currentFile
+							: isMerge
+								? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+								: isSplit
+									? !splitValid
+									: isPageTool
+										? !pageToolValid
+										: isCompress
+											? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+											: isPdfToImage
+												? !pdfToImageValid
+												: isImageToPdf
+													? !imagePdfValid || !!dragged || !!keyboardPicked
+													: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -309,23 +425,27 @@
 				? `${baseName}-protected`
 				: isUnlock
 					? `${baseName}-unlocked`
-					: isMerge
-						? 'plico-merged'
-						: isImageToPdf
-							? 'plico-images'
-							: isSplit
-								? `${baseName}-split`
-								: isOrganize
-									? `${baseName}-organized`
-									: isExtract
-										? `${baseName}-extracted`
-										: isRemove
-											? `${baseName}-pages-removed`
-											: isRotate
-												? `${baseName}-rotated`
-												: isCompress
-													? `${baseName}-compressed`
-													: `${baseName}-images`
+					: isPageNumbers
+						? `${baseName}-numbered`
+						: isWatermark
+							? `${baseName}-watermarked`
+							: isMerge
+								? 'plico-merged'
+								: isImageToPdf
+									? 'plico-images'
+									: isSplit
+										? `${baseName}-split`
+										: isOrganize
+											? `${baseName}-organized`
+											: isExtract
+												? `${baseName}-extracted`
+												: isRemove
+													? `${baseName}-pages-removed`
+													: isRotate
+														? `${baseName}-rotated`
+														: isCompress
+															? `${baseName}-compressed`
+															: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -379,6 +499,7 @@
 		void compressSignature;
 		void pdfToImageSignature;
 		void imagePdfSignature;
+		void stampSignature;
 		untrack(() => job.clear());
 	});
 	$effect(() => {
@@ -389,6 +510,8 @@
 		splitInterval = 1;
 		splitCombine = false;
 		pdfToImagePageRange = '';
+		numberPages = '';
+		watermarkPages = '';
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
@@ -435,7 +558,10 @@
 		const lock = workspace.lockState(currentFile);
 		if (known && (!lock || lock === 'unlocked')) untrack(() => (unlockPassword = known));
 	});
-	onDestroy(() => job.clear());
+	onDestroy(() => {
+		job.clear();
+		if (watermarkImage) URL.revokeObjectURL(watermarkImage.url);
+	});
 	async function protect() {
 		if (processing || !protectValid || !currentFile) return;
 		const file = currentFile;
@@ -471,6 +597,52 @@
 			// Lets the card show its pages now that the password is known.
 			workspace.unlock(file, password);
 		}
+	}
+	async function addPageNumbers() {
+		if (processing || !stampValid || !currentFile) return;
+		const file = currentFile;
+		const options = {
+			template: numberTemplate,
+			firstNumber: numberFirst,
+			pages: stampPageList,
+			position: numberPosition,
+			margin: numberMargin,
+			family: numberFamily,
+			bold: numberBold,
+			size: numberSize,
+			color: Number.parseInt(numberColor.slice(1), 16),
+			opacity: 1
+		};
+		await job.run(
+			(signal) => processPageNumbers(file, workspace.passwordFor(file), options, signal),
+			'Could not add page numbers to this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function addWatermark() {
+		if (processing || !stampValid || !currentFile) return;
+		const file = currentFile;
+		const image = watermarkKind === 'image' ? watermarkImage?.file : undefined;
+		const options = {
+			text: watermarkText,
+			family: watermarkFamily,
+			bold: watermarkBold,
+			size: watermarkSize,
+			color: Number.parseInt(watermarkColor.slice(1), 16),
+			imageWidth: watermarkImageWidth / 100,
+			pages: stampPageList,
+			position: watermarkPosition,
+			margin: watermarkMargin,
+			rotation: watermarkRotation,
+			opacity: watermarkOpacity / 100,
+			behind: watermarkBehind,
+			tile: watermarkTile
+		};
+		await job.run(
+			(signal) => processWatermark(file, workspace.passwordFor(file), options, image, signal),
+			'Could not add a watermark to this PDF.',
+			() => downloadLink?.click()
+		);
 	}
 	async function merge() {
 		if (processing || dragged || workspace.files.length < 2) return;
@@ -632,6 +804,43 @@
 	}
 </script>
 
+{#snippet stampOverlay(page: PreviewPage)}
+	{#if isPageNumbers}
+		<StampOverlay
+			width={page.width}
+			height={page.height}
+			mark={{
+				kind: 'text',
+				text: numberText(page.number),
+				family: numberFamily,
+				bold: numberBold,
+				size: numberSize
+			}}
+			placement={{ position: numberPosition, margin: numberMargin, rotation: 0, tile: false }}
+			color={numberColor}
+			opacity={1}
+			{reducedMotion}
+		/>
+	{:else}
+		<StampOverlay
+			width={page.width}
+			height={page.height}
+			mark={watermarkMark}
+			placement={{
+				position: watermarkPosition,
+				margin: watermarkMargin,
+				rotation: watermarkRotation,
+				tile: watermarkTile
+			}}
+			color={watermarkColor}
+			opacity={watermarkOpacity / 100}
+			imageUrl={watermarkKind === 'image' ? watermarkImage?.url : ''}
+			{reducedMotion}
+			onlayout={(layout) => (watermarkTooDense = layout.tooDense)}
+		/>
+	{/if}
+{/snippet}
+
 <main id="main-content" class="flex flex-1 flex-col">
 	{#if !supported}
 		<div class="grid flex-1 place-items-center px-6 py-16">
@@ -658,7 +867,8 @@
 				data-drag-area
 				class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
 				isPdfToImage ||
-				isPageTool
+				isPageTool ||
+				isStamp
 					? 'pb-2 lg:pb-16'
 					: 'pb-12 lg:pb-20'}"
 				ondragover={(event) => event.preventDefault()}
@@ -676,6 +886,7 @@
 								isPdfToImage ||
 								isProtect ||
 								isUnlock ||
+								isStamp ||
 								officeTool ||
 								(isPageTool && !isOrganize)
 							)
@@ -706,7 +917,7 @@
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
-							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !officeTool)}<input
+							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isStamp && !officeTool)}<input
 									bind:this={input}
 									type="file"
 									accept={inputAccept[inputType]}
@@ -735,6 +946,18 @@
 												)
 													splitRanges[0].to = count;
 											}}
+											onremove={() => workspace.remove(currentFile)}
+										/>{/key}
+								</div>
+							{:else if isStamp && currentFile}
+								<div class="my-auto w-full py-6 lg:py-10">
+									{#key currentFile}<StampPreview
+											file={currentFile}
+											behind={isWatermark && watermarkBehind}
+											{stamped}
+											{reducedMotion}
+											overlay={stampOverlay}
+											onload={(count) => (pageCount = count)}
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}
 								</div>
@@ -848,6 +1071,36 @@
 										Incorrect password
 									</p>{/if}
 							</div>{/if}
+					{:else if isPageNumbers}
+						<PageNumberSettings
+							bind:position={numberPosition}
+							bind:template={numberTemplate}
+							bind:firstNumber={numberFirst}
+							bind:pages={numberPages}
+							{lastNumber}
+							{pageCount}
+							pagesInvalid={stampPagesInvalid}
+							disabled={processing}
+						/>
+					{:else if isWatermark}
+						<WatermarkSettings
+							bind:kind={watermarkKind}
+							bind:text={watermarkText}
+							bind:family={watermarkFamily}
+							bind:bold={watermarkBold}
+							bind:size={watermarkSize}
+							bind:color={watermarkColor}
+							bind:image={watermarkImage}
+							bind:imageWidth={watermarkImageWidth}
+							bind:position={watermarkPosition}
+							bind:tile={watermarkTile}
+							bind:rotation={watermarkRotation}
+							bind:opacity={watermarkOpacity}
+							undrawable={watermarkUndrawable}
+							tooDense={watermarkTooDense && watermarkTile}
+							{reducedMotion}
+							disabled={processing}
+						/>
 					{:else if isOrganize}
 						<div>
 							<h2 class="mb-3 text-sm font-semibold">Pages</h2>
@@ -944,6 +1197,31 @@
 										</p>{/if}
 								</div>{/if}
 						</AdvancedOptions>
+					{:else if isPageNumbers}
+						<AdvancedOptions {reducedMotion} spacing="space-y-6">
+							<StampTextSettings
+								bind:family={numberFamily}
+								bind:bold={numberBold}
+								bind:size={numberSize}
+								bind:color={numberColor}
+								minSize={6}
+								maxSize={36}
+								disabled={processing}
+							/>
+							<StampAdvanced bind:margin={numberMargin} disabled={processing} />
+						</AdvancedOptions>
+					{:else if isWatermark}
+						<AdvancedOptions {reducedMotion} spacing="space-y-6">
+							<StampAdvanced
+								bind:margin={watermarkMargin}
+								marginLabel={watermarkTile ? 'Spacing' : 'Margin'}
+								bind:behind={watermarkBehind}
+								bind:pages={watermarkPages}
+								{pageCount}
+								pagesInvalid={stampPagesInvalid}
+								disabled={processing}
+							/>
+						</AdvancedOptions>
 					{:else if isCompress}
 						<AdvancedOptions {reducedMotion}>
 							<ToggleSwitch
@@ -994,19 +1272,23 @@
 									? void protect()
 									: isUnlock
 										? void unlock()
-										: isSplit
-											? void split()
-											: isPageTool
-												? void organize()
-												: officeTool
-													? void convertOffice()
-													: isCompress
-														? void compress()
-														: isPdfToImage
-															? void convertPdfToImage()
-															: isImageToPdf
-																? void convertImagesToPdf()
-																: void merge()}
+										: isPageNumbers
+											? void addPageNumbers()
+											: isWatermark
+												? void addWatermark()
+												: isSplit
+													? void split()
+													: isPageTool
+														? void organize()
+														: officeTool
+															? void convertOffice()
+															: isCompress
+																? void compress()
+																: isPdfToImage
+																	? void convertPdfToImage()
+																	: isImageToPdf
+																		? void convertImagesToPdf()
+																		: void merge()}
 						aria-label={result
 							? `Download ${resultFormat.toUpperCase()} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 							: processing
@@ -1014,21 +1296,25 @@
 									? 'Protecting PDF'
 									: isUnlock
 										? 'Unlocking PDF'
-										: isSplit
-											? 'Splitting PDF'
-											: isPageTool
-												? `${tool.label} in progress`
-												: officeTool
-													? officeStage === 'loading'
-														? 'Loading converter...'
-														: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
-													: isCompress
-														? 'Compressing PDF'
-														: isPdfToImage
-															? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-															: isImageToPdf
-																? 'Converting images to PDF...'
-																: 'Merging PDF'
+										: isPageNumbers
+											? 'Adding page numbers'
+											: isWatermark
+												? 'Adding watermark'
+												: isSplit
+													? 'Splitting PDF'
+													: isPageTool
+														? `${tool.label} in progress`
+														: officeTool
+															? officeStage === 'loading'
+																? 'Loading converter...'
+																: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
+															: isCompress
+																? 'Compressing PDF'
+																: isPdfToImage
+																	? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																	: isImageToPdf
+																		? 'Converting images to PDF...'
+																		: 'Merging PDF'
 								: tool.label}
 						class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 							? 'opacity-40'
@@ -1054,17 +1340,21 @@
 											? 'Protecting...'
 											: isUnlock
 												? 'Unlocking...'
-												: isSplit
-													? 'Splitting...'
-													: isPageTool
-														? 'Processing...'
-														: isCompress
-															? 'Compressing...'
-															: isPdfToImage
-																? 'Converting...'
-																: isImageToPdf
-																	? 'Converting...'
-																	: 'Merging...'}{:else}
+												: isPageNumbers
+													? 'Numbering...'
+													: isWatermark
+														? 'Watermarking...'
+														: isSplit
+															? 'Splitting...'
+															: isPageTool
+																? 'Processing...'
+																: isCompress
+																	? 'Compressing...'
+																	: isPdfToImage
+																		? 'Converting...'
+																		: isImageToPdf
+																			? 'Converting...'
+																			: 'Merging...'}{:else}
 									{tool.label}<IconArrowRight size={20} />{/if}</span
 							>
 							<span

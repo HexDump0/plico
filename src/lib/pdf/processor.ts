@@ -3,13 +3,15 @@ import type {
 	CompressOptions,
 	ImagePdfOptions,
 	OrganizePage,
+	PageNumberOptions,
 	PdfOutput,
 	PdfImageOptions,
 	PdfWorkerRequest,
 	PdfWorkerResponse,
 	Protection,
 	ProtectOptions,
-	SplitOptions
+	SplitOptions,
+	WatermarkOptions
 } from './types';
 
 let worker: Worker | undefined;
@@ -116,6 +118,39 @@ export async function processProtectPdf(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'protect', files: [buffer], passwords: [password], options },
+		signal
+	);
+}
+
+export async function processPageNumbers(
+	file: File,
+	password: string,
+	options: PageNumberOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'page-numbers', files: [buffer], passwords: [password], options },
+		signal
+	);
+}
+
+export async function processWatermark(
+	file: File,
+	password: string,
+	options: WatermarkOptions,
+	image: File | undefined,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all(
+		[file, ...(image ? [image] : [])].map((item) => item.arrayBuffer())
+	);
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'watermark', files: buffers, passwords: [password], options },
 		signal
 	);
 }
