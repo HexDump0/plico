@@ -50,6 +50,14 @@ export type PdfWorkerRequest =
 			bookmarks: string[];
 	  }
 	| { id: number; operation: 'unlock'; files: ArrayBuffer[]; passwords: string[] }
+	| {
+			id: number;
+			operation: 'pdfa';
+			files: ArrayBuffer[];
+			passwords: string[];
+			part: 2 | 3;
+			fontBase: string;
+	  }
 	| { id: number; operation: 'protection'; files: ArrayBuffer[] }
 	| {
 			id: number;

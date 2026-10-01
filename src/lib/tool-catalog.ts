@@ -47,6 +47,7 @@ const supportedToolIds = new Set([
 	'split',
 	'protect',
 	'unlock',
+	'pdf-to-pdfa',
 	'page-numbers',
 	'watermark',
 	'organize',

@@ -9,6 +9,8 @@ import init, {
 	split_pdf_every,
 	split_pdf_ranges,
 	unlock_pdf,
+	convert_to_pdfa,
+	pdfa_standard_fonts,
 	pdf_protection,
 	protect_pdf,
 	add_page_numbers,
@@ -299,6 +301,46 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.opacity,
 					options.behind,
 					options.tile
+				)
+			});
+			return;
+		}
+		if (request.operation === 'pdfa') {
+			const input = new Uint8Array(request.files[0]);
+			const password = request.passwords[0] ?? '';
+			const names: string[] = pdfa_standard_fonts(input, password);
+			const fetched = await Promise.all(
+				names.map(async (name) => {
+					const [program, metrics] = await Promise.all(
+						[`${name}.cff`, `${name}.txt`].map(async (file) => {
+							const response = await fetch(new URL(file, request.fontBase));
+							if (!response.ok) throw new Error('The PDF/A fonts could not be loaded.');
+							return response;
+						})
+					);
+					return {
+						program: new Uint8Array(await program.arrayBuffer()),
+						metrics: await metrics.text()
+					};
+				})
+			);
+			const lengths = Uint32Array.from(fetched, (font) => font.program.byteLength);
+			const programs = new Uint8Array(lengths.reduce((total, length) => total + length, 0));
+			let offset = 0;
+			for (const font of fetched) {
+				programs.set(font.program, offset);
+				offset += font.program.byteLength;
+			}
+			postOutput(id, {
+				format: 'pdf',
+				bytes: convert_to_pdfa(
+					input,
+					password,
+					request.part,
+					names,
+					programs,
+					lengths,
+					fetched.map((font) => font.metrics)
 				)
 			});
 			return;

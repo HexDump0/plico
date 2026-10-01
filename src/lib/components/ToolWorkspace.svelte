@@ -18,6 +18,7 @@
 		pdfProtection,
 		processProtectPdf,
 		unlockPdf,
+		convertToPdfA,
 		processCompressPdf,
 		processImagesToPdf,
 		processOrganizePdf,
@@ -52,6 +53,7 @@
 	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
 	import PageRangeField from './PageRangeField.svelte';
 	import CopyButton from './CopyButton.svelte';
+	import PdfASettings from './PdfASettings.svelte';
 	import PasswordInput from './PasswordInput.svelte';
 	import StampPreview from './StampPreview.svelte';
 	import StampOverlay from './StampOverlay.svelte';
@@ -75,6 +77,7 @@
 	const isCompress = $derived(tool.id === 'compress');
 	const isProtect = $derived(tool.id === 'protect');
 	const isUnlock = $derived(tool.id === 'unlock');
+	const isPdfA = $derived(tool.id === 'pdf-to-pdfa');
 	const isPageNumbers = $derived(tool.id === 'page-numbers');
 	const isWatermark = $derived(tool.id === 'watermark');
 	const isStamp = $derived(isPageNumbers || isWatermark);
@@ -136,6 +139,7 @@
 	let allowPrinting = $state(true);
 	let allowCopying = $state(true);
 	let allowEditing = $state(true);
+	let pdfaPart = $state<2 | 3>(2);
 	let unlockProtection = $state<Protection | 'checking'>('checking');
 	let unlockPassword = $state('');
 	// The password the engine last rejected; the error clears once it is edited.
@@ -381,23 +385,28 @@
 				? !protectValid || processing
 				: isUnlock
 					? !unlockValid || processing
-					: isStamp
-						? !stampValid || processing
-						: officeTool
-							? !currentFile || processing
-							: isMerge
-								? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-								: isSplit
-									? !splitValid || processing
-									: isPageTool
-										? !pageToolValid || processing
-										: isCompress
-											? workspace.files.length === 0 || processing || !!dragged || !!keyboardPicked
-											: isPdfToImage
-												? !pdfToImageValid || processing
-												: isImageToPdf
-													? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-													: true
+					: isPdfA
+						? !currentFile || processing
+						: isStamp
+							? !stampValid || processing
+							: officeTool
+								? !currentFile || processing
+								: isMerge
+									? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+									: isSplit
+										? !splitValid || processing
+										: isPageTool
+											? !pageToolValid || processing
+											: isCompress
+												? workspace.files.length === 0 ||
+													processing ||
+													!!dragged ||
+													!!keyboardPicked
+												: isPdfToImage
+													? !pdfToImageValid || processing
+													: isImageToPdf
+														? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+														: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -406,23 +415,25 @@
 				? !protectValid
 				: isUnlock
 					? !unlockValid
-					: isStamp
-						? !stampValid
-						: officeTool
-							? !currentFile
-							: isMerge
-								? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-								: isSplit
-									? !splitValid
-									: isPageTool
-										? !pageToolValid
-										: isCompress
-											? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-											: isPdfToImage
-												? !pdfToImageValid
-												: isImageToPdf
-													? !imagePdfValid || !!dragged || !!keyboardPicked
-													: true
+					: isPdfA
+						? !currentFile
+						: isStamp
+							? !stampValid
+							: officeTool
+								? !currentFile
+								: isMerge
+									? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+									: isSplit
+										? !splitValid
+										: isPageTool
+											? !pageToolValid
+											: isCompress
+												? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+												: isPdfToImage
+													? !pdfToImageValid
+													: isImageToPdf
+														? !imagePdfValid || !!dragged || !!keyboardPicked
+														: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -432,27 +443,29 @@
 				? `${baseName}-protected`
 				: isUnlock
 					? `${baseName}-unlocked`
-					: isPageNumbers
-						? `${baseName}-numbered`
-						: isWatermark
-							? `${baseName}-watermarked`
-							: isMerge
-								? 'plico-merged'
-								: isImageToPdf
-									? 'plico-images'
-									: isSplit
-										? `${baseName}-split`
-										: isOrganize
-											? `${baseName}-organized`
-											: isExtract
-												? `${baseName}-extracted`
-												: isRemove
-													? `${baseName}-pages-removed`
-													: isRotate
-														? `${baseName}-rotated`
-														: isCompress
-															? `${baseName}-compressed`
-															: `${baseName}-images`
+					: isPdfA
+						? `${baseName}-pdfa`
+						: isPageNumbers
+							? `${baseName}-numbered`
+							: isWatermark
+								? `${baseName}-watermarked`
+								: isMerge
+									? 'plico-merged'
+									: isImageToPdf
+										? 'plico-images'
+										: isSplit
+											? `${baseName}-split`
+											: isOrganize
+												? `${baseName}-organized`
+												: isExtract
+													? `${baseName}-extracted`
+													: isRemove
+														? `${baseName}-pages-removed`
+														: isRotate
+															? `${baseName}-rotated`
+															: isCompress
+																? `${baseName}-compressed`
+																: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -509,6 +522,7 @@
 		void imagePdfSignature;
 		void stampSignature;
 		void markdownSignature;
+		void pdfaPart;
 		untrack(() => job.clear());
 	});
 	$effect(() => {
@@ -607,6 +621,18 @@
 			// Lets the card show its pages now that the password is known.
 			workspace.unlock(file, password);
 		}
+	}
+	async function convertPdfA() {
+		if (processing || !currentFile) return;
+		const file = currentFile;
+		await job.run(
+			async (signal) => ({
+				bytes: await convertToPdfA(file, workspace.passwordFor(file), pdfaPart, signal),
+				format: 'pdf'
+			}),
+			'Could not convert this PDF to PDF/A.',
+			() => downloadLink?.click()
+		);
 	}
 	async function addPageNumbers() {
 		if (processing || !stampValid || !currentFile) return;
@@ -904,6 +930,7 @@
 								isPdfToImage ||
 								isProtect ||
 								isUnlock ||
+								isPdfA ||
 								isStamp ||
 								officeTool ||
 								(isPageTool && !isOrganize)
@@ -935,7 +962,7 @@
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
-							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isStamp && !officeTool)}<input
+							{#if isOrganize || (!isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isPdfA && !isStamp && !officeTool)}<input
 									bind:this={input}
 									type="file"
 									accept={inputAccept[inputType]}
@@ -1058,6 +1085,8 @@
 									</p>{/if}
 							</div>
 						</div>
+					{:else if isPdfA}
+						<PdfASettings bind:part={pdfaPart} {accent} {processing} />
 					{:else if isUnlock && currentFile}
 						<div class="flex items-center justify-between">
 							<h2 class="text-sm font-semibold">Protection</h2>
@@ -1298,23 +1327,25 @@
 										? void protect()
 										: isUnlock
 											? void unlock()
-											: isPageNumbers
-												? void addPageNumbers()
-												: isWatermark
-													? void addWatermark()
-													: isSplit
-														? void split()
-														: isPageTool
-															? void organize()
-															: officeTool
-																? void convertOffice()
-																: isCompress
-																	? void compress()
-																	: isPdfToImage
-																		? void convertPdfToImage()
-																		: isImageToPdf
-																			? void convertImagesToPdf()
-																			: void merge()}
+											: isPdfA
+												? void convertPdfA()
+												: isPageNumbers
+													? void addPageNumbers()
+													: isWatermark
+														? void addWatermark()
+														: isSplit
+															? void split()
+															: isPageTool
+																? void organize()
+																: officeTool
+																	? void convertOffice()
+																	: isCompress
+																		? void compress()
+																		: isPdfToImage
+																			? void convertPdfToImage()
+																			: isImageToPdf
+																				? void convertImagesToPdf()
+																				: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
@@ -1322,25 +1353,27 @@
 										? 'Protecting PDF'
 										: isUnlock
 											? 'Unlocking PDF'
-											: isPageNumbers
-												? 'Adding page numbers'
-												: isWatermark
-													? 'Adding watermark'
-													: isSplit
-														? 'Splitting PDF'
-														: isPageTool
-															? `${tool.label} in progress`
-															: officeTool
-																? officeStage === 'loading'
-																	? 'Loading converter...'
-																	: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																: isCompress
-																	? 'Compressing PDF'
-																	: isPdfToImage
-																		? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																		: isImageToPdf
-																			? 'Converting images to PDF...'
-																			: 'Merging PDF'
+											: isPdfA
+												? 'Converting to PDF/A'
+												: isPageNumbers
+													? 'Adding page numbers'
+													: isWatermark
+														? 'Adding watermark'
+														: isSplit
+															? 'Splitting PDF'
+															: isPageTool
+																? `${tool.label} in progress`
+																: officeTool
+																	? officeStage === 'loading'
+																		? 'Loading converter...'
+																		: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																	: isCompress
+																		? 'Compressing PDF'
+																		: isPdfToImage
+																			? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																			: isImageToPdf
+																				? 'Converting images to PDF...'
+																				: 'Merging PDF'
 									: tool.label}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -1366,21 +1399,23 @@
 												? 'Protecting...'
 												: isUnlock
 													? 'Unlocking...'
-													: isPageNumbers
-														? 'Numbering...'
-														: isWatermark
-															? 'Watermarking...'
-															: isSplit
-																? 'Splitting...'
-																: isPageTool
-																	? 'Processing...'
-																	: isCompress
-																		? 'Compressing...'
-																		: isPdfToImage
-																			? 'Converting...'
-																			: isImageToPdf
+													: isPdfA
+														? 'Converting...'
+														: isPageNumbers
+															? 'Numbering...'
+															: isWatermark
+																? 'Watermarking...'
+																: isSplit
+																	? 'Splitting...'
+																	: isPageTool
+																		? 'Processing...'
+																		: isCompress
+																			? 'Compressing...'
+																			: isPdfToImage
 																				? 'Converting...'
-																				: 'Merging...'}{:else}
+																				: isImageToPdf
+																					? 'Converting...'
+																					: 'Merging...'}{:else}
 										{tool.label}<IconArrowRight size={20} />{/if}</span
 								>
 								<span

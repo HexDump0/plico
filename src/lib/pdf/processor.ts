@@ -168,6 +168,30 @@ export async function unlockPdf(file: File, password: string, signal?: AbortSign
 	return output.bytes;
 }
 
+export async function convertToPdfA(
+	file: File,
+	password: string,
+	part: 2 | 3,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const output = await submit(
+		{
+			id: ++requestId,
+			operation: 'pdfa',
+			files: [buffer],
+			passwords: [password],
+			part,
+			// Standard font substitutes, fetched by the worker only when a file needs them.
+			fontBase: new URL('/pdfa-fonts/', location.href).href
+		},
+		signal
+	);
+	return output.bytes;
+}
+
 export async function processSplitPdf(
 	file: File,
 	password: string,
