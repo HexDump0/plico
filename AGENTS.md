@@ -17,9 +17,12 @@ rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
 rust/plico-engine/src/stamps.rs                             page numbers and watermarks drawn onto existing pages
+rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
+rust/plico-engine/assets/icc/                               ICC profiles for PDF/A (Ghostscript's, AGPL)
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
 rust/plico-engine/src/tests.rs                              generated-fixture unit tests
 rust/plico-engine/tests/corpus.rs                           structural checks over a real PDF corpus
+scripts/pdfa-check.mjs                                      veraPDF validation of PDF/A output over the corpus
 src/lib/components/ToolWorkspace.svelte                     tool layout and settings
 src/lib/components/DocumentCards.svelte                     card previews, ordering, and removal
 src/lib/pdf/download-job.svelte.ts                          result and cancellation lifecycle
@@ -48,6 +51,7 @@ npm run test:engine   # cargo test
 npm run test:corpus   # needs a corpus, see below
 npm run test:raster   # needs a corpus, renders and compares output
 npm run test:raster:stamp  # needs a corpus, renders stamped output
+npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
 First-time requirements beyond node: `rustup target add wasm32-unknown-unknown`,
@@ -70,6 +74,13 @@ If your change moves any of those numbers, say so.
 The raster harness is currently red on 9 files. Do not be surprised by that; it
 is the point. See `ISSUES.md` for which files and why. If your change moves that
 number, say so.
+
+`npm run test:pdfa` needs [veraPDF](https://verapdf.org) (Java) on PATH or in
+`$VERAPDF`. Baseline 2026-10-01: 634 files converted to PDF/A-2b, 532 of them
+conform; 290 are refused (245 unembedded fonts, 30 annotations without an
+appearance, 12 attachments, 3 XFA forms). The 99 that do not conform are listed
+in `ISSUES.md`. Every one of those claims a conformance it lacks, so this number
+should only go down. If your change moves it, say so.
 
 The stamp raster harness is red on 7 files, all lopdf load/save losses shared
 with merge, and reports 37 pages where the number drew nothing visible, each
@@ -113,6 +124,11 @@ first deletes the entire document.
 
 Give each input a disjoint id range, and reserve one id past each range for
 unresolvable references.
+
+PDF/A output must never claim a conformance it lacks. When the engine cannot
+fix something it detects, it refuses with the reason; veraPDF over the corpus is
+how undetected cases are found. `validatePdfA`-style self-checks are not
+evidence.
 
 Stamping edits pages in place: no page tree rebuild, no renumbering. Lay a
 stamp out in the page's visible frame, which is `/CropBox` (clipped to

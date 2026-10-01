@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 69 unit tests against
+Evidence comes from two places. `cargo test` runs 80 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -201,6 +201,38 @@ with one entry per input file, opening at its first page ("Add a bookmark for
 each file", off by default). Each input's own outline is still dropped: the
 real fix is to re-root those trees under the per-file entries, which is a
 feature rather than a repair.
+
+### PDF/A output that does not conform
+
+`convert_to_pdfa_bytes` (2b and 3b) edits the file in place, so forms, tags,
+links and outlines survive, and refuses what it cannot fix: unembedded fonts,
+visible annotations with no appearance stream, attachments under PDF/A-2, and
+dynamic XFA forms. It removes JavaScript and the other forbidden actions,
+transfer functions and halftones, and digital signatures, which no rewrite can
+keep valid. Hidden annotations keep their place with an empty appearance.
+DeviceCMYK gets `ps_cmyk.icc`, which converts the way viewers already do, so
+CMYK content keeps its on-screen look.
+
+`npm run test:pdfa` (veraPDF) on the pdf.js corpus, 2026-10-01: 532 of 634
+outputs conform. The other 99, grouped by what would fix them:
+
+- Embedded font programs (most of them). Widths in the font dictionary that
+  differ from the program (31), glyphs the program does not have (19) or
+  `.notdef` drawn (7), programs veraPDF cannot parse and so treats as missing
+  (17), and TrueType encoding and cmap rules (6.2.11.6, 23). Detecting these
+  means parsing the font programs, which is the font phase in
+  `AI/handoffs/2026-10-01-pdfa-fonts.md`. Until then they are written out
+  claiming conformance.
+- DeviceN spot colours without a /Colorants entry (8). Needs a single-colorant
+  tint transform derived from the DeviceN one.
+- Content naming resources that do not exist (7, e.g. `Embedded_font.pdf`):
+  broken input that draws nothing there.
+- JPEG 2000 images with channel counts or bit depths PDF/A excludes (3).
+- One each: an inline image with `/I true` (needs content rewriting), an odd
+  hex string inside content, a page box under 3 units, a non-UTF-8 name, an
+  undefined content operator, inconsistent Separation definitions.
+
+3 outputs crash veraPDF itself and are not counted either way.
 
 ### Some encryption is refused
 

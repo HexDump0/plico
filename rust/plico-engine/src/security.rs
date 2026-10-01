@@ -168,8 +168,20 @@ fn permissions(options: &ProtectOptions<'_>) -> Permissions {
 /// Readers expect /ID on an encrypted file, and older handlers derive the key
 /// from it. Random rather than hashed: an ID derived from the content would
 /// say something about a document the password is meant to hide.
-fn ensure_file_id(document: &mut Document) -> Result<(), String> {
-    if document.trailer.get(b"ID").is_ok() {
+pub(crate) fn ensure_file_id(document: &mut Document) -> Result<(), String> {
+    // A malformed one counts as none (pdf.js corpus: issue11651.pdf loads with
+    // an /ID that writes out empty).
+    let well_formed = document
+        .trailer
+        .get(b"ID")
+        .and_then(Object::as_array)
+        .is_ok_and(|id| {
+            id.len() == 2
+                && id
+                    .iter()
+                    .all(|part| part.as_str().is_ok_and(|part| !part.is_empty()))
+        });
+    if well_formed {
         return Ok(());
     }
     let mut id = [0u8; 16];

@@ -1,3 +1,4 @@
+mod archive;
 mod bindings;
 mod compression;
 mod documents;
@@ -7,9 +8,11 @@ mod stamps;
 #[cfg(test)]
 mod tests;
 
+pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{
-    add_page_numbers, add_watermark, compress_pdf, images_to_pdf, merge_pdfs, organize_pdfs,
-    pdf_protection, protect_pdf, split_pdf_every, split_pdf_ranges, unlock_pdf,
+    add_page_numbers, add_watermark, compress_pdf, convert_to_pdfa, images_to_pdf, merge_pdfs,
+    organize_pdfs, pdf_protection, pdfa_standard_fonts, protect_pdf, split_pdf_every,
+    split_pdf_ranges, unlock_pdf,
 };
 pub use compression::{CompressOptions, compress_pdf_bytes, compress_pdf_bytes_with_password};
 pub use documents::{

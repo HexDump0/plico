@@ -22,10 +22,10 @@ use std::path::{Path, PathBuf};
 
 use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 use plico_engine::{
-    CompressOptions, FontFamily, PageNumberOptions, Position, ProtectOptions, SplitMode, TextStyle,
-    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
-    compress_pdf_bytes, merge_pdf_bytes, protect_pdf_bytes, split_pdf_bytes,
-    split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, FontFamily, PageNumberOptions, PdfALevel, Position, ProtectOptions, SplitMode,
+    StandardFont, TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes,
+    add_watermark_bytes, compress_pdf_bytes, convert_to_pdfa_bytes, merge_pdf_bytes,
+    protect_pdf_bytes, split_pdf_bytes, split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
@@ -745,4 +745,98 @@ fn stamps_every_loadable_document() {
         println!("  ... and {} more", failures.len() - 15);
     }
     assert!(failures.is_empty(), "stamping failed on real PDFs");
+}
+
+/// Structural only: a PDF/A claim needs a validator. Set `PLICO_PDFA_OUT` to a
+/// directory to keep every output, then check them with veraPDF
+/// (`scripts/pdfa-check.sh` does both).
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn converts_every_loadable_document_to_pdfa() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+    let output = std::env::var("PLICO_PDFA_OUT").ok().map(PathBuf::from);
+    if let Some(output) = &output {
+        fs::create_dir_all(output).unwrap();
+    }
+
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static/pdfa-fonts");
+    let substitutes = fs::read_dir(&directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cff"))
+        .map(|path| {
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let metrics = fs::read_to_string(path.with_extension("txt")).unwrap();
+            (name, fs::read(&path).unwrap(), metrics)
+        })
+        .collect::<Vec<_>>();
+    let mut converted = 0usize;
+    let mut refusals: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(mut source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.is_encrypted() && source.decrypt("").is_err() {
+            continue;
+        }
+        let pages = source.get_pages().len();
+        if pages == 0 {
+            continue;
+        }
+        drop(source);
+
+        let fonts = substitutes
+            .iter()
+            .map(|(name, program, metrics)| StandardFont {
+                name,
+                program,
+                metrics,
+            })
+            .collect::<Vec<_>>();
+        let result = match convert_to_pdfa_bytes(&bytes, "", PdfALevel::A2b, &fonts) {
+            Ok(result) => result,
+            Err(error) => {
+                // Group refusals by reason, not by the font or page they name.
+                let reason = error
+                    .split('“')
+                    .next()
+                    .unwrap_or(&error)
+                    .split(" on page ")
+                    .next()
+                    .unwrap_or(&error)
+                    .to_owned();
+                refusals.entry(reason).or_default().push(name);
+                continue;
+            }
+        };
+        let Ok(reloaded) = Document::load_mem(&result) else {
+            failures.push(format!("{name}: output would not reparse"));
+            continue;
+        };
+        if reloaded.get_pages().len() != pages {
+            failures.push(format!(
+                "{name}: {} pages, expected {pages}",
+                reloaded.get_pages().len()
+            ));
+            continue;
+        }
+        if let Some(output) = &output {
+            fs::write(output.join(&name), &result).unwrap();
+        }
+        converted += 1;
+    }
+
+    println!("\npdf/a corpus: {converted} files converted to PDF/A-2b");
+    for (reason, names) in &refusals {
+        println!("  refused {}: {reason}", names.len());
+    }
+    for failure in failures.iter().take(15) {
+        println!("  {failure}");
+    }
+    assert!(failures.is_empty(), "PDF/A conversion broke real PDFs");
 }

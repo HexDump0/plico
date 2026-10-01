@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lopdf::content::Content;
 use lopdf::{
-    Dictionary, Document, EncryptionState, EncryptionVersion, Object, Permissions, Stream,
-    dictionary,
+    Dictionary, Document, EncryptionState, EncryptionVersion, Object, ObjectId, Permissions,
+    Stream, dictionary,
 };
 
 use super::{
@@ -13,13 +13,14 @@ use super::{
     organize_pdf_items, organize_pdfs_bytes, organize_pdfs_bytes_with_passwords, split_pdf_bytes,
     split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
+use crate::archive::xmp_date;
 use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_image};
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
 use crate::{
-    FontFamily, PageNumberOptions, Position, ProtectOptions, Protection, TextStyle,
-    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
-    protect_pdf_bytes, protection_of,
+    FontFamily, PageNumberOptions, PdfALevel, Position, ProtectOptions, Protection, StandardFont,
+    TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
+    convert_to_pdfa_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
 };
 
 fn image_pdf_options() -> ImagePdfOptions {
@@ -2203,4 +2204,625 @@ fn a_reference_to_a_missing_object_stays_dangling_when_written() {
             .unwrap();
         assert_eq!(producer, b"Plico");
     }
+}
+
+/// A one-page PDF whose page draws `content`; `build` adds whatever else the
+/// test needs, given the page and catalog ids.
+fn pdfa_fixture(content: &str, build: impl FnOnce(&mut Document, ObjectId, ObjectId)) -> Vec<u8> {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let content_id = document.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => content_id,
+        "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+        "Resources" => dictionary! {},
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    build(&mut document, page_id, catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn to_pdfa(bytes: &[u8], level: PdfALevel) -> Document {
+    Document::load_mem(&convert_to_pdfa_bytes(bytes, "", level, &[]).unwrap()).unwrap()
+}
+
+fn catalog_of(document: &Document) -> &Dictionary {
+    document.catalog().unwrap()
+}
+
+fn resolved<'a>(document: &'a Document, object: &'a Object) -> &'a Object {
+    match object {
+        Object::Reference(id) => document.get_object(*id).unwrap(),
+        object => object,
+    }
+}
+
+fn first_page(document: &Document) -> &Dictionary {
+    let id = *document.get_pages().values().next().unwrap();
+    document.get_dictionary(id).unwrap()
+}
+
+#[test]
+fn pdfa_declares_its_conformance_and_keeps_the_page() {
+    let input = pdfa_fixture("0 0 1 rg 0 0 10 10 re f", |_, _, _| {});
+    let output = convert_to_pdfa_bytes(&input, "", PdfALevel::A2b, &[]).unwrap();
+    // 6.1.2: a comment of at least four bytes above 127 follows the header.
+    assert!(output.starts_with(b"%PDF-1."));
+    let mark = output.split(|&byte| byte == b'\n').nth(1).unwrap();
+    assert!(mark.len() >= 5 && mark[0] == b'%' && mark[1..5].iter().all(|&byte| byte > 127));
+
+    let document = Document::load_mem(&output).unwrap();
+    assert_eq!(page_contents(&output), vec!["0 0 1 rg 0 0 10 10 re f"]);
+    let id = document
+        .trailer
+        .get(b"ID")
+        .and_then(Object::as_array)
+        .unwrap();
+    assert_eq!(id.len(), 2);
+
+    let catalog = catalog_of(&document);
+    let metadata = resolved(&document, catalog.get(b"Metadata").unwrap())
+        .as_stream()
+        .unwrap();
+    assert!(!metadata.dict.has(b"Filter"), "XMP is written uncompressed");
+    let xmp = String::from_utf8(metadata.content.clone()).unwrap();
+    assert!(xmp.contains("<pdfaid:part>2</pdfaid:part>"));
+    assert!(xmp.contains("<pdfaid:conformance>B</pdfaid:conformance>"));
+
+    let intents = resolved(&document, catalog.get(b"OutputIntents").unwrap())
+        .as_array()
+        .unwrap();
+    assert_eq!(intents.len(), 1);
+    let intent = resolved(&document, &intents[0]).as_dict().unwrap();
+    assert_eq!(
+        intent.get(b"S").and_then(Object::as_name).unwrap(),
+        b"GTS_PDFA1"
+    );
+    let profile = resolved(&document, intent.get(b"DestOutputProfile").unwrap())
+        .as_stream()
+        .unwrap();
+    assert_eq!(profile.dict.get(b"N").and_then(Object::as_i64).unwrap(), 3);
+}
+
+#[test]
+fn pdfa_3_declares_part_3() {
+    let input = pdfa_fixture("", |_, _, _| {});
+    let document = to_pdfa(&input, PdfALevel::A3b);
+    let metadata = resolved(&document, catalog_of(&document).get(b"Metadata").unwrap())
+        .as_stream()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&metadata.content).contains("<pdfaid:part>3</pdfaid:part>"));
+}
+
+#[test]
+fn pdfa_removes_scripts_and_actions_that_change_the_document() {
+    let input = pdfa_fixture("", |document, page_id, catalog_id| {
+        let script = document.add_object(dictionary! {
+            "S" => "JavaScript",
+            "JS" => Object::string_literal("app.alert(1)"),
+        });
+        let launch = dictionary! { "S" => "Launch", "F" => Object::string_literal("calc.exe") };
+        let link = |action: Dictionary| {
+            dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Link",
+                "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                "A" => action,
+            }
+        };
+        let web = link(dictionary! {
+            "S" => "URI",
+            "URI" => Object::string_literal("https://example.com"),
+            "Next" => script,
+        });
+        let bad = document.add_object(link(launch));
+        let good = document.add_object(web);
+        let page = document.get_dictionary_mut(page_id).unwrap();
+        page.set("Annots", vec![bad.into(), good.into()]);
+        page.set("AA", dictionary! { "O" => script });
+        let catalog = document.get_dictionary_mut(catalog_id).unwrap();
+        catalog.set("OpenAction", script);
+        catalog.set(
+            "Names",
+            dictionary! { "JavaScript" => dictionary! { "Names" => vec![Object::string_literal("x"), script.into()] } },
+        );
+    });
+    let document = to_pdfa(&input, PdfALevel::A2b);
+    let catalog = catalog_of(&document);
+    assert!(!catalog.has(b"OpenAction"));
+    let names = resolved(&document, catalog.get(b"Names").unwrap())
+        .as_dict()
+        .unwrap();
+    assert!(!names.has(b"JavaScript"));
+    let page = first_page(&document);
+    assert!(!page.has(b"AA"));
+
+    let annotations = resolved(&document, page.get(b"Annots").unwrap())
+        .as_array()
+        .unwrap();
+    assert_eq!(annotations.len(), 2, "links stay, only their actions go");
+    let action = |index: usize| {
+        resolved(&document, &annotations[index])
+            .as_dict()
+            .unwrap()
+            .get(b"A")
+            .ok()
+            .map(|action| resolved(&document, action).as_dict().unwrap().clone())
+    };
+    assert!(action(0).is_none());
+    let web = action(1).unwrap();
+    assert_eq!(web.get(b"S").and_then(Object::as_name).unwrap(), b"URI");
+    assert!(!web.has(b"Next"));
+}
+
+#[test]
+fn pdfa_refuses_fonts_without_a_program_but_not_form_defaults() {
+    let drawn = pdfa_fixture("BT /F1 12 Tf (Hi) Tj ET", |document, page_id, _| {
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+        document.get_dictionary_mut(page_id).unwrap().set(
+            "Resources",
+            dictionary! { "Font" => dictionary! { "F1" => font } },
+        );
+    });
+    let error = convert_to_pdfa_bytes(&drawn, "", PdfALevel::A2b, &[]).unwrap_err();
+    assert!(error.contains("“Helvetica”"), "{error}");
+
+    let form_only = pdfa_fixture("", |document, _, catalog_id| {
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+        document.get_dictionary_mut(catalog_id).unwrap().set(
+            "AcroForm",
+            dictionary! {
+                "Fields" => vec![],
+                "DR" => dictionary! { "Font" => dictionary! { "Helv" => font } },
+                "NeedAppearances" => true,
+            },
+        );
+    });
+    let document = to_pdfa(&form_only, PdfALevel::A2b);
+    let form = resolved(&document, catalog_of(&document).get(b"AcroForm").unwrap())
+        .as_dict()
+        .unwrap();
+    assert!(!form.has(b"NeedAppearances"));
+}
+
+fn attachment_fixture() -> Vec<u8> {
+    pdfa_fixture("", |document, _, catalog_id| {
+        let file = document.add_object(Stream::new(
+            dictionary! { "Type" => "EmbeddedFile" },
+            b"a,b".to_vec(),
+        ));
+        let specification = document.add_object(dictionary! {
+            "Type" => "Filespec",
+            "F" => Object::string_literal("data.csv"),
+            "EF" => dictionary! { "F" => file },
+        });
+        document.get_dictionary_mut(catalog_id).unwrap().set(
+            "Names",
+            dictionary! {
+                "EmbeddedFiles" => dictionary! {
+                    "Names" => vec![Object::string_literal("data.csv"), specification.into()],
+                },
+            },
+        );
+    })
+}
+
+#[test]
+fn pdfa_2_refuses_attachments_and_pdfa_3_associates_them() {
+    let input = attachment_fixture();
+    let error = convert_to_pdfa_bytes(&input, "", PdfALevel::A2b, &[]).unwrap_err();
+    assert!(error.contains("PDF/A-3"), "{error}");
+
+    let document = to_pdfa(&input, PdfALevel::A3b);
+    let associated = resolved(&document, catalog_of(&document).get(b"AF").unwrap())
+        .as_array()
+        .unwrap();
+    assert_eq!(associated.len(), 1);
+    let specification = resolved(&document, &associated[0]).as_dict().unwrap();
+    assert!(specification.has(b"UF"));
+    assert_eq!(
+        specification
+            .get(b"AFRelationship")
+            .and_then(Object::as_name)
+            .unwrap(),
+        b"Unspecified"
+    );
+    let files = specification.get(b"EF").and_then(Object::as_dict).unwrap();
+    let file = resolved(&document, files.get(b"F").unwrap())
+        .as_stream()
+        .unwrap();
+    assert_eq!(
+        file.dict.get(b"Subtype").and_then(Object::as_name).unwrap(),
+        b"application/octet-stream"
+    );
+}
+
+fn default_cmyk(document: &Document) -> Option<i64> {
+    let resources = resolved(document, first_page(document).get(b"Resources").ok()?)
+        .as_dict()
+        .ok()?;
+    let spaces = resolved(document, resources.get(b"ColorSpace").ok()?)
+        .as_dict()
+        .ok()?;
+    let space = resolved(document, spaces.get(b"DefaultCMYK").ok()?)
+        .as_array()
+        .ok()?;
+    assert_eq!(space[0].as_name().unwrap(), b"ICCBased");
+    resolved(document, &space[1])
+        .as_stream()
+        .ok()?
+        .dict
+        .get(b"N")
+        .and_then(Object::as_i64)
+        .ok()
+}
+
+#[test]
+fn pdfa_gives_device_cmyk_a_profile_only_when_it_is_used() {
+    let cmyk = pdfa_fixture("0 0 0 1 k 0 0 10 10 re f", |_, _, _| {});
+    assert_eq!(default_cmyk(&to_pdfa(&cmyk, PdfALevel::A2b)), Some(4));
+    let rgb = pdfa_fixture("1 0 0 rg 0 0 10 10 re f", |_, _, _| {});
+    assert_eq!(default_cmyk(&to_pdfa(&rgb, PdfALevel::A2b)), None);
+}
+
+#[test]
+fn pdfa_names_the_profile_on_cmyk_images_and_shadings() {
+    let input = pdfa_fixture("/Im0 Do", |document, page_id, _| {
+        let image = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 1,
+                "Height" => 1,
+                "BitsPerComponent" => 8,
+                "ColorSpace" => "DeviceCMYK",
+                "Interpolate" => true,
+            },
+            vec![0, 0, 0, 255],
+        ));
+        document.get_dictionary_mut(page_id).unwrap().set(
+            "Resources",
+            dictionary! { "XObject" => dictionary! { "Im0" => image } },
+        );
+    });
+    let document = to_pdfa(&input, PdfALevel::A2b);
+    let image = document
+        .objects
+        .values()
+        .find_map(|object| {
+            let stream = object.as_stream().ok()?;
+            (stream.dict.get(b"Subtype").and_then(Object::as_name).ok()? == b"Image")
+                .then_some(stream)
+        })
+        .unwrap();
+    let space = image
+        .dict
+        .get(b"ColorSpace")
+        .and_then(Object::as_array)
+        .unwrap();
+    assert_eq!(space[0].as_name().unwrap(), b"ICCBased");
+    assert!(
+        !image
+            .dict
+            .get(b"Interpolate")
+            .and_then(Object::as_bool)
+            .unwrap_or(false)
+    );
+}
+
+#[test]
+fn pdfa_keeps_hidden_annotations_invisible_and_refuses_ones_without_appearance() {
+    let annotated = |flags: i64, appearance: bool| {
+        pdfa_fixture("", move |document, page_id, _| {
+            let mut annotation = dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Square",
+                "Rect" => vec![10.into(), 10.into(), 50.into(), 30.into()],
+                "F" => flags,
+            };
+            if appearance {
+                let normal = document.add_object(Stream::new(
+                    dictionary! { "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 40.into(), 20.into()] },
+                    b"0 0 40 20 re S".to_vec(),
+                ));
+                annotation.set("AP", dictionary! { "N" => normal, "D" => normal });
+            }
+            let id = document.add_object(annotation);
+            document
+                .get_dictionary_mut(page_id)
+                .unwrap()
+                .set("Annots", vec![id.into()]);
+        })
+    };
+
+    let document = to_pdfa(&annotated(2, true), PdfALevel::A2b);
+    let page = first_page(&document);
+    let annotations = resolved(&document, page.get(b"Annots").unwrap())
+        .as_array()
+        .unwrap();
+    let annotation = resolved(&document, &annotations[0]).as_dict().unwrap();
+    assert_eq!(annotation.get(b"F").and_then(Object::as_i64).unwrap(), 4);
+    let appearance = annotation.get(b"AP").and_then(Object::as_dict).unwrap();
+    assert!(!appearance.has(b"D"), "only the normal appearance may stay");
+    let normal = resolved(&document, appearance.get(b"N").unwrap())
+        .as_stream()
+        .unwrap();
+    assert!(
+        normal.content.is_empty(),
+        "a hidden annotation still draws nothing"
+    );
+
+    let visible = to_pdfa(&annotated(0, true), PdfALevel::A2b);
+    let annotations = resolved(&visible, first_page(&visible).get(b"Annots").unwrap())
+        .as_array()
+        .unwrap();
+    let annotation = resolved(&visible, &annotations[0]).as_dict().unwrap();
+    assert_eq!(
+        annotation.get(b"F").and_then(Object::as_i64).unwrap(),
+        4,
+        "printable"
+    );
+
+    let error = convert_to_pdfa_bytes(&annotated(0, false), "", PdfALevel::A2b, &[]).unwrap_err();
+    assert!(error.contains("page 1"), "{error}");
+}
+
+#[test]
+fn pdfa_lets_a_form_without_resources_borrow_its_page() {
+    let input = pdfa_fixture("/Fm0 Do", |document, page_id, _| {
+        let form = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+            },
+            b"/Fm0 Do".to_vec(),
+        ));
+        document.get_dictionary_mut(page_id).unwrap().set(
+            "Resources",
+            dictionary! { "XObject" => dictionary! { "Fm0" => form } },
+        );
+    });
+    let document = to_pdfa(&input, PdfALevel::A2b);
+    let form = document
+        .objects
+        .values()
+        .find_map(|object| {
+            let stream = object.as_stream().ok()?;
+            (stream.dict.get(b"Subtype").and_then(Object::as_name).ok()? == b"Form")
+                .then_some(stream)
+        })
+        .unwrap();
+    assert!(form.dict.has(b"Resources"));
+}
+
+#[test]
+fn pdfa_metadata_carries_the_document_information() {
+    let input = pdfa_fixture("", |document, _, _| {
+        let info = document.add_object(dictionary! {
+            "Title" => Object::string_literal("Q&A <draft>"),
+            "Author" => Object::string_literal("Plico"),
+            "CreationDate" => Object::string_literal("D:20260101120000+02'00'"),
+            "ModDate" => Object::string_literal("yesterday"),
+        });
+        document.trailer.set("Info", info);
+        // An empty /ID counts as none.
+        document.trailer.set("ID", vec![]);
+    });
+    let document = to_pdfa(&input, PdfALevel::A2b);
+    let metadata = resolved(&document, catalog_of(&document).get(b"Metadata").unwrap())
+        .as_stream()
+        .unwrap();
+    let xmp = String::from_utf8(metadata.content.clone()).unwrap();
+    assert!(xmp.contains("Q&amp;A &lt;draft&gt;"));
+    assert!(xmp.contains("<rdf:li>Plico</rdf:li>"));
+    assert!(xmp.contains("<xmp:CreateDate>2026-01-01T12:00:00+02:00</xmp:CreateDate>"));
+    assert!(!xmp.contains("ModifyDate"));
+    let info = resolved(&document, document.trailer.get(b"Info").unwrap())
+        .as_dict()
+        .unwrap();
+    assert!(
+        !info.has(b"ModDate"),
+        "a date XMP cannot hold is dropped from both"
+    );
+    assert_eq!(
+        document
+            .trailer
+            .get(b"ID")
+            .and_then(Object::as_array)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn reads_pdf_dates_with_any_precision() {
+    assert_eq!(
+        xmp_date("D:20260101120000+02'00'").as_deref(),
+        Some("2026-01-01T12:00:00+02:00")
+    );
+    assert_eq!(
+        xmp_date("D:20260101120000Z").as_deref(),
+        Some("2026-01-01T12:00:00Z")
+    );
+    assert_eq!(xmp_date("D:2026").as_deref(), Some("2026-01-01T00:00:00"));
+    assert_eq!(xmp_date("D:202613").as_deref(), None);
+    assert_eq!(xmp_date("garbage"), None);
+}
+
+fn substitute(name: &str) -> (Vec<u8>, String) {
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../../static/pdfa-fonts");
+    (
+        std::fs::read(format!("{directory}/{name}.cff")).unwrap(),
+        std::fs::read_to_string(format!("{directory}/{name}.txt")).unwrap(),
+    )
+}
+
+fn font_fixture(font: Dictionary) -> Vec<u8> {
+    pdfa_fixture("BT /F1 12 Tf (Hi) Tj ET", |document, page_id, _| {
+        let font = document.add_object(font);
+        document.get_dictionary_mut(page_id).unwrap().set(
+            "Resources",
+            dictionary! { "Font" => dictionary! { "F1" => font } },
+        );
+    })
+}
+
+fn embedded_font(document: &Document) -> &Dictionary {
+    document
+        .objects
+        .values()
+        .find_map(|object| {
+            let dictionary = object.as_dict().ok()?;
+            (dictionary.get(b"Type").and_then(Object::as_name).ok()? == b"Font")
+                .then_some(dictionary)
+        })
+        .unwrap()
+}
+
+#[test]
+fn pdfa_embeds_a_substitute_for_a_standard_font() {
+    let input = font_fixture(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica-Bold",
+        "Encoding" => "WinAnsiEncoding",
+    });
+    assert_eq!(
+        standard_fonts_for_pdfa(&input, "").unwrap(),
+        vec!["Helvetica-Bold"]
+    );
+    let (program, metrics) = substitute("Helvetica-Bold");
+    let fonts = [StandardFont {
+        name: "Helvetica-Bold",
+        program: &program,
+        metrics: &metrics,
+    }];
+    let output = convert_to_pdfa_bytes(&input, "", PdfALevel::A2b, &fonts).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let font = embedded_font(&document);
+    assert_eq!(
+        font.get(b"Subtype").and_then(Object::as_name).unwrap(),
+        b"Type1"
+    );
+    // Adobe's Helvetica-Bold widths, which the substitute matches: space and A.
+    let first = font.get(b"FirstChar").and_then(Object::as_i64).unwrap();
+    let widths = resolved(&document, font.get(b"Widths").unwrap())
+        .as_array()
+        .unwrap();
+    let width = |code: i64| widths[(code - first) as usize].as_i64().unwrap();
+    assert_eq!((width(32), width(65)), (278, 722));
+    let descriptor = resolved(&document, font.get(b"FontDescriptor").unwrap())
+        .as_dict()
+        .unwrap();
+    let file = resolved(&document, descriptor.get(b"FontFile3").unwrap())
+        .as_stream()
+        .unwrap();
+    assert_eq!(
+        file.dict.get(b"Subtype").and_then(Object::as_name).unwrap(),
+        b"Type1C"
+    );
+}
+
+#[test]
+fn pdfa_spells_out_the_symbol_encoding() {
+    let input = font_fixture(
+        dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Symbol" },
+    );
+    let (program, metrics) = substitute("Symbol");
+    let fonts = [StandardFont {
+        name: "Symbol",
+        program: &program,
+        metrics: &metrics,
+    }];
+    let document =
+        Document::load_mem(&convert_to_pdfa_bytes(&input, "", PdfALevel::A2b, &fonts).unwrap())
+            .unwrap();
+    let encoding = embedded_font(&document)
+        .get(b"Encoding")
+        .and_then(Object::as_dict)
+        .unwrap();
+    let differences = encoding
+        .get(b"Differences")
+        .and_then(Object::as_array)
+        .unwrap();
+    // Code 97 is alpha in the Symbol encoding.
+    let mut code = 0;
+    let mut alpha = None;
+    for item in differences {
+        match item {
+            Object::Integer(start) => code = *start,
+            Object::Name(name) => {
+                if name == b"alpha" {
+                    alpha = Some(code);
+                }
+                code += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(alpha, Some(97));
+}
+
+#[test]
+fn pdfa_refuses_a_substitute_that_would_move_text() {
+    // Widths a quarter wider than Helvetica's are some other font.
+    let input = font_fixture(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "TrueType",
+        "BaseFont" => "Arial,Bold",
+        "FirstChar" => 65,
+        "LastChar" => 65,
+        "Widths" => vec![900.into()],
+        "Encoding" => "WinAnsiEncoding",
+    });
+    let (program, metrics) = substitute("Helvetica-Bold");
+    let fonts = [StandardFont {
+        name: "Helvetica-Bold",
+        program: &program,
+        metrics: &metrics,
+    }];
+    let error = convert_to_pdfa_bytes(&input, "", PdfALevel::A2b, &fonts).unwrap_err();
+    assert!(error.contains("would move"), "{error}");
+}
+
+#[test]
+fn pdfa_recognises_standard_font_aliases_only() {
+    let needed = |name: &str| {
+        let input = font_fixture(
+            dictionary! { "Type" => "Font", "Subtype" => "TrueType", "BaseFont" => name },
+        );
+        standard_fonts_for_pdfa(&input, "").unwrap()
+    };
+    assert_eq!(needed("ArialMT"), vec!["Helvetica"]);
+    assert_eq!(needed("Arial,BoldItalic"), vec!["Helvetica-BoldOblique"]);
+    assert_eq!(needed("TimesNewRomanPS-BoldMT"), vec!["Times-Bold"]);
+    assert_eq!(needed("ABCDEF+CourierNew,Italic"), vec!["Courier-Oblique"]);
+    assert!(needed("ArialNarrow").is_empty());
+    assert!(needed("Arial-Black").is_empty());
 }

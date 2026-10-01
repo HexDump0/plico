@@ -3,10 +3,11 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     CompressOptions, FontFamily, ImagePdfOptions, OrganizeItem, PageNumberOptions, PageOrientation,
-    Position, ProtectOptions, Protection, SplitMode, TextStyle, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_watermark_bytes, compress_pdf_bytes_with_password,
-    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes,
-    protection_of, split_pdf_bytes_with_password, unlock_pdf_bytes,
+    PdfALevel, Position, ProtectOptions, Protection, SplitMode, StandardFont, TextStyle,
+    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
+    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, images_to_pdf_bytes,
+    merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes, protection_of,
+    split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -188,6 +189,61 @@ pub fn organize_pdfs(
 #[wasm_bindgen]
 pub fn unlock_pdf(input: &[u8], password: &str) -> Result<Vec<u8>, JsValue> {
     unlock_pdf_bytes(input, password).map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// The standard font substitutes `convert_to_pdfa` will need for this file.
+pub fn pdfa_standard_fonts(input: &[u8], password: &str) -> Result<Vec<String>, JsValue> {
+    standard_fonts_for_pdfa(input, password)
+        .map(|names| names.into_iter().map(str::to_owned).collect())
+        .map_err(|error: String| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// `part` is 2 for PDF/A-2b or 3 for PDF/A-3b. `font_names`,
+/// `font_programs` and `font_metrics` describe the substitutes, one each per
+/// font; the programs are concatenated with their lengths in
+/// `program_lengths`.
+pub fn convert_to_pdfa(
+    input: &[u8],
+    password: &str,
+    part: u8,
+    font_names: Vec<String>,
+    font_programs: &[u8],
+    program_lengths: &[u32],
+    font_metrics: Vec<String>,
+) -> Result<Vec<u8>, JsValue> {
+    let level = match part {
+        2 => PdfALevel::A2b,
+        3 => PdfALevel::A3b,
+        _ => return Err(JsValue::from_str("Choose PDF/A-2 or PDF/A-3.")),
+    };
+    let total = program_lengths
+        .iter()
+        .try_fold(0usize, |total, length| total.checked_add(*length as usize));
+    if total != Some(font_programs.len())
+        || font_names.len() != program_lengths.len()
+        || font_names.len() != font_metrics.len()
+    {
+        return Err(JsValue::from_str("The PDF/A fonts were incomplete."));
+    }
+    let mut offset = 0;
+    let fonts = font_names
+        .iter()
+        .zip(program_lengths)
+        .zip(&font_metrics)
+        .map(|((name, length), metrics)| {
+            let end = offset + *length as usize;
+            let program = &font_programs[offset..end];
+            offset = end;
+            StandardFont {
+                name,
+                program,
+                metrics,
+            }
+        })
+        .collect::<Vec<_>>();
+    convert_to_pdfa_bytes(input, password, level, &fonts).map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
