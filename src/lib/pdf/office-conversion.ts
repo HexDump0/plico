@@ -2,6 +2,7 @@ export const officeTools = {
 	'pdf-to-word': { input: 'pdf', output: 'docx' },
 	'pdf-to-powerpoint': { input: 'pdf', output: 'pptx' },
 	'pdf-to-excel': { input: 'pdf', output: 'xlsx' },
+	'pdf-to-markdown': { input: 'pdf', output: 'md' },
 	'word-to-pdf': { input: 'docx', output: 'pdf' },
 	'powerpoint-to-pdf': { input: 'pptx', output: 'pdf' },
 	'excel-to-pdf': { input: 'xlsx', output: 'pdf' }
@@ -9,6 +10,9 @@ export const officeTools = {
 
 export type OfficeOperation = keyof typeof officeTools;
 export type OfficeInput = 'docx' | 'pptx' | 'xlsx';
+
+// `pages` counts from 1; empty means every page.
+export type MarkdownOptions = { pages: number[]; images: boolean };
 
 export function officeOperation(id: string): OfficeOperation | undefined {
 	return id in officeTools ? (id as OfficeOperation) : undefined;

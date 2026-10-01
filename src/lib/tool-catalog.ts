@@ -62,7 +62,8 @@ const supportedToolIds = new Set([
 	'excel-to-pdf',
 	'pdf-to-word',
 	'pdf-to-powerpoint',
-	'pdf-to-excel'
+	'pdf-to-excel',
+	'pdf-to-markdown'
 ]);
 
 export function isToolSupported(id: string): boolean {

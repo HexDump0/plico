@@ -316,7 +316,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-one tools exist, the catalogue advertises about forty
+### Twenty-two tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -335,6 +335,18 @@ PDF to Word, PowerPoint, and Excel, plus the three reverse conversions, use
 of those tools runs. Its WASM asset is about 17.6 MB raw, so keeping it out of
 the ordinary PDF worker matters. Conversion quality on real user files still
 needs manual review, especially scanned PDFs and complex Office layouts.
+
+PDF to Markdown runs on the same worker, converting page by page with
+`toMarkdown` and joining pages with `---`. `toMarkdownAll` is avoided because
+it writes the page break straight after the last line, which turns that line
+into a setext heading (`paragraph_and_link.pdf`). Adjacent bold runs are
+joined, since pdf-oxide bolds word by word. What remains is pdf-oxide's and
+cannot be fixed from outside: two-column titles break into fragments,
+line-end hyphens stay (`com-pile`), and bold italic comes out as runs of
+asterisks. Over the pdf.js corpus through the real worker module: 852 of 982
+convert, 114 have no text and are refused as such, 16 fail with pdf-oxide's
+own error (3 of them encrypted, which the app unlocks first), and
+`issue19517.pdf` panics, reported as "The converter could not read this file."
 
 Organize pages accepts several PDFs at once and mixes their pages into one
 output order, which makes it Merge plus page editing in one pass. Each input

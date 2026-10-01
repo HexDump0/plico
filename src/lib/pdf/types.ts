@@ -112,7 +112,7 @@ export type PdfWorkerRequest =
 
 export type PdfOutput = {
 	bytes: Uint8Array;
-	format: 'pdf' | 'jpg' | 'png' | 'zip' | 'docx' | 'pptx' | 'xlsx';
+	format: 'pdf' | 'jpg' | 'png' | 'zip' | 'docx' | 'pptx' | 'xlsx' | 'md';
 };
 
 export type PdfWorkerResponse =

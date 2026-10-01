@@ -1,4 +1,4 @@
-import { officeTools, type OfficeOperation } from './office-conversion';
+import { officeTools, type MarkdownOptions, type OfficeOperation } from './office-conversion';
 import { unlockPdf } from './processor';
 import type { PdfOutput } from './types';
 
@@ -14,7 +14,8 @@ export async function processOfficeFile(
 	signal?: AbortSignal,
 	// The converter is a ~17 MB download on first use; this fires once it has
 	// loaded and the conversion itself begins.
-	onready?: () => void
+	onready?: () => void,
+	markdown?: MarkdownOptions
 ): Promise<PdfOutput> {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	// pdf-oxide accepts a password but converts encrypted files to empty
@@ -46,6 +47,6 @@ export async function processOfficeFile(
 					format: officeTools[operation].output
 				});
 		};
-		worker.postMessage({ id: 1, operation, input }, { transfer: [input] });
+		worker.postMessage({ id: 1, operation, input, markdown }, { transfer: [input] });
 	});
 }

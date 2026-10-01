@@ -50,6 +50,8 @@
 	import AdvancedOptions from './AdvancedOptions.svelte';
 	import ToggleSwitch from './ToggleSwitch.svelte';
 	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
+	import PageRangeField from './PageRangeField.svelte';
+	import CopyButton from './CopyButton.svelte';
 	import PasswordInput from './PasswordInput.svelte';
 	import StampPreview from './StampPreview.svelte';
 	import StampOverlay from './StampOverlay.svelte';
@@ -89,6 +91,7 @@
 			tool.id === 'images-to-pdf'
 	);
 	const officeTool = $derived(officeOperation(tool.id));
+	const isMarkdown = $derived(tool.id === 'pdf-to-markdown');
 	const inputType = $derived(
 		officeTool ? officeTools[officeTool].input : isImageToPdf ? 'image' : 'pdf'
 	);
@@ -140,6 +143,9 @@
 	const unlockWrong = $derived(rejectedPassword !== '' && rejectedPassword === unlockPassword);
 	let organizeViewer = $state<{ addBlankPage: () => Promise<void> }>();
 	let officeStage = $state<'loading' | 'converting'>('loading');
+	let markdownPages = $state('');
+	let markdownImages = $state(false);
+	let markdownText = $state('');
 	let extractImageFormat = $state<'jpg' | 'png'>('jpg');
 	let extractDpi = $state(150);
 	let splitRanges = $state<SplitRange[]>([{ id: 0, from: 1, to: 1 }]);
@@ -175,7 +181,7 @@
 	let watermarkPages = $state('');
 	let watermarkTooDense = $state(false);
 	let filename = $state('');
-	let downloadLink: HTMLAnchorElement;
+	let downloadLink = $state<HTMLAnchorElement>();
 	const job = new DownloadJob();
 	const processing = $derived(job.processing);
 	const error = $derived(job.error);
@@ -220,6 +226,7 @@
 	const pdfToImageSignature = $derived(
 		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
+	const markdownSignature = $derived(JSON.stringify([markdownPages, markdownImages]));
 	const imagePdfSignature = $derived(
 		JSON.stringify([
 			imagePdfPageSize,
@@ -475,6 +482,7 @@
 								: 'pdf'
 	);
 	const outputExtension = $derived(result ? resultFormat : expectedFormat);
+	const formatLabel = (format: string) => (format === 'md' ? 'Markdown' : format.toUpperCase());
 	const downloadName = $derived(
 		`${filename.trim().replace(new RegExp(`\\.${outputExtension}$`, 'i'), '') || autoName}.${outputExtension}`
 	);
@@ -500,6 +508,7 @@
 		void pdfToImageSignature;
 		void imagePdfSignature;
 		void stampSignature;
+		void markdownSignature;
 		untrack(() => job.clear());
 	});
 	$effect(() => {
@@ -510,6 +519,7 @@
 		splitInterval = 1;
 		splitCombine = false;
 		pdfToImagePageRange = '';
+		markdownPages = '';
 		numberPages = '';
 		watermarkPages = '';
 	});
@@ -774,16 +784,24 @@
 		if (!officeTool || !currentFile || processing) return;
 		const operation = officeTool;
 		const file = currentFile;
+		const markdown = isMarkdown
+			? { pages: parsePageRange(markdownPages, pageCount) ?? [], images: markdownImages }
+			: undefined;
 		officeStage = 'loading';
+		markdownText = '';
 		await job.run(
-			(signal) =>
-				processOfficeFile(
+			async (signal) => {
+				const output = await processOfficeFile(
 					operation,
 					file,
 					workspace.passwordFor(file),
 					signal,
-					() => (officeStage = 'converting')
-				),
+					() => (officeStage = 'converting'),
+					markdown
+				);
+				if (output.format === 'md') markdownText = new TextDecoder().decode(output.bytes);
+				return output;
+			},
 			`Could not convert this ${inputType.toUpperCase()} file.`,
 			() => downloadLink?.click()
 		);
@@ -1237,6 +1255,11 @@
 								tone="compress"
 							/>
 						</AdvancedOptions>
+					{:else if isMarkdown}
+						<AdvancedOptions {reducedMotion} spacing="space-y-4">
+							<PageRangeField bind:value={markdownPages} {pageCount} />
+							<ToggleSwitch bind:checked={markdownImages} label="Embed images" tone="split" />
+						</AdvancedOptions>
 					{:else if isPdfToImage}
 						<AdvancedOptions {reducedMotion} spacing="space-y-4">
 							<PdfToImageAdvanced
@@ -1263,114 +1286,128 @@
 						download={downloadName}
 						class="hidden"
 						tabindex="-1"
-						aria-hidden="true">Download {resultFormat.toUpperCase()}</a
+						aria-hidden="true">Download {formatLabel(resultFormat)}</a
 					>
-					<button
-						disabled={actionDisabled}
-						onclick={() =>
-							result
-								? downloadLink?.click()
-								: isProtect
-									? void protect()
-									: isUnlock
-										? void unlock()
-										: isPageNumbers
-											? void addPageNumbers()
-											: isWatermark
-												? void addWatermark()
-												: isSplit
-													? void split()
-													: isPageTool
-														? void organize()
-														: officeTool
-															? void convertOffice()
-															: isCompress
-																? void compress()
-																: isPdfToImage
-																	? void convertPdfToImage()
-																	: isImageToPdf
-																		? void convertImagesToPdf()
-																		: void merge()}
-						aria-label={result
-							? `Download ${resultFormat.toUpperCase()} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
-							: processing
-								? isProtect
-									? 'Protecting PDF'
-									: isUnlock
-										? 'Unlocking PDF'
-										: isPageNumbers
-											? 'Adding page numbers'
-											: isWatermark
-												? 'Adding watermark'
-												: isSplit
-													? 'Splitting PDF'
-													: isPageTool
-														? `${tool.label} in progress`
-														: officeTool
-															? officeStage === 'loading'
-																? 'Loading converter...'
-																: `Converting to ${officeTools[officeTool].output.toUpperCase()}...`
-															: isCompress
-																? 'Compressing PDF'
-																: isPdfToImage
-																	? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																	: isImageToPdf
-																		? 'Converting images to PDF...'
-																		: 'Merging PDF'
-								: tool.label}
-						class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
-							? 'opacity-40'
-							: ''}"
-					>
-						<span
-							class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
-								? 'scale-x-100'
-								: 'scale-x-0'}"
-							aria-hidden="true"
-						></span>
-						<span class="relative z-10 grid place-items-center">
-							<span
-								aria-hidden={!!result}
-								class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
-									? '-translate-y-2 opacity-0'
-									: 'translate-y-0 opacity-100'}"
-								>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
-										? officeStage === 'loading'
-											? 'Loading converter...'
-											: 'Converting...'
-										: isProtect
-											? 'Protecting...'
-											: isUnlock
-												? 'Unlocking...'
-												: isPageNumbers
-													? 'Numbering...'
-													: isWatermark
-														? 'Watermarking...'
-														: isSplit
-															? 'Splitting...'
-															: isPageTool
-																? 'Processing...'
+					<div class="flex">
+						<button
+							disabled={actionDisabled}
+							onclick={() =>
+								result
+									? downloadLink?.click()
+									: isProtect
+										? void protect()
+										: isUnlock
+											? void unlock()
+											: isPageNumbers
+												? void addPageNumbers()
+												: isWatermark
+													? void addWatermark()
+													: isSplit
+														? void split()
+														: isPageTool
+															? void organize()
+															: officeTool
+																? void convertOffice()
 																: isCompress
-																	? 'Compressing...'
+																	? void compress()
 																	: isPdfToImage
-																		? 'Converting...'
+																		? void convertPdfToImage()
 																		: isImageToPdf
-																			? 'Converting...'
-																			: 'Merging...'}{:else}
-									{tool.label}<IconArrowRight size={20} />{/if}</span
-							>
+																			? void convertImagesToPdf()
+																			: void merge()}
+							aria-label={result
+								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
+								: processing
+									? isProtect
+										? 'Protecting PDF'
+										: isUnlock
+											? 'Unlocking PDF'
+											: isPageNumbers
+												? 'Adding page numbers'
+												: isWatermark
+													? 'Adding watermark'
+													: isSplit
+														? 'Splitting PDF'
+														: isPageTool
+															? `${tool.label} in progress`
+															: officeTool
+																? officeStage === 'loading'
+																	? 'Loading converter...'
+																	: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																: isCompress
+																	? 'Compressing PDF'
+																	: isPdfToImage
+																		? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																		: isImageToPdf
+																			? 'Converting images to PDF...'
+																			: 'Merging PDF'
+									: tool.label}
+							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
+								? 'opacity-40'
+								: ''}"
+						>
 							<span
-								aria-hidden={!result}
-								class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
-									? 'translate-y-0 opacity-100 motion-safe:delay-100'
-									: 'translate-y-2 opacity-0'}"
-								><IconDownload size={20} />Download {resultFormat.toUpperCase()}{#if savedPercent > 0}<span
-										class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold"
-										>−{savedPercent}%</span
-									>{/if}</span
+								class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
+									? 'scale-x-100'
+									: 'scale-x-0'}"
+								aria-hidden="true"
+							></span>
+							<span class="relative z-10 grid place-items-center">
+								<span
+									aria-hidden={!!result}
+									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
+										? '-translate-y-2 opacity-0'
+										: 'translate-y-0 opacity-100'}"
+									>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
+											? officeStage === 'loading'
+												? 'Loading converter...'
+												: 'Converting...'
+											: isProtect
+												? 'Protecting...'
+												: isUnlock
+													? 'Unlocking...'
+													: isPageNumbers
+														? 'Numbering...'
+														: isWatermark
+															? 'Watermarking...'
+															: isSplit
+																? 'Splitting...'
+																: isPageTool
+																	? 'Processing...'
+																	: isCompress
+																		? 'Compressing...'
+																		: isPdfToImage
+																			? 'Converting...'
+																			: isImageToPdf
+																				? 'Converting...'
+																				: 'Merging...'}{:else}
+										{tool.label}<IconArrowRight size={20} />{/if}</span
+								>
+								<span
+									aria-hidden={!result}
+									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
+										? 'translate-y-0 opacity-100 motion-safe:delay-100'
+										: 'translate-y-2 opacity-0'}"
+									><IconDownload size={20} />Download {formatLabel(
+										resultFormat
+									)}{#if savedPercent > 0}<span
+											class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold"
+											>−{savedPercent}%</span
+										>{/if}</span
+								>
+							</span></button
+						>
+						{#if isMarkdown && result && markdownText}<div
+								transition:slide={{
+									axis: 'x',
+									duration: reducedMotion ? 0 : 260,
+									easing: cubicOut
+								}}
+								class="shrink-0 pl-3"
 							>
-						</span></button
-					>
+								<CopyButton text={markdownText} label="Copy Markdown" />
+							</div>{/if}
+					</div>
 					{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
 				</div>
 			</aside>

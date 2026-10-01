@@ -8,7 +8,8 @@ const mimeTypes: Record<PdfOutput['format'], string> = {
 	png: 'image/png',
 	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 	pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-	xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+	xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+	md: 'text/markdown;charset=utf-8'
 };
 
 export class DownloadJob {
