@@ -1080,6 +1080,8 @@
 							{lastNumber}
 							{pageCount}
 							pagesInvalid={stampPagesInvalid}
+							family={numberFamily}
+							{reducedMotion}
 							disabled={processing}
 						/>
 					{:else if isWatermark}
