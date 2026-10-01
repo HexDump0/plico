@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
-	import { slide } from 'svelte/transition';
+	import { fly, slide } from 'svelte/transition';
 	import { IconPhotoPlus, IconReplace, IconX } from '@tabler/icons-svelte-runes';
 	import type { FontFamily } from '$lib/pdf/standard-fonts';
 	import { positionNames, type StampImage, type StampPosition } from '$lib/pdf/stamp-layout';
@@ -48,6 +49,9 @@
 	let picker = $state<HTMLInputElement>();
 	let imageError = $state('');
 	let dropping = $state(false);
+	let kindSection = $state<HTMLDivElement>();
+	let textField = $state<HTMLTextAreaElement>();
+	let kindResize: Animation | undefined;
 	const kinds = [
 		{ id: 'text', label: 'Text' },
 		{ id: 'image', label: 'Image' }
@@ -74,6 +78,35 @@
 			URL.revokeObjectURL(url);
 			imageError = 'This image could not be read.';
 		}
+	}
+
+	// One line until the text needs more, then it grows with each line.
+	$effect(() => {
+		void text;
+		if (!textField) return;
+		textField.style.height = 'auto';
+		const border = textField.offsetHeight - textField.clientHeight;
+		textField.style.height = `${Math.min(textField.scrollHeight + border, 144)}px`;
+	});
+
+	// The outgoing controls leave at once and the section eases between the two
+	// heights, so everything below it moves in one smooth step.
+	async function setKind(next: 'text' | 'image') {
+		if (next === kind) return;
+		const from = kindSection?.offsetHeight;
+		kindResize?.cancel();
+		kind = next;
+		await tick();
+		if (reducedMotion || !kindSection || from === undefined) return;
+		const to = kindSection.offsetHeight;
+		if (from === to) return;
+		kindResize = kindSection.animate(
+			[
+				{ height: `${from}px`, overflow: 'hidden' },
+				{ height: `${to}px`, overflow: 'hidden' }
+			],
+			{ duration: 320, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+		);
 	}
 
 	function clearImage() {
@@ -103,133 +136,138 @@
 				option.id
 					? 'text-brand'
 					: 'text-muted hover:text-white'}"
-				onclick={() => (kind = option.id)}>{option.label}</button
+				onclick={() => void setKind(option.id)}>{option.label}</button
 			>{/each}
 	</div>
 
-	{#if kind === 'text'}
-		<div class="space-y-6" in:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}>
-			<div>
-				<label for="{id}-text" class="mb-3 block text-sm font-semibold">Text</label>
-				<textarea
-					id="{id}-text"
-					bind:value={text}
+	<div bind:this={kindSection}>
+		{#if kind === 'text'}
+			<div class="space-y-6" in:fly={{ y: 8, duration: reducedMotion ? 0 : 260, easing: cubicOut }}>
+				<div>
+					<label for="{id}-text" class="mb-3 block text-sm font-semibold">Text</label>
+					<textarea
+						id="{id}-text"
+						bind:this={textField}
+						bind:value={text}
+						{disabled}
+						rows="1"
+						placeholder="CONFIDENTIAL"
+						spellcheck="false"
+						aria-invalid={!!undrawable}
+						class="block w-full resize-none rounded-xl border bg-canvas px-3 py-3 text-sm text-white transition-colors duration-200 outline-none placeholder:text-white/30 disabled:opacity-50 {undrawable
+							? 'border-convert/60'
+							: 'border-white/10 focus:border-brand/50'}"></textarea>
+					{#if undrawable}<p
+							role="alert"
+							transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+							class="pt-2 text-xs text-convert"
+						>
+							“{undrawable}” isn't available in the built-in PDF fonts
+						</p>{/if}
+				</div>
+				<StampTextSettings
+					bind:family
+					bind:bold
+					bind:size
+					bind:color
+					minSize={12}
+					maxSize={160}
 					{disabled}
-					rows="2"
-					placeholder="CONFIDENTIAL"
-					spellcheck="false"
-					aria-invalid={!!undrawable}
-					class="block w-full resize-none rounded-xl border bg-canvas px-3 py-3 text-sm text-white transition-colors duration-200 outline-none placeholder:text-white/30 disabled:opacity-50 {undrawable
-						? 'border-convert/60'
-						: 'border-white/10 focus:border-brand/50'}"></textarea>
-				{#if undrawable}<p
-						role="alert"
-						transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
-						class="pt-2 text-xs text-convert"
-					>
-						“{undrawable}” isn't available in the built-in PDF fonts
-					</p>{/if}
-			</div>
-			<StampTextSettings
-				bind:family
-				bind:bold
-				bind:size
-				bind:color
-				minSize={12}
-				maxSize={160}
-				{disabled}
-			/>
-		</div>
-	{:else}
-		<div class="space-y-6" in:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}>
-			<div>
-				<h2 class="mb-3 text-sm font-semibold">Image</h2>
-				<input
-					bind:this={picker}
-					type="file"
-					accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-					class="hidden"
-					aria-label="Choose watermark image"
-					onchange={() => void choose(picker?.files)}
 				/>
-				{#if image}
-					<div
-						class="flex items-center gap-3 rounded-xl border border-white/10 bg-canvas p-2 pr-2.5"
-					>
-						<img
-							src={image.url}
-							alt=""
-							class="size-12 shrink-0 rounded-lg bg-white/10 object-contain p-1"
-						/>
-						<div class="min-w-0 flex-1">
-							<p class="truncate text-sm font-medium" title={image.file.name}>{image.file.name}</p>
-							<p class="text-xs text-muted">{formatSize(image.file.size)}</p>
+			</div>
+		{:else}
+			<div class="space-y-6" in:fly={{ y: 8, duration: reducedMotion ? 0 : 260, easing: cubicOut }}>
+				<div>
+					<h2 class="mb-3 text-sm font-semibold">Image</h2>
+					<input
+						bind:this={picker}
+						type="file"
+						accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+						class="hidden"
+						aria-label="Choose watermark image"
+						onchange={() => void choose(picker?.files)}
+					/>
+					{#if image}
+						<div
+							class="flex items-center gap-3 rounded-xl border border-white/10 bg-canvas p-2 pr-2.5"
+						>
+							<img
+								src={image.url}
+								alt=""
+								class="size-12 shrink-0 rounded-lg bg-white/10 object-contain p-1"
+							/>
+							<div class="min-w-0 flex-1">
+								<p class="truncate text-sm font-medium" title={image.file.name}>
+									{image.file.name}
+								</p>
+								<p class="text-xs text-muted">{formatSize(image.file.size)}</p>
+							</div>
+							<button
+								type="button"
+								{disabled}
+								onclick={() => picker?.click()}
+								aria-label="Replace image"
+								title="Replace image"
+								class="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-white/10 hover:text-white"
+								><IconReplace size={17} /></button
+							>
+							<button
+								type="button"
+								{disabled}
+								onclick={clearImage}
+								aria-label="Remove image"
+								title="Remove image"
+								class="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-convert hover:text-canvas"
+								><IconX size={17} stroke={2.25} /></button
+							>
 						</div>
+					{:else}
 						<button
 							type="button"
 							{disabled}
 							onclick={() => picker?.click()}
-							aria-label="Replace image"
-							title="Replace image"
-							class="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-white/10 hover:text-white"
-							><IconReplace size={17} /></button
+							ondragover={(event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								dropping = true;
+							}}
+							ondragleave={() => (dropping = false)}
+							ondrop={(event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								dropping = false;
+								void choose(event.dataTransfer?.files);
+							}}
+							class="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed bg-canvas px-4 py-6 transition-colors duration-200 {dropping
+								? 'border-brand/70 text-white'
+								: 'border-white/15 text-muted hover:border-brand/50 hover:text-white'}"
 						>
-						<button
-							type="button"
-							{disabled}
-							onclick={clearImage}
-							aria-label="Remove image"
-							title="Remove image"
-							class="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-convert hover:text-canvas"
-							><IconX size={17} stroke={2.25} /></button
-						>
-					</div>
-				{:else}
-					<button
-						type="button"
-						{disabled}
-						onclick={() => picker?.click()}
-						ondragover={(event) => {
-							event.preventDefault();
-							event.stopPropagation();
-							dropping = true;
-						}}
-						ondragleave={() => (dropping = false)}
-						ondrop={(event) => {
-							event.preventDefault();
-							event.stopPropagation();
-							dropping = false;
-							void choose(event.dataTransfer?.files);
-						}}
-						class="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed bg-canvas px-4 py-6 transition-colors duration-200 {dropping
-							? 'border-brand/70 text-white'
-							: 'border-white/15 text-muted hover:border-brand/50 hover:text-white'}"
-					>
-						<IconPhotoPlus size={26} stroke={1.5} />
-						<span class="text-sm font-semibold">Choose image</span>
-						<span class="text-xs text-muted">JPG or PNG</span>
-					</button>
-				{/if}
-				{#if imageError}<p role="alert" class="pt-2 text-xs text-convert">{imageError}</p>{/if}
-			</div>
-			<div>
-				<div class="mb-3 flex items-center justify-between">
-					<label for="{id}-width" class="text-sm font-semibold">Size</label>
-					<span class="text-xs text-muted tabular-nums">{imageWidth}% of page width</span>
+							<IconPhotoPlus size={26} stroke={1.5} />
+							<span class="text-sm font-semibold">Choose image</span>
+							<span class="text-xs text-muted">JPG or PNG</span>
+						</button>
+					{/if}
+					{#if imageError}<p role="alert" class="pt-2 text-xs text-convert">{imageError}</p>{/if}
 				</div>
-				<input
-					id="{id}-width"
-					type="range"
-					min="5"
-					max="100"
-					step="5"
-					bind:value={imageWidth}
-					{disabled}
-					class="w-full cursor-pointer accent-brand"
-				/>
+				<div>
+					<div class="mb-3 flex items-center justify-between">
+						<label for="{id}-width" class="text-sm font-semibold">Size</label>
+						<span class="text-xs text-muted tabular-nums">{imageWidth}% of page width</span>
+					</div>
+					<input
+						id="{id}-width"
+						type="range"
+						min="5"
+						max="100"
+						step="5"
+						bind:value={imageWidth}
+						{disabled}
+						class="w-full cursor-pointer accent-brand"
+					/>
+				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
+	</div>
 
 	<div class="space-y-3">
 		<div class="flex items-center justify-between">

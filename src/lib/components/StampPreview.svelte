@@ -237,16 +237,16 @@
 	</div>
 
 	{#if pdf && pageCount > 1}
-		<div class="flex items-center justify-center gap-2" role="group" aria-label="Preview page">
+		<div class="flex items-center justify-center gap-3" role="group" aria-label="Preview page">
 			<button
 				type="button"
 				onclick={() => go(-1)}
 				disabled={current <= 1}
 				aria-label="Previous page"
-				class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors enabled:hover:bg-white/10 enabled:hover:text-white disabled:opacity-30"
+				class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors enabled:hover:border-brand/40 enabled:hover:text-brand disabled:opacity-40"
 				><IconChevronLeft size={18} /></button
 			>
-			<p class="min-w-24 text-center text-xs text-muted tabular-nums" aria-live="polite">
+			<p class="min-w-24 text-center text-sm text-muted tabular-nums" aria-live="polite">
 				<span class="font-semibold text-white">{current}</span> / {pageCount}{#if !isStamped}<span
 						class="ml-2 rounded-md bg-white/10 px-1.5 py-0.5 text-[11px]">Skipped</span
 					>{/if}
@@ -256,7 +256,7 @@
 				onclick={() => go(1)}
 				disabled={current >= pageCount}
 				aria-label="Next page"
-				class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors enabled:hover:bg-white/10 enabled:hover:text-white disabled:opacity-30"
+				class="flex size-10 shrink-0 items-center justify-center rounded-xl border-2 border-white/10 bg-panel text-muted transition-colors enabled:hover:border-brand/40 enabled:hover:text-brand disabled:opacity-40"
 				><IconChevronRight size={18} /></button
 			>
 		</div>

@@ -40,12 +40,8 @@
 <div class="space-y-5">
 	<div>
 		<h2 class="mb-3 text-sm font-semibold">Font</h2>
-		<div class="flex gap-2">
-			<div
-				class="grid flex-1 grid-cols-3 gap-1 rounded-xl bg-canvas p-1"
-				role="group"
-				aria-label="Font"
-			>
+		<div class="flex rounded-xl bg-canvas p-1">
+			<div class="grid flex-1 grid-cols-3 gap-1" role="group" aria-label="Font">
 				{#each families as option (option.id)}<button
 						type="button"
 						aria-pressed={family === option.id}
@@ -58,6 +54,7 @@
 						onclick={() => (family = option.id)}>{option.label}</button
 					>{/each}
 			</div>
+			<span aria-hidden="true" class="mx-1 my-2 w-px bg-white/10"></span>
 			<button
 				type="button"
 				aria-pressed={bold}
@@ -65,9 +62,9 @@
 				title="Bold"
 				{disabled}
 				onclick={() => (bold = !bold)}
-				class="flex w-12 shrink-0 items-center justify-center rounded-xl motion-safe:transition-colors {bold
-					? 'bg-brand/15 text-brand'
-					: 'bg-canvas text-muted hover:text-white'}"><IconBold size={18} stroke={2.25} /></button
+				class="flex w-10 shrink-0 items-center justify-center rounded-lg motion-safe:transition-colors {bold
+					? 'bg-panel-hover text-brand'
+					: 'text-muted hover:text-white'}"><IconBold size={16} stroke={2.25} /></button
 			>
 		</div>
 	</div>
