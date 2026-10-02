@@ -112,6 +112,14 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'sign';
+			// The PDF, then the signature image.
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: SignOptions;
+	  }
+	| {
+			id: number;
 			operation: 'crop';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -189,3 +197,8 @@ export type CropArea = [number, number, number, number];
 export type CropOptions =
 	| { mode: 'manual'; pages: number[]; area: CropArea }
 	| { mode: 'auto'; pages: number[]; padding: number };
+
+/// The signature goes on each page in `pages`, from 1, at `place`: its left
+/// edge, top edge and width as fractions of the page as displayed, from the
+/// top left. Its height follows from the image.
+export type SignOptions = { pages: number[]; place: [number, number, number] };

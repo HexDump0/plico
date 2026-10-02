@@ -19,9 +19,9 @@ use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
 use crate::{
     FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position, ProtectOptions, Protection,
-    StandardFont, TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes,
-    add_watermark_bytes, convert_to_pdfa_bytes, crop_pdf_bytes, protect_pdf_bytes, protection_of,
-    standard_fonts_for_pdfa,
+    SignaturePlacement, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, convert_to_pdfa_bytes,
+    crop_pdf_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
 };
 
 fn image_pdf_options() -> ImagePdfOptions {
@@ -3008,4 +3008,150 @@ fn crop_rejects_bad_areas_and_pages() {
         error(&[crop(1, [0.0, 0.0, 0.5, 1.0]), crop(1, [0.5, 0.0, 1.0, 1.0])])
             .contains("two crop areas")
     );
+}
+
+/// Where each signature image lands on the page, in the page's own
+/// coordinates, from the forms the page draws.
+fn signature_boxes(bytes: &[u8], page: u32) -> Vec<[f32; 4]> {
+    let document = Document::load_mem(bytes).unwrap();
+    let page_id = document.get_pages()[&page];
+    let mut boxes = Vec::new();
+    for form in stamp_forms(&document, page_id) {
+        let stream = document.get_object(form).unwrap().as_stream().unwrap();
+        let content = Content::decode(
+            &stream
+                .decompressed_content()
+                .unwrap_or(stream.content.clone()),
+        )
+        .unwrap();
+        let mut stack = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "q" => stack.push(*stack.last().unwrap()),
+                "Q" => {
+                    stack.pop();
+                }
+                "cm" => {
+                    let [a, b, c, d, e, f]: [f32; 6] = operation
+                        .operands
+                        .iter()
+                        .map(|value| value.as_float().unwrap())
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .unwrap();
+                    let [ta, tb, tc, td, te, tf] = *stack.last().unwrap();
+                    *stack.last_mut().unwrap() = [
+                        a * ta + b * tc,
+                        a * tb + b * td,
+                        c * ta + d * tc,
+                        c * tb + d * td,
+                        e * ta + f * tc + te,
+                        e * tb + f * td + tf,
+                    ];
+                }
+                "Do" => {
+                    let [a, b, c, d, e, f] = *stack.last().unwrap();
+                    let corners = [(0.0, 0.0), (1.0, 1.0)]
+                        .map(|(x, y): (f32, f32)| (a * x + c * y + e, b * x + d * y + f));
+                    boxes.push([
+                        corners[0].0.min(corners[1].0),
+                        corners[0].1.min(corners[1].1),
+                        corners[0].0.max(corners[1].0),
+                        corners[0].1.max(corners[1].1),
+                    ]);
+                }
+                _ => {}
+            }
+        }
+    }
+    boxes
+}
+
+fn sign_at(page: u32, place: [f32; 3]) -> SignaturePlacement {
+    SignaturePlacement { page, place }
+}
+
+#[test]
+fn signs_at_the_top_left_and_width_given_keeping_the_image_shape() {
+    let input = pdf_with_pages(
+        &[(
+            "0 0 m",
+            dictionary! { "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()] },
+        )],
+        dictionary! {},
+    );
+    // The image is twice as wide as it is tall.
+    let output =
+        add_signature_bytes(&input, "", &rgba_png(), &[sign_at(1, [0.5, 0.25, 0.25])]).unwrap();
+    assert_eq!(signature_boxes(&output, 1).len(), 1);
+    assert_box(
+        signature_boxes(&output, 1).pop(),
+        [100.0, 275.0, 150.0, 300.0],
+    );
+    assert!(page_contents(&output)[0].contains("0 0 m"));
+    let document = Document::load_mem(&output).unwrap();
+    let has_mask = document.objects.values().any(|object| {
+        object
+            .as_stream()
+            .is_ok_and(|stream| stream.dict.get(b"SMask").is_ok())
+    });
+    assert!(has_mask, "the signature lost its transparency");
+}
+
+#[test]
+fn signs_the_corner_the_reader_sees_on_a_turned_page() {
+    let input = pdf_with_pages(
+        &[(
+            "",
+            dictionary! {
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()],
+                "Rotate" => 90,
+            },
+        )],
+        dictionary! {},
+    );
+    // Seen turned, the page is 400 by 200, so a quarter of its width is 100
+    // points and the top left is the page's own bottom left.
+    let output =
+        add_signature_bytes(&input, "", &rgba_png(), &[sign_at(1, [0.0, 0.0, 0.25])]).unwrap();
+    assert_box(signature_boxes(&output, 1).pop(), [0.0, 0.0, 50.0, 100.0]);
+}
+
+#[test]
+fn signs_a_page_more_than_once_and_keeps_signatures_on_the_page() {
+    let input = numbered_pdf(2);
+    let output = add_signature_bytes(
+        &input,
+        "",
+        &rgba_png(),
+        &[
+            sign_at(2, [0.1, 0.1, 0.25]),
+            // Would run off the bottom right corner.
+            sign_at(2, [0.9, 0.95, 0.5]),
+        ],
+    )
+    .unwrap();
+    assert!(signature_boxes(&output, 1).is_empty());
+    let boxes = signature_boxes(&output, 2);
+    assert_eq!(boxes.len(), 2);
+    assert_box(Some(boxes[0]), [40.0, 490.0, 140.0, 540.0]);
+    assert_box(Some(boxes[1]), [200.0, 0.0, 400.0, 100.0]);
+    for (content, original) in page_contents(&output).iter().zip(["1", "2"]) {
+        assert!(content.contains(original), "{content}");
+    }
+}
+
+#[test]
+fn signing_rejects_bad_placements_and_images() {
+    let input = numbered_pdf(2);
+    let error = |image: &[u8], placements: &[SignaturePlacement]| {
+        add_signature_bytes(&input, "", image, placements).unwrap_err()
+    };
+    let png = rgba_png();
+    assert!(error(&png, &[]).contains("at least one page"));
+    assert!(error(&png, &[sign_at(1, [0.5, 0.5, 0.0])]).contains("on the page"));
+    assert!(error(&png, &[sign_at(1, [1.0, 0.5, 0.2])]).contains("on the page"));
+    assert!(error(&png, &[sign_at(1, [f32::NAN, 0.5, 0.2])]).contains("on the page"));
+    assert!(error(&png, &[sign_at(3, [0.5, 0.5, 0.2])]).contains("between 1 and 2"));
+    assert!(error(b"not an image", &[sign_at(1, [0.5, 0.5, 0.2])]).contains("JPG and PNG"));
 }

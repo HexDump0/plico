@@ -112,7 +112,7 @@
 			{/each}
 			<label
 				title="Custom color"
-				class="relative flex size-8 cursor-pointer items-center justify-center rounded-full ring-offset-2 ring-offset-panel focus-within:outline-2 focus-within:outline-offset-6 focus-within:outline-brand motion-safe:transition-shadow {custom
+				class="relative flex size-8 cursor-pointer items-center justify-center rounded-full ring-offset-2 ring-offset-panel has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-6 has-[:focus-visible]:outline-brand motion-safe:transition-shadow {custom
 					? 'ring-2 ring-brand'
 					: 'ring-1 ring-white/15 hover:ring-white/40'}"
 				style:background={custom

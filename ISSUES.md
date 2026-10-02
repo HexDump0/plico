@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 90 unit tests against
+Evidence comes from two places. `cargo test` runs 94 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -348,7 +348,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-four tools exist, the catalogue advertises about forty
+### Twenty-five tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the

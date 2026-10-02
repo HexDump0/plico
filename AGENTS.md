@@ -16,7 +16,7 @@ rust/plico-engine/src/compression.rs                        compression pipeline
 rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
-rust/plico-engine/src/stamps.rs                             page numbers and watermarks drawn onto existing pages
+rust/plico-engine/src/stamps.rs                             page numbers, watermarks and signatures drawn onto existing pages
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/assets/icc/                               ICC profiles for PDF/A (Ghostscript's, AGPL)
@@ -35,6 +35,7 @@ scripts/raster-compare.mjs                                  rendered-output comp
 scripts/raster-stamp.mjs                                    rendered check of page numbers and watermarks
 scripts/raster-crop.mjs                                     rendered check of cropping
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
+src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 testing/                                                    local corpus, gitignored
 ```
 

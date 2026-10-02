@@ -11,6 +11,7 @@ import type {
 	PdfWorkerResponse,
 	Protection,
 	ProtectOptions,
+	SignOptions,
 	SplitOptions,
 	WatermarkOptions
 } from './types';
@@ -152,6 +153,22 @@ export async function processWatermark(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'watermark', files: buffers, passwords: [password], options },
+		signal
+	);
+}
+
+export async function processSign(
+	file: File,
+	password: string,
+	signature: File,
+	options: SignOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all([file.arrayBuffer(), signature.arrayBuffer()]);
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'sign', files: buffers, passwords: [password], options },
 		signal
 	);
 }

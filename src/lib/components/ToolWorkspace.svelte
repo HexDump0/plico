@@ -27,7 +27,8 @@
 		processPdfs,
 		processSplitPdf,
 		processWatermark,
-		processCrop
+		processCrop,
+		processSign
 	} from '$lib/pdf/processor';
 	import type {
 		CropArea,
@@ -70,6 +71,8 @@
 	import StampAdvanced from './StampAdvanced.svelte';
 	import CropOverlay from './CropOverlay.svelte';
 	import CropSettings from './CropSettings.svelte';
+	import SignOverlay from './SignOverlay.svelte';
+	import SignSettings from './SignSettings.svelte';
 	import { FULL_PAGE, contentBounds, cropSize, isFullPage, padArea } from '$lib/pdf/crop-area';
 	import { undrawable, type FontFamily } from '$lib/pdf/standard-fonts';
 	import type { PreviewPage, StampImage, StampMark, StampPosition } from '$lib/pdf/stamp-layout';
@@ -92,8 +95,9 @@
 	const isWatermark = $derived(tool.id === 'watermark');
 	const isStamp = $derived(isPageNumbers || isWatermark);
 	const isCrop = $derived(tool.id === 'crop');
+	const isSign = $derived(tool.id === 'sign');
 	// Tools that show one page at a time and draw their result over it.
-	const isPagePreview = $derived(isStamp || isCrop);
+	const isPagePreview = $derived(isStamp || isCrop || isSign);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
 			tool.id === 'pdf-to-png' ||
@@ -206,6 +210,13 @@
 	// worker finds the bounds again for every page it crops.
 	let cropBounds = $state.raw<Record<number, CropArea | null>>({});
 	let cropPage = $state.raw<PreviewPage | null>(null);
+	let signImage = $state<StampImage | null>(null);
+	let signScope = $state<'one' | 'all' | 'custom'>('one');
+	let signRange = $state('');
+	let signPage = $state(1);
+	// Bottom right, where most documents leave room for a signature.
+	const SIGN_PLACE: [number, number, number] = [0.6, 0.8, 0.28];
+	let signPlace = $state.raw<[number, number, number]>(SIGN_PLACE);
 	let filename = $state('');
 	let downloadLink = $state<HTMLAnchorElement>();
 	const job = new DownloadJob();
@@ -406,6 +417,23 @@
 			(cropMode === 'auto' || !isFullPage(cropArea))
 	);
 	const cropSignature = $derived(JSON.stringify([cropMode, cropArea, cropPadding, cropPages]));
+	const signPages = $derived(
+		signScope === 'one'
+			? [signPage]
+			: signScope === 'all'
+				? Array.from({ length: pageCount }, (_, index) => index + 1)
+				: (parsePageRange(signRange, pageCount) ?? [])
+	);
+	const signRangeInvalid = $derived(
+		signScope === 'custom' && signRange.trim() !== '' && pageCount > 0 && signPages.length === 0
+	);
+	const signValid = $derived(!!currentFile && pageCount > 0 && !!signImage && signPages.length > 0);
+	const signSignature = $derived(
+		JSON.stringify([signImage?.url, signScope, signRange, signPage, signPlace])
+	);
+	function signed(page: number) {
+		return signPages.includes(page);
+	}
 	function stamped(page: number) {
 		return stampPageList.length === 0 || stampPageList.includes(page);
 	}
@@ -426,28 +454,30 @@
 					? !unlockValid || processing
 					: isPdfA
 						? !currentFile || processing
-						: isCrop
-							? !cropValid || processing
-							: isStamp
-								? !stampValid || processing
-								: officeTool
-									? !currentFile || processing
-									: isMerge
-										? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-										: isSplit
-											? !splitValid || processing
-											: isPageTool
-												? !pageToolValid || processing
-												: isCompress
-													? workspace.files.length === 0 ||
-														processing ||
-														!!dragged ||
-														!!keyboardPicked
-													: isPdfToImage
-														? !pdfToImageValid || processing
-														: isImageToPdf
-															? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-															: true
+						: isSign
+							? !signValid || processing
+							: isCrop
+								? !cropValid || processing
+								: isStamp
+									? !stampValid || processing
+									: officeTool
+										? !currentFile || processing
+										: isMerge
+											? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+											: isSplit
+												? !splitValid || processing
+												: isPageTool
+													? !pageToolValid || processing
+													: isCompress
+														? workspace.files.length === 0 ||
+															processing ||
+															!!dragged ||
+															!!keyboardPicked
+														: isPdfToImage
+															? !pdfToImageValid || processing
+															: isImageToPdf
+																? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+																: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -458,25 +488,27 @@
 					? !unlockValid
 					: isPdfA
 						? !currentFile
-						: isCrop
-							? !cropValid
-							: isStamp
-								? !stampValid
-								: officeTool
-									? !currentFile
-									: isMerge
-										? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-										: isSplit
-											? !splitValid
-											: isPageTool
-												? !pageToolValid
-												: isCompress
-													? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-													: isPdfToImage
-														? !pdfToImageValid
-														: isImageToPdf
-															? !imagePdfValid || !!dragged || !!keyboardPicked
-															: true
+						: isSign
+							? !signValid
+							: isCrop
+								? !cropValid
+								: isStamp
+									? !stampValid
+									: officeTool
+										? !currentFile
+										: isMerge
+											? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+											: isSplit
+												? !splitValid
+												: isPageTool
+													? !pageToolValid
+													: isCompress
+														? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+														: isPdfToImage
+															? !pdfToImageValid
+															: isImageToPdf
+																? !imagePdfValid || !!dragged || !!keyboardPicked
+																: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -488,29 +520,31 @@
 					? `${baseName}-unlocked`
 					: isPdfA
 						? `${baseName}-pdfa`
-						: isCrop
-							? `${baseName}-cropped`
-							: isPageNumbers
-								? `${baseName}-numbered`
-								: isWatermark
-									? `${baseName}-watermarked`
-									: isMerge
-										? 'plico-merged'
-										: isImageToPdf
-											? 'plico-images'
-											: isSplit
-												? `${baseName}-split`
-												: isOrganize
-													? `${baseName}-organized`
-													: isExtract
-														? `${baseName}-extracted`
-														: isRemove
-															? `${baseName}-pages-removed`
-															: isRotate
-																? `${baseName}-rotated`
-																: isCompress
-																	? `${baseName}-compressed`
-																	: `${baseName}-images`
+						: isSign
+							? `${baseName}-signed`
+							: isCrop
+								? `${baseName}-cropped`
+								: isPageNumbers
+									? `${baseName}-numbered`
+									: isWatermark
+										? `${baseName}-watermarked`
+										: isMerge
+											? 'plico-merged'
+											: isImageToPdf
+												? 'plico-images'
+												: isSplit
+													? `${baseName}-split`
+													: isOrganize
+														? `${baseName}-organized`
+														: isExtract
+															? `${baseName}-extracted`
+															: isRemove
+																? `${baseName}-pages-removed`
+																: isRotate
+																	? `${baseName}-rotated`
+																	: isCompress
+																		? `${baseName}-compressed`
+																		: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -567,6 +601,7 @@
 		void imagePdfSignature;
 		void stampSignature;
 		void cropSignature;
+		void signSignature;
 		void markdownSignature;
 		void pdfaPart;
 		untrack(() => job.clear());
@@ -586,6 +621,9 @@
 		cropArea = FULL_PAGE;
 		cropBounds = {};
 		cropPage = null;
+		signPage = 1;
+		signRange = '';
+		signPlace = SIGN_PLACE;
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
@@ -727,6 +765,17 @@
 		await job.run(
 			(signal) => processWatermark(file, workspace.passwordFor(file), options, image, signal),
 			'Could not add a watermark to this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function sign() {
+		if (processing || !signValid || !currentFile || !signImage) return;
+		const file = currentFile;
+		const image = signImage.file;
+		const options = { pages: signPages, place: signPlace };
+		await job.run(
+			(signal) => processSign(file, workspace.passwordFor(file), image, options, signal),
+			'Could not sign this PDF.',
 			() => downloadLink?.click()
 		);
 	}
@@ -930,7 +979,21 @@
 </script>
 
 {#snippet stampOverlay(page: PreviewPage)}
-	{#if isCrop}
+	{#if isSign}
+		<SignOverlay
+			{page}
+			place={signPlace}
+			imageUrl={signImage?.url ?? ''}
+			aspect={signImage?.aspect ?? 1}
+			placed={signed(page.number)}
+			editable={!processing && (signed(page.number) || signScope === 'one')}
+			{reducedMotion}
+			onchange={(place) => {
+				signPlace = place;
+				if (signScope === 'one') signPage = page.number;
+			}}
+		/>
+	{:else if isCrop}
 		<CropOverlay
 			area={cropAreaFor(page)}
 			width={page.width}
@@ -1094,7 +1157,8 @@
 									{#key currentFile}<StampPreview
 											file={currentFile}
 											behind={isWatermark && watermarkBehind}
-											{stamped}
+											stamped={isSign ? signed : stamped}
+											overlayEverywhere={isSign}
 											{reducedMotion}
 											overlay={stampOverlay}
 											onload={(count) => (pageCount = count)}
@@ -1214,6 +1278,17 @@
 										Incorrect password
 									</p>{/if}
 							</div>{/if}
+					{:else if isSign}
+						<SignSettings
+							bind:image={signImage}
+							bind:pages={signScope}
+							bind:range={signRange}
+							page={signPage}
+							{pageCount}
+							rangeInvalid={signRangeInvalid}
+							{reducedMotion}
+							disabled={processing}
+						/>
 					{:else if isCrop}
 						<CropSettings
 							bind:mode={cropMode}
@@ -1444,25 +1519,27 @@
 											? void unlock()
 											: isPdfA
 												? void convertPdfA()
-												: isCrop
-													? void crop()
-													: isPageNumbers
-														? void addPageNumbers()
-														: isWatermark
-															? void addWatermark()
-															: isSplit
-																? void split()
-																: isPageTool
-																	? void organize()
-																	: officeTool
-																		? void convertOffice()
-																		: isCompress
-																			? void compress()
-																			: isPdfToImage
-																				? void convertPdfToImage()
-																				: isImageToPdf
-																					? void convertImagesToPdf()
-																					: void merge()}
+												: isSign
+													? void sign()
+													: isCrop
+														? void crop()
+														: isPageNumbers
+															? void addPageNumbers()
+															: isWatermark
+																? void addWatermark()
+																: isSplit
+																	? void split()
+																	: isPageTool
+																		? void organize()
+																		: officeTool
+																			? void convertOffice()
+																			: isCompress
+																				? void compress()
+																				: isPdfToImage
+																					? void convertPdfToImage()
+																					: isImageToPdf
+																						? void convertImagesToPdf()
+																						: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
@@ -1472,27 +1549,29 @@
 											? 'Unlocking PDF'
 											: isPdfA
 												? 'Converting to PDF/A'
-												: isCrop
-													? 'Cropping PDF'
-													: isPageNumbers
-														? 'Adding page numbers'
-														: isWatermark
-															? 'Adding watermark'
-															: isSplit
-																? 'Splitting PDF'
-																: isPageTool
-																	? `${tool.label} in progress`
-																	: officeTool
-																		? officeStage === 'loading'
-																			? 'Loading converter...'
-																			: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																		: isCompress
-																			? 'Compressing PDF'
-																			: isPdfToImage
-																				? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																				: isImageToPdf
-																					? 'Converting images to PDF...'
-																					: 'Merging PDF'
+												: isSign
+													? 'Signing PDF'
+													: isCrop
+														? 'Cropping PDF'
+														: isPageNumbers
+															? 'Adding page numbers'
+															: isWatermark
+																? 'Adding watermark'
+																: isSplit
+																	? 'Splitting PDF'
+																	: isPageTool
+																		? `${tool.label} in progress`
+																		: officeTool
+																			? officeStage === 'loading'
+																				? 'Loading converter...'
+																				: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																			: isCompress
+																				? 'Compressing PDF'
+																				: isPdfToImage
+																					? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																					: isImageToPdf
+																						? 'Converting images to PDF...'
+																						: 'Merging PDF'
 									: tool.label}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -1520,23 +1599,25 @@
 													? 'Unlocking...'
 													: isPdfA
 														? 'Converting...'
-														: isCrop
-															? 'Cropping...'
-															: isPageNumbers
-																? 'Numbering...'
-																: isWatermark
-																	? 'Watermarking...'
-																	: isSplit
-																		? 'Splitting...'
-																		: isPageTool
-																			? 'Processing...'
-																			: isCompress
-																				? 'Compressing...'
-																				: isPdfToImage
-																					? 'Converting...'
-																					: isImageToPdf
+														: isSign
+															? 'Signing...'
+															: isCrop
+																? 'Cropping...'
+																: isPageNumbers
+																	? 'Numbering...'
+																	: isWatermark
+																		? 'Watermarking...'
+																		: isSplit
+																			? 'Splitting...'
+																			: isPageTool
+																				? 'Processing...'
+																				: isCompress
+																					? 'Compressing...'
+																					: isPdfToImage
 																						? 'Converting...'
-																						: 'Merging...'}{:else}
+																						: isImageToPdf
+																							? 'Converting...'
+																							: 'Merging...'}{:else}
 										{tool.label}<IconArrowRight size={20} />{/if}</span
 								>
 								<span

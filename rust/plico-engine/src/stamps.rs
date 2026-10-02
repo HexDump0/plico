@@ -7,7 +7,7 @@
 
 mod standard_fonts;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
@@ -237,6 +237,85 @@ pub fn add_watermark_bytes(
         stamper.place(&mut document, page_id, form, options.behind)?;
     }
     finish(document, options.opacity)
+}
+
+pub struct SignaturePlacement {
+    /// From 1. A page may carry the signature more than once.
+    pub page: u32,
+    /// Left edge, top edge and width as fractions of the visible page's width
+    /// and height, measured from its top left as the reader sees it. The
+    /// height follows from the image, so it is never stretched.
+    pub place: [f32; 3],
+}
+
+/// Draws a JPG or PNG signature over each placement. It is a picture of a
+/// signature, not a cryptographic one.
+pub fn add_signature_bytes(
+    input: &[u8],
+    password: &str,
+    image: &[u8],
+    placements: &[SignaturePlacement],
+) -> Result<Vec<u8>, String> {
+    if placements.is_empty() {
+        return Err("Choose at least one page to sign.".into());
+    }
+    let mut by_page = BTreeMap::<u32, Vec<[f32; 3]>>::new();
+    for placement in placements {
+        let [left, top, width] = placement.place;
+        if !(left.is_finite() && top.is_finite() && width > 0.0 && width <= 1.0)
+            || !(0.0..1.0).contains(&left)
+            || !(0.0..1.0).contains(&top)
+        {
+            return Err("Place the signature on the page.".into());
+        }
+        by_page
+            .entry(placement.page)
+            .or_default()
+            .push(placement.place);
+    }
+    let image = prepare_image(image)
+        .map_err(|error| format!("The signature image could not be used: {error}"))?;
+    let (upright_width, upright_height) = if matches!(image.orientation, 5..=8) {
+        (image.height, image.width)
+    } else {
+        (image.width, image.height)
+    };
+    let aspect = upright_height as f32 / upright_width as f32;
+    let orientation = image.orientation;
+
+    let mut document = load_document(input, 1, password)?;
+    let numbers = by_page.keys().copied().collect::<Vec<_>>();
+    let pages = selected_pages(&document, &numbers)?;
+    let mut stamper = Stamper::new(&mut document, 1.0);
+    let mut image = image;
+    if let Some(mask) = image.mask.take() {
+        let mask_id = document.add_object(mask);
+        image.stream.dict.set("SMask", mask_id);
+    }
+    let image = document.add_object(image.stream);
+
+    for (page, page_id) in pages {
+        let frame = page_frame(&document, page_id)?;
+        let mut content = format!("q\n{} cm\n", matrix(frame.matrix));
+        for &[left, top, width] in &by_page[&page] {
+            let width = width * frame.width;
+            let height = width * aspect;
+            // Kept on the page where it fits: a place chosen on one page can
+            // run off a shorter or narrower one.
+            let x = (left * frame.width).min(frame.width - width).max(0.0);
+            let y = (frame.height - top * frame.height - height)
+                .min(frame.height - height)
+                .max(0.0);
+            content.push_str(&format!(
+                "q\n{} cm\n/I0 Do\nQ\n",
+                matrix(image_matrix(orientation, x, y, width, height))
+            ));
+        }
+        content.push_str("Q\n");
+        let form = stamper.form(&mut document, &frame, content, None, Some(image));
+        stamper.place(&mut document, page_id, form, false)?;
+    }
+    finish(document, 1.0)
 }
 
 fn check_style(style: &TextStyle) -> Result<(), String> {

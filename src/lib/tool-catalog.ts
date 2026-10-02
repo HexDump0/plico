@@ -51,6 +51,7 @@ const supportedToolIds = new Set([
 	'page-numbers',
 	'watermark',
 	'crop',
+	'sign',
 	'organize',
 	'extract',
 	'remove',

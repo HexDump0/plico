@@ -15,7 +15,8 @@ import init, {
 	protect_pdf,
 	add_page_numbers,
 	add_watermark,
-	crop_pdf
+	crop_pdf,
+	sign_pdf
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
 import type {
@@ -366,6 +367,20 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.opacity,
 					options.behind,
 					options.tile
+				)
+			});
+			return;
+		}
+		if (request.operation === 'sign') {
+			const { options } = request;
+			postOutput(id, {
+				format: 'pdf',
+				bytes: sign_pdf(
+					new Uint8Array(request.files[0]),
+					request.passwords[0] ?? '',
+					new Uint8Array(request.files[1]),
+					Uint32Array.from(options.pages),
+					Float32Array.from(options.pages.flatMap(() => options.place))
 				)
 			});
 			return;

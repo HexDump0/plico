@@ -11,6 +11,7 @@
 		file,
 		behind = false,
 		stamped,
+		overlayEverywhere = false,
 		reducedMotion,
 		overlay,
 		onload,
@@ -22,6 +23,9 @@
 		/// content shows through a page without a background.
 		behind?: boolean;
 		stamped: (page: number) => boolean;
+		/// Renders the overlay on unstamped pages too, for one that takes
+		/// input there, such as a click that moves the signature to the page.
+		overlayEverywhere?: boolean;
 		reducedMotion: boolean;
 		overlay: Snippet<[PreviewPage]>;
 		onload: (count: number) => void;
@@ -250,7 +254,7 @@
 					{#key shown.page.number}
 						{@const layer = shown}
 						{@const size = fit(layer.page)}
-						{@const drawn = stamped(layer.page.number)}
+						{@const drawn = overlayEverywhere || stamped(layer.page.number)}
 						<div
 							class="absolute top-1/2 left-1/2 isolate -translate-1/2 overflow-hidden rounded-sm bg-white shadow-2xl shadow-black/40"
 							style:width="{size.width}px"
