@@ -18,6 +18,7 @@ rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
 rust/plico-engine/src/stamps.rs                             page numbers, watermarks and signatures drawn onto existing pages
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
+rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/assets/icc/                               ICC profiles for PDF/A (Ghostscript's, AGPL)
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
@@ -34,8 +35,10 @@ src/lib/tool-catalog.ts                                     the ~40 advertised t
 scripts/raster-compare.mjs                                  rendered-output comparison over the corpus
 scripts/raster-stamp.mjs                                    rendered check of page numbers and watermarks
 scripts/raster-crop.mjs                                     rendered check of cropping
+scripts/raster-flatten.mjs                                  rendered check of flattening
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
+src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
 testing/                                                    local corpus, gitignored
 ```
 
@@ -56,6 +59,7 @@ npm run test:corpus   # needs a corpus, see below
 npm run test:raster   # needs a corpus, renders and compares output
 npm run test:raster:stamp  # needs a corpus, renders stamped output
 npm run test:raster:crop   # needs a corpus, renders cropped output
+npm run test:raster:flatten  # needs a corpus, renders flattened output
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
@@ -86,6 +90,9 @@ conform; 290 are refused (245 unembedded fonts, 30 annotations without an
 appearance, 12 attachments, 3 XFA forms). The 99 that do not conform are listed
 in `ISSUES.md`. Every one of those claims a conformance it lacks, so this number
 should only go down. If your change moves it, say so.
+
+The flatten raster harness is red on 10 files: the same 7 load/save losses and
+3 that only pdf.js draws differently; poppler renders those identically.
 
 The crop raster harness is red on 11 files, 7 of them the same lopdf load/save
 losses and 4 where pdf.js antialiases a shading edge differently once the page

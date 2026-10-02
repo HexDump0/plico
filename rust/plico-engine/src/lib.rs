@@ -3,6 +3,7 @@ mod bindings;
 mod compression;
 mod crop;
 mod documents;
+mod flatten;
 mod images;
 mod security;
 mod stamps;
@@ -22,6 +23,7 @@ pub use documents::{
     merge_pdf_bytes_with_passwords, organize_pdf_bytes, organize_pdf_items, organize_pdfs_bytes,
     organize_pdfs_bytes_with_passwords, split_pdf_bytes, split_pdf_bytes_with_password,
 };
+pub use flatten::{FlattenScope, Flattened, flatten_pdf_bytes};
 pub use images::{ImagePdfOptions, PageOrientation, images_to_pdf_bytes};
 pub use security::{
     ProtectOptions, Protection, protect_pdf_bytes, protection_of, unlock_pdf_bytes,

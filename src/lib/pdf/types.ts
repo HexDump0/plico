@@ -112,6 +112,13 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'flatten';
+			files: ArrayBuffer[];
+			passwords: string[];
+			formsOnly: boolean;
+	  }
+	| {
+			id: number;
 			operation: 'sign';
 			// The PDF, then the signature image.
 			files: ArrayBuffer[];
@@ -139,7 +146,8 @@ export type PdfOutput = {
 };
 
 export type PdfWorkerResponse =
-	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format'] }
+	// `value` carries a count some operations report beside their file.
+	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format']; value?: number }
 	| { id: number; ok: true; value: number }
 	| { id: number; ok: false; error: string };
 

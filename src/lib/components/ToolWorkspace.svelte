@@ -28,7 +28,8 @@
 		processSplitPdf,
 		processWatermark,
 		processCrop,
-		processSign
+		processSign,
+		processFlatten
 	} from '$lib/pdf/processor';
 	import type {
 		CropArea,
@@ -73,6 +74,10 @@
 	import CropSettings from './CropSettings.svelte';
 	import SignOverlay from './SignOverlay.svelte';
 	import SignSettings from './SignSettings.svelte';
+	import FlattenOverlay from './FlattenOverlay.svelte';
+	import FlattenSettings from './FlattenSettings.svelte';
+	import { flattenMarks, type AnnotationMark } from '$lib/pdf/annotations';
+	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import { FULL_PAGE, contentBounds, cropSize, isFullPage, padArea } from '$lib/pdf/crop-area';
 	import { undrawable, type FontFamily } from '$lib/pdf/standard-fonts';
 	import type { PreviewPage, StampImage, StampMark, StampPosition } from '$lib/pdf/stamp-layout';
@@ -96,8 +101,9 @@
 	const isStamp = $derived(isPageNumbers || isWatermark);
 	const isCrop = $derived(tool.id === 'crop');
 	const isSign = $derived(tool.id === 'sign');
+	const isFlatten = $derived(tool.id === 'flatten');
 	// Tools that show one page at a time and draw their result over it.
-	const isPagePreview = $derived(isStamp || isCrop || isSign);
+	const isPagePreview = $derived(isStamp || isCrop || isSign || isFlatten);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
 			tool.id === 'pdf-to-png' ||
@@ -217,6 +223,11 @@
 	// Bottom right, where most documents leave room for a signature.
 	const SIGN_PLACE: [number, number, number] = [0.6, 0.8, 0.28];
 	let signPlace = $state.raw<[number, number, number]>(SIGN_PLACE);
+	let flattenFormsOnly = $state(false);
+	// What each page will have drawn into it, read from the preview's copy.
+	let flattenScan = $state.raw<AnnotationMark[][] | 'checking' | 'unknown'>('checking');
+	// Annotations the engine left as they were in the last result.
+	let flattenKept = $state(0);
 	let filename = $state('');
 	let downloadLink = $state<HTMLAnchorElement>();
 	const job = new DownloadJob();
@@ -431,6 +442,28 @@
 	const signSignature = $derived(
 		JSON.stringify([signImage?.url, signScope, signRange, signPage, signPlace])
 	);
+	const flattenFound = $derived(
+		typeof flattenScan === 'string'
+			? flattenScan
+			: flattenScan.flat().filter((mark) => !flattenFormsOnly || mark.field).length
+	);
+	const flattenValid = $derived(
+		!!currentFile &&
+			pageCount > 0 &&
+			flattenFound !== 'checking' &&
+			(flattenFound === 'unknown' || flattenFound > 0)
+	);
+	let flattenScanning = 0;
+	async function scanFlatten(pdf: PDFDocumentProxy) {
+		const scan = ++flattenScanning;
+		flattenScan = 'checking';
+		try {
+			const marks = await flattenMarks(pdf);
+			if (scan === flattenScanning) flattenScan = marks;
+		} catch {
+			if (scan === flattenScanning) flattenScan = 'unknown';
+		}
+	}
 	function signed(page: number) {
 		return signPages.includes(page);
 	}
@@ -454,30 +487,32 @@
 					? !unlockValid || processing
 					: isPdfA
 						? !currentFile || processing
-						: isSign
-							? !signValid || processing
-							: isCrop
-								? !cropValid || processing
-								: isStamp
-									? !stampValid || processing
-									: officeTool
-										? !currentFile || processing
-										: isMerge
-											? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
-											: isSplit
-												? !splitValid || processing
-												: isPageTool
-													? !pageToolValid || processing
-													: isCompress
-														? workspace.files.length === 0 ||
-															processing ||
-															!!dragged ||
-															!!keyboardPicked
-														: isPdfToImage
-															? !pdfToImageValid || processing
-															: isImageToPdf
-																? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-																: true
+						: isFlatten
+							? !flattenValid || processing
+							: isSign
+								? !signValid || processing
+								: isCrop
+									? !cropValid || processing
+									: isStamp
+										? !stampValid || processing
+										: officeTool
+											? !currentFile || processing
+											: isMerge
+												? workspace.files.length < 2 || processing || !!dragged || !!keyboardPicked
+												: isSplit
+													? !splitValid || processing
+													: isPageTool
+														? !pageToolValid || processing
+														: isCompress
+															? workspace.files.length === 0 ||
+																processing ||
+																!!dragged ||
+																!!keyboardPicked
+															: isPdfToImage
+																? !pdfToImageValid || processing
+																: isImageToPdf
+																	? !imagePdfValid || processing || !!dragged || !!keyboardPicked
+																	: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -488,27 +523,29 @@
 					? !unlockValid
 					: isPdfA
 						? !currentFile
-						: isSign
-							? !signValid
-							: isCrop
-								? !cropValid
-								: isStamp
-									? !stampValid
-									: officeTool
-										? !currentFile
-										: isMerge
-											? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-											: isSplit
-												? !splitValid
-												: isPageTool
-													? !pageToolValid
-													: isCompress
-														? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-														: isPdfToImage
-															? !pdfToImageValid
-															: isImageToPdf
-																? !imagePdfValid || !!dragged || !!keyboardPicked
-																: true
+						: isFlatten
+							? !flattenValid
+							: isSign
+								? !signValid
+								: isCrop
+									? !cropValid
+									: isStamp
+										? !stampValid
+										: officeTool
+											? !currentFile
+											: isMerge
+												? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+												: isSplit
+													? !splitValid
+													: isPageTool
+														? !pageToolValid
+														: isCompress
+															? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+															: isPdfToImage
+																? !pdfToImageValid
+																: isImageToPdf
+																	? !imagePdfValid || !!dragged || !!keyboardPicked
+																	: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -520,31 +557,33 @@
 					? `${baseName}-unlocked`
 					: isPdfA
 						? `${baseName}-pdfa`
-						: isSign
-							? `${baseName}-signed`
-							: isCrop
-								? `${baseName}-cropped`
-								: isPageNumbers
-									? `${baseName}-numbered`
-									: isWatermark
-										? `${baseName}-watermarked`
-										: isMerge
-											? 'plico-merged'
-											: isImageToPdf
-												? 'plico-images'
-												: isSplit
-													? `${baseName}-split`
-													: isOrganize
-														? `${baseName}-organized`
-														: isExtract
-															? `${baseName}-extracted`
-															: isRemove
-																? `${baseName}-pages-removed`
-																: isRotate
-																	? `${baseName}-rotated`
-																	: isCompress
-																		? `${baseName}-compressed`
-																		: `${baseName}-images`
+						: isFlatten
+							? `${baseName}-flattened`
+							: isSign
+								? `${baseName}-signed`
+								: isCrop
+									? `${baseName}-cropped`
+									: isPageNumbers
+										? `${baseName}-numbered`
+										: isWatermark
+											? `${baseName}-watermarked`
+											: isMerge
+												? 'plico-merged'
+												: isImageToPdf
+													? 'plico-images'
+													: isSplit
+														? `${baseName}-split`
+														: isOrganize
+															? `${baseName}-organized`
+															: isExtract
+																? `${baseName}-extracted`
+																: isRemove
+																	? `${baseName}-pages-removed`
+																	: isRotate
+																		? `${baseName}-rotated`
+																		: isCompress
+																			? `${baseName}-compressed`
+																			: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -602,6 +641,7 @@
 		void stampSignature;
 		void cropSignature;
 		void signSignature;
+		void flattenFormsOnly;
 		void markdownSignature;
 		void pdfaPart;
 		untrack(() => job.clear());
@@ -624,6 +664,8 @@
 		signPage = 1;
 		signRange = '';
 		signPlace = SIGN_PLACE;
+		flattenScanning++;
+		flattenScan = 'checking';
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
@@ -765,6 +807,20 @@
 		await job.run(
 			(signal) => processWatermark(file, workspace.passwordFor(file), options, image, signal),
 			'Could not add a watermark to this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function flatten() {
+		if (processing || !flattenValid || !currentFile) return;
+		const file = currentFile;
+		const formsOnly = flattenFormsOnly;
+		await job.run(
+			async (signal) => {
+				const output = await processFlatten(file, workspace.passwordFor(file), formsOnly, signal);
+				flattenKept = output.kept;
+				return output;
+			},
+			'Could not flatten this PDF.',
 			() => downloadLink?.click()
 		);
 	}
@@ -979,7 +1035,12 @@
 </script>
 
 {#snippet stampOverlay(page: PreviewPage)}
-	{#if isSign}
+	{#if isFlatten}
+		<FlattenOverlay
+			marks={typeof flattenScan === 'string' ? [] : (flattenScan[page.number - 1] ?? [])}
+			formsOnly={flattenFormsOnly}
+		/>
+	{:else if isSign}
 		<SignOverlay
 			{page}
 			place={signPlace}
@@ -1161,7 +1222,10 @@
 											overlayEverywhere={isSign}
 											{reducedMotion}
 											overlay={stampOverlay}
-											onload={(count) => (pageCount = count)}
+											onload={(count, pdf) => {
+												pageCount = count;
+												if (isFlatten) void scanFlatten(pdf);
+											}}
 											onrender={measureCrop}
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}
@@ -1278,6 +1342,12 @@
 										Incorrect password
 									</p>{/if}
 							</div>{/if}
+					{:else if isFlatten}
+						<FlattenSettings
+							bind:formsOnly={flattenFormsOnly}
+							found={flattenFound}
+							disabled={processing}
+						/>
 					{:else if isSign}
 						<SignSettings
 							bind:image={signImage}
@@ -1519,27 +1589,29 @@
 											? void unlock()
 											: isPdfA
 												? void convertPdfA()
-												: isSign
-													? void sign()
-													: isCrop
-														? void crop()
-														: isPageNumbers
-															? void addPageNumbers()
-															: isWatermark
-																? void addWatermark()
-																: isSplit
-																	? void split()
-																	: isPageTool
-																		? void organize()
-																		: officeTool
-																			? void convertOffice()
-																			: isCompress
-																				? void compress()
-																				: isPdfToImage
-																					? void convertPdfToImage()
-																					: isImageToPdf
-																						? void convertImagesToPdf()
-																						: void merge()}
+												: isFlatten
+													? void flatten()
+													: isSign
+														? void sign()
+														: isCrop
+															? void crop()
+															: isPageNumbers
+																? void addPageNumbers()
+																: isWatermark
+																	? void addWatermark()
+																	: isSplit
+																		? void split()
+																		: isPageTool
+																			? void organize()
+																			: officeTool
+																				? void convertOffice()
+																				: isCompress
+																					? void compress()
+																					: isPdfToImage
+																						? void convertPdfToImage()
+																						: isImageToPdf
+																							? void convertImagesToPdf()
+																							: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
@@ -1549,29 +1621,31 @@
 											? 'Unlocking PDF'
 											: isPdfA
 												? 'Converting to PDF/A'
-												: isSign
-													? 'Signing PDF'
-													: isCrop
-														? 'Cropping PDF'
-														: isPageNumbers
-															? 'Adding page numbers'
-															: isWatermark
-																? 'Adding watermark'
-																: isSplit
-																	? 'Splitting PDF'
-																	: isPageTool
-																		? `${tool.label} in progress`
-																		: officeTool
-																			? officeStage === 'loading'
-																				? 'Loading converter...'
-																				: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																			: isCompress
-																				? 'Compressing PDF'
-																				: isPdfToImage
-																					? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																					: isImageToPdf
-																						? 'Converting images to PDF...'
-																						: 'Merging PDF'
+												: isFlatten
+													? 'Flattening PDF'
+													: isSign
+														? 'Signing PDF'
+														: isCrop
+															? 'Cropping PDF'
+															: isPageNumbers
+																? 'Adding page numbers'
+																: isWatermark
+																	? 'Adding watermark'
+																	: isSplit
+																		? 'Splitting PDF'
+																		: isPageTool
+																			? `${tool.label} in progress`
+																			: officeTool
+																				? officeStage === 'loading'
+																					? 'Loading converter...'
+																					: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																				: isCompress
+																					? 'Compressing PDF'
+																					: isPdfToImage
+																						? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																						: isImageToPdf
+																							? 'Converting images to PDF...'
+																							: 'Merging PDF'
 									: tool.label}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -1599,25 +1673,27 @@
 													? 'Unlocking...'
 													: isPdfA
 														? 'Converting...'
-														: isSign
-															? 'Signing...'
-															: isCrop
-																? 'Cropping...'
-																: isPageNumbers
-																	? 'Numbering...'
-																	: isWatermark
-																		? 'Watermarking...'
-																		: isSplit
-																			? 'Splitting...'
-																			: isPageTool
-																				? 'Processing...'
-																				: isCompress
-																					? 'Compressing...'
-																					: isPdfToImage
-																						? 'Converting...'
-																						: isImageToPdf
+														: isFlatten
+															? 'Flattening...'
+															: isSign
+																? 'Signing...'
+																: isCrop
+																	? 'Cropping...'
+																	: isPageNumbers
+																		? 'Numbering...'
+																		: isWatermark
+																			? 'Watermarking...'
+																			: isSplit
+																				? 'Splitting...'
+																				: isPageTool
+																					? 'Processing...'
+																					: isCompress
+																						? 'Compressing...'
+																						: isPdfToImage
 																							? 'Converting...'
-																							: 'Merging...'}{:else}
+																							: isImageToPdf
+																								? 'Converting...'
+																								: 'Merging...'}{:else}
 										{tool.label}<IconArrowRight size={20} />{/if}</span
 								>
 								<span
@@ -1646,6 +1722,16 @@
 							</div>{/if}
 					</div>
 					{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
+					{#if isFlatten && result && flattenKept > 0}<p
+							role="status"
+							transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+							class="text-xs leading-relaxed text-muted"
+						>
+							{flattenKept}
+							{flattenKept === 1 ? 'item has' : 'items have'} no stored appearance to draw and stayed
+							as
+							{flattenKept === 1 ? 'it was' : 'they were'}
+						</p>{/if}
 				</div>
 			</aside>
 		</div>

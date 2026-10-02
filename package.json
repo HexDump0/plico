@@ -18,6 +18,8 @@
 		"pretest:raster:stamp": "npm run build:wasm",
 		"test:raster:crop": "node scripts/raster-crop.mjs",
 		"pretest:raster:crop": "npm run build:wasm",
+		"test:raster:flatten": "node scripts/raster-flatten.mjs",
+		"pretest:raster:flatten": "npm run build:wasm",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"precheck": "npm run build:wasm",

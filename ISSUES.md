@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 94 unit tests against
+Evidence comes from two places. `cargo test` runs 103 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -348,7 +348,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-five tools exist, the catalogue advertises about forty
+### Twenty-six tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -492,6 +492,35 @@ not load them, or `issue7229.pdf`'s unreadable page), 11 failures:
 Crop boxes are written rounded to a thousandth of a point. Before that, f32
 fractions wrote values like `168.39998` for `168.4`; it changed none of the
 failures above, but keeps the numbers short.
+
+### Flattening is checked by rendering, with 10 known failures
+
+`npm run test:raster:flatten` flattens every corpus file and requires each
+page to render as it did before, since pdf.js draws annotation appearances
+itself. Shifting every appearance by 5 points fails 14 of the first 150 files,
+so it does catch placement.
+
+Baseline 2026-10-02: 921 files compared, 186 of them with annotations to
+flatten, 94 annotations left as they were (no stored appearance, or text and
+choice fields in forms that set NeedAppearances), 59 refused (the same
+unloadable, password and page-less files every tool refuses). 10 failures:
+
+- lopdf load/save loss shared with merge (7): the five stream-decoding files,
+  `freeculture.pdf`, `issue13147.pdf`.
+- pdf.js only (3): poppler renders each identical before and after.
+  `pr20043.pdf` has NoRotate notes on a turned page, which pdf.js ignores and
+  the engine keeps upright, as the spec and poppler do. `bug1802506.pdf`
+  (buttons) and `issue13242.pdf` (a highlight) are drawn by pdf.js in ways of
+  its own that the stored appearance does not match.
+
+Two things the corpus taught, both now handled. pdf.js draws form fields over
+every other annotation whatever the /Annots order (`issue13003.pdf`, a checkbox
+under a square), and poppler follows /Annots order; flattening follows pdf.js.
+And a form with NeedAppearances makes even empty fields' stored appearances
+suspect (`bug1669099.pdf`), so those are kept. Empty fields with nothing stored
+and no /MK box are removed: 292 of the 297 appearance-less text fields in the
+corpus, which otherwise made flattening a blank form report hundreds of items
+it could not flatten.
 
 ### No fuzzing
 

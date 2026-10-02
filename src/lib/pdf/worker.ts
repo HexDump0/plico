@@ -16,6 +16,7 @@ import init, {
 	add_page_numbers,
 	add_watermark,
 	crop_pdf,
+	flatten_pdf,
 	sign_pdf
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
@@ -371,6 +372,15 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			});
 			return;
 		}
+		if (request.operation === 'flatten') {
+			const [bytes, kept] = flatten_pdf(
+				new Uint8Array(request.files[0]),
+				request.passwords[0] ?? '',
+				request.formsOnly
+			) as [Uint8Array, number];
+			postOutput(id, { format: 'pdf', bytes }, kept);
+			return;
+		}
 		if (request.operation === 'sign') {
 			const { options } = request;
 			postOutput(id, {
@@ -552,8 +562,8 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 	}
 };
 
-function postOutput(id: number, packed: PackedOutput) {
+function postOutput(id: number, packed: PackedOutput, value?: number) {
 	const output = packed.bytes.slice().buffer;
-	const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: packed.format };
+	const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: packed.format, value };
 	self.postMessage(response, { transfer: [output] });
 }

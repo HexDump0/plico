@@ -52,6 +52,7 @@ const supportedToolIds = new Set([
 	'watermark',
 	'crop',
 	'sign',
+	'flatten',
 	'organize',
 	'extract',
 	'remove',

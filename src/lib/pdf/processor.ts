@@ -157,6 +157,29 @@ export async function processWatermark(
 	);
 }
 
+/// The flattened PDF, and how many annotations in scope were left as they
+/// were because they had nothing stored to draw.
+export async function processFlatten(
+	file: File,
+	password: string,
+	formsOnly: boolean,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'flatten', files: [buffer], passwords: [password], formsOnly },
+		signal
+	);
+	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');
+	return {
+		bytes: new Uint8Array(response.bytes),
+		format: 'pdf' as const,
+		kept: response.value ?? 0
+	};
+}
+
 export async function processSign(
 	file: File,
 	password: string,

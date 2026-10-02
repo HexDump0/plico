@@ -28,7 +28,8 @@
 		overlayEverywhere?: boolean;
 		reducedMotion: boolean;
 		overlay: Snippet<[PreviewPage]>;
-		onload: (count: number) => void;
+		/// Once the PDF opens, with its page count and the open document.
+		onload: (count: number, pdf: PDFDocumentProxy) => void;
 		/// Each time a page finishes drawing, before it is shown, with the
 		/// canvas it was drawn on.
 		onrender?: (canvas: HTMLCanvasElement, page: PreviewPage) => void;
@@ -100,7 +101,7 @@
 				workspace.opened(source);
 				pdf = document;
 				status = '';
-				onload(document.numPages);
+				onload(document.numPages, document);
 			} catch {
 				if (!cancelled && !workspace.lockState(source)) status = 'Preview unavailable';
 			}

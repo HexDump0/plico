@@ -602,7 +602,7 @@ struct Placement {
 }
 
 /// Objects shared by every stamped page, plus what has been written so far.
-struct Stamper {
+pub(crate) struct Stamper {
     font: Option<ObjectId>,
     graphics_state: Option<ObjectId>,
     streams: HashMap<Vec<u8>, ObjectId>,
@@ -610,7 +610,7 @@ struct Stamper {
 }
 
 impl Stamper {
-    fn new(document: &mut Document, opacity: f32) -> Stamper {
+    pub(crate) fn new(document: &mut Document, opacity: f32) -> Stamper {
         let graphics_state = (opacity < 1.0).then(|| {
             document.add_object(dictionary! {
                 "Type" => "ExtGState",
@@ -747,7 +747,7 @@ impl Stamper {
     /// Draws `form` on the page, over or under what is already there. The
     /// page's own streams are left untouched; only its /Contents array and
     /// /Resources change.
-    fn place(
+    pub(crate) fn place(
         &mut self,
         document: &mut Document,
         page_id: ObjectId,

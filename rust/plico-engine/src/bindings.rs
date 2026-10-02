@@ -2,13 +2,13 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop, PageNumberOptions,
-    PageOrientation, PdfALevel, Position, ProtectOptions, Protection, SignaturePlacement,
-    SplitMode, StandardFont, TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes,
-    add_signature_bytes, add_watermark_bytes, compress_pdf_bytes_with_password,
-    convert_to_pdfa_bytes, crop_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options,
-    organize_pdf_items, protect_pdf_bytes, protection_of, split_pdf_bytes_with_password,
-    standard_fonts_for_pdfa, unlock_pdf_bytes,
+    CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop,
+    PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions, Protection,
+    SignaturePlacement, SplitMode, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
+    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, flatten_pdf_bytes,
+    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes,
+    protection_of, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -462,4 +462,21 @@ pub fn sign_pdf(
         .collect::<Vec<_>>();
     add_signature_bytes(input, password, image, &placements)
         .map_err(|error| JsValue::from_str(&error))
+}
+
+/// Returns the flattened PDF, then how many annotations in scope were left as
+/// they were. `forms_only` flattens form fields and nothing else.
+#[wasm_bindgen]
+pub fn flatten_pdf(input: &[u8], password: &str, forms_only: bool) -> Result<Array, JsValue> {
+    let scope = if forms_only {
+        FlattenScope::FormFields
+    } else {
+        FlattenScope::Everything
+    };
+    let flattened =
+        flatten_pdf_bytes(input, password, scope).map_err(|error| JsValue::from_str(&error))?;
+    let result = Array::new();
+    result.push(&Uint8Array::from(flattened.bytes.as_slice()));
+    result.push(&JsValue::from(flattened.kept as u32));
+    Ok(result)
 }

@@ -18,10 +18,10 @@ use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
 use crate::{
-    FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position, ProtectOptions, Protection,
-    SignaturePlacement, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
+    FlattenScope, FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position, ProtectOptions,
+    Protection, SignaturePlacement, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
     add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, convert_to_pdfa_bytes,
-    crop_pdf_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
+    crop_pdf_bytes, flatten_pdf_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
 };
 
 fn image_pdf_options() -> ImagePdfOptions {
@@ -3154,4 +3154,341 @@ fn signing_rejects_bad_placements_and_images() {
     assert!(error(&png, &[sign_at(1, [f32::NAN, 0.5, 0.2])]).contains("on the page"));
     assert!(error(&png, &[sign_at(3, [0.5, 0.5, 0.2])]).contains("between 1 and 2"));
     assert!(error(b"not an image", &[sign_at(1, [0.5, 0.5, 0.2])]).contains("JPG and PNG"));
+}
+
+/// A 200 point square page carrying `annotations`, each given an appearance
+/// stream 100 by 60 that fills its box, plus a catalog form when `fields` is
+/// not empty. Annotation dictionaries name their appearance with `"AP" =>
+/// "appearance"` placeholders filled in here.
+fn annotated_pdf(
+    annotations: Vec<Dictionary>,
+    form: Option<Dictionary>,
+    page: Dictionary,
+) -> (Vec<u8>, Vec<ObjectId>) {
+    let mut document = Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let appearance = |document: &mut Document, content: &str| {
+        document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => vec![0.into(), 0.into(), 100.into(), 60.into()],
+                "Resources" => dictionary! {},
+            },
+            content.as_bytes().to_vec(),
+        ))
+    };
+    let mut ids = Vec::new();
+    for mut annotation in annotations {
+        if annotation.get(b"AP").ok() == Some(&Object::string_literal("appearance")) {
+            let normal = appearance(&mut document, "0 0 100 60 re f");
+            annotation.set("AP", dictionary! { "N" => normal });
+        } else if annotation.get(b"AP").ok() == Some(&Object::string_literal("states")) {
+            let on = appearance(&mut document, "% on");
+            let off = appearance(&mut document, "% off");
+            annotation.set(
+                "AP",
+                dictionary! { "N" => dictionary! { "On" => on, "Off" => off } },
+            );
+        }
+        annotation.set("P", page_id);
+        ids.push(document.add_object(annotation));
+    }
+    // Popups point at the annotation before them.
+    for index in 0..ids.len() {
+        let is_popup = document.get_dictionary(ids[index]).is_ok_and(|annotation| {
+            annotation.get(b"Subtype").ok() == Some(&Object::Name(b"Popup".to_vec()))
+        });
+        if is_popup && index > 0 {
+            let parent = ids[index - 1];
+            document
+                .get_dictionary_mut(ids[index])
+                .unwrap()
+                .set("Parent", parent);
+        }
+    }
+    let content = document.add_object(Stream::new(dictionary! {}, b"0 0 m".to_vec()));
+    let mut page = page;
+    page.set("Type", "Page");
+    page.set("Parent", pages_id);
+    page.set("Contents", content);
+    page.set("MediaBox", vec![0.into(), 0.into(), 200.into(), 200.into()]);
+    page.set(
+        "Annots",
+        ids.iter()
+            .map(|id| Object::Reference(*id))
+            .collect::<Vec<_>>(),
+    );
+    document.objects.insert(page_id, Object::Dictionary(page));
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 },
+        ),
+    );
+    let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => pages_id };
+    if let Some(mut form) = form {
+        let widgets = ids
+            .iter()
+            .filter(|id| {
+                document.get_dictionary(**id).is_ok_and(|annotation| {
+                    annotation.get(b"Subtype").ok() == Some(&Object::Name(b"Widget".to_vec()))
+                })
+            })
+            .map(|id| Object::Reference(*id))
+            .collect::<Vec<_>>();
+        form.set("Fields", widgets);
+        catalog.set("AcroForm", form);
+    }
+    let catalog_id = document.add_object(catalog);
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    (bytes, ids)
+}
+
+fn square(rect: [i64; 4]) -> Dictionary {
+    dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Square",
+        "Rect" => rect.iter().map(|&value| Object::Integer(value)).collect::<Vec<_>>(),
+        "AP" => Object::string_literal("appearance"),
+    }
+}
+
+fn text_field(name: &str) -> Dictionary {
+    dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Widget",
+        "FT" => "Tx",
+        "T" => Object::string_literal(name),
+        "V" => Object::string_literal("filled in"),
+        "Rect" => vec![100.into(), 100.into(), 150.into(), 130.into()],
+        "AP" => Object::string_literal("appearance"),
+    }
+}
+
+/// The page's annotation subtypes, and what its flattened drawing says.
+fn flattened_page(bytes: &[u8]) -> (Vec<String>, String, Document) {
+    let document = Document::load_mem(bytes).unwrap();
+    let page_id = document.get_pages()[&1];
+    let subtypes = document
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Annots")
+        .ok()
+        .map(|annotations| {
+            annotations
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|annotation| {
+                    let annotation = document
+                        .get_dictionary(annotation.as_reference().unwrap())
+                        .unwrap();
+                    String::from_utf8_lossy(annotation.get(b"Subtype").unwrap().as_name().unwrap())
+                        .into_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let drawing = stamp_forms(&document, page_id)
+        .into_iter()
+        .map(|form| {
+            let stream = document.get_object(form).unwrap().as_stream().unwrap();
+            String::from_utf8_lossy(
+                &stream
+                    .decompressed_content()
+                    .unwrap_or(stream.content.clone()),
+            )
+            .into_owned()
+        })
+        .collect::<String>();
+    (subtypes, drawing, document)
+}
+
+#[test]
+fn flattening_draws_each_appearance_fitted_to_its_rectangle() {
+    let (input, _) = annotated_pdf(vec![square([10, 10, 60, 40])], None, dictionary! {});
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    assert_eq!(output.kept, 0);
+    let (subtypes, drawing, _) = flattened_page(&output.bytes);
+    assert!(subtypes.is_empty(), "{subtypes:?}");
+    // 100 by 60 onto 50 by 30.
+    assert!(drawing.contains("0.5 0 0 0.5 10 10 cm"), "{drawing}");
+    assert!(page_contents(&output.bytes)[0].contains("0 0 m"));
+}
+
+#[test]
+fn flattening_a_form_removes_its_fields_and_the_form() {
+    let (input, _) = annotated_pdf(
+        vec![text_field("name")],
+        Some(dictionary! { "XFA" => Object::string_literal("<xdp/>") }),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let (subtypes, drawing, document) = flattened_page(&output.bytes);
+    assert!(subtypes.is_empty());
+    assert!(drawing.contains("100 100 cm"), "{drawing}");
+    assert!(!document.catalog().unwrap().has(b"AcroForm"));
+}
+
+#[test]
+fn flattening_draws_the_checkbox_state_shown() {
+    let mut checkbox = dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Widget",
+        "FT" => "Btn",
+        "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+        "AP" => Object::string_literal("states"),
+        "AS" => "Off",
+    };
+    let (input, _) = annotated_pdf(vec![checkbox.clone()], Some(dictionary! {}), dictionary! {});
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let document = Document::load_mem(&output.bytes).unwrap();
+    let drawn = document.objects.values().any(|object| {
+        object
+            .as_stream()
+            .is_ok_and(|stream| stream.content.starts_with(b"% off"))
+    });
+    let unused = document.objects.values().any(|object| {
+        object
+            .as_stream()
+            .is_ok_and(|stream| stream.content.starts_with(b"% on"))
+    });
+    assert!(
+        drawn && !unused,
+        "the shown state should be drawn and the other dropped"
+    );
+
+    // No state chosen shows nothing, so nothing is drawn but it still goes.
+    checkbox.remove(b"AS");
+    let (input, _) = annotated_pdf(vec![checkbox], Some(dictionary! {}), dictionary! {});
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let (subtypes, drawing, _) = flattened_page(&output.bytes);
+    assert!(subtypes.is_empty() && drawing.is_empty());
+}
+
+#[test]
+fn flattening_keeps_what_it_cannot_draw_faithfully() {
+    // No stored appearance, and a field the form asks viewers to redraw.
+    let mut bare = square([10, 10, 60, 40]);
+    bare.remove(b"AP");
+    let (input, _) = annotated_pdf(
+        vec![bare, text_field("name")],
+        Some(dictionary! { "NeedAppearances" => true }),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    assert_eq!(output.kept, 2);
+    let (subtypes, drawing, document) = flattened_page(&output.bytes);
+    assert_eq!(subtypes, ["Square", "Widget"]);
+    assert!(drawing.is_empty());
+    assert!(document.catalog().unwrap().has(b"AcroForm"));
+}
+
+#[test]
+fn flattening_leaves_links_attachments_and_print_only_marks_and_drops_the_hidden() {
+    let mut link = square([0, 0, 10, 10]);
+    link.set("Subtype", "Link");
+    let mut attachment = square([20, 20, 30, 30]);
+    attachment.set("Subtype", "FileAttachment");
+    let mut print_only = square([40, 40, 50, 50]);
+    print_only.set("F", 32 | 4);
+    let mut hidden = square([60, 60, 70, 70]);
+    hidden.set("F", 2);
+    let note = square([80, 80, 90, 90]);
+    let popup = dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Popup",
+        "Rect" => vec![100.into(), 100.into(), 180.into(), 140.into()],
+    };
+    let (input, _) = annotated_pdf(
+        vec![link, attachment, print_only, hidden, note, popup],
+        None,
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let (subtypes, drawing, _) = flattened_page(&output.bytes);
+    assert_eq!(subtypes, ["Link", "FileAttachment", "Square"]);
+    // Only the note is drawn; the hidden square went without a trace.
+    assert_eq!(drawing.matches(" Do").count(), 1, "{drawing}");
+    assert!(drawing.contains("80 80 cm"), "{drawing}");
+}
+
+#[test]
+fn flattening_form_fields_only_leaves_other_annotations() {
+    let (input, _) = annotated_pdf(
+        vec![square([10, 10, 60, 40]), text_field("name")],
+        Some(dictionary! {}),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::FormFields).unwrap();
+    let (subtypes, drawing, _) = flattened_page(&output.bytes);
+    assert_eq!(subtypes, ["Square"]);
+    assert_eq!(drawing.matches(" Do").count(), 1);
+}
+
+#[test]
+fn flattening_keeps_a_no_rotate_annotation_upright_on_a_turned_page() {
+    let mut note = square([10, 150, 60, 180]);
+    note.set("F", 16);
+    let (input, _) = annotated_pdf(vec![note], None, dictionary! { "Rotate" => 90 });
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let (_, drawing, _) = flattened_page(&output.bytes);
+    // Fitted (scale 0.5 at 10, 150), then a quarter turn counterclockwise
+    // about the top left corner (10, 180).
+    assert!(drawing.contains("0 0.5 -0.5 0 40 180 cm"), "{drawing}");
+}
+
+#[test]
+fn flattening_draws_form_fields_over_other_annotations() {
+    let (input, _) = annotated_pdf(
+        vec![text_field("name"), square([10, 10, 60, 40])],
+        Some(dictionary! {}),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    let (_, drawing, _) = flattened_page(&output.bytes);
+    let square = drawing.find("10 10 cm").unwrap();
+    let field = drawing.find("100 100 cm").unwrap();
+    assert!(square < field, "{drawing}");
+}
+
+#[test]
+fn flattening_removes_empty_fields_that_show_nothing() {
+    let mut empty = text_field("blank");
+    empty.remove(b"AP");
+    empty.remove(b"V");
+    let mut boxed = empty.clone();
+    boxed.set("T", Object::string_literal("boxed"));
+    boxed.set("MK", dictionary! { "BC" => vec![0.into()] });
+    let mut drawn = text_field("drawn");
+    drawn.remove(b"V");
+    let (input, _) = annotated_pdf(
+        vec![empty, boxed, drawn],
+        Some(dictionary! {}),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    // The bordered one would be drawn by a viewer, so it stays.
+    assert_eq!(output.kept, 1);
+    let (subtypes, drawing, _) = flattened_page(&output.bytes);
+    assert_eq!(subtypes, ["Widget"]);
+    assert_eq!(drawing.matches(" Do").count(), 1, "{drawing}");
+}
+
+#[test]
+fn flattening_keeps_even_empty_fields_a_form_asks_viewers_to_redraw() {
+    let mut empty = text_field("empty");
+    empty.remove(b"V");
+    let (input, _) = annotated_pdf(
+        vec![empty],
+        Some(dictionary! { "NeedAppearances" => true }),
+        dictionary! {},
+    );
+    let output = flatten_pdf_bytes(&input, "", FlattenScope::Everything).unwrap();
+    assert_eq!(output.kept, 1);
+    assert_eq!(flattened_page(&output.bytes).0, ["Widget"]);
 }
