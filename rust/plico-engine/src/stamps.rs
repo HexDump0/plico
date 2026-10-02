@@ -263,7 +263,10 @@ fn check_placement(margin: f32, opacity: f32) -> Result<(), String> {
     Ok(())
 }
 
-fn selected_pages(document: &Document, pages: &[u32]) -> Result<Vec<(u32, ObjectId)>, String> {
+pub(crate) fn selected_pages(
+    document: &Document,
+    pages: &[u32],
+) -> Result<Vec<(u32, ObjectId)>, String> {
     if has_unreadable_page(document) {
         return Err("Some pages of this PDF are damaged and could not be read.".into());
     }
@@ -327,7 +330,7 @@ fn has_unreadable_page(document: &Document) -> bool {
     false
 }
 
-fn finish(mut document: Document, opacity: f32) -> Result<Vec<u8>, String> {
+pub(crate) fn finish(mut document: Document, opacity: f32) -> Result<Vec<u8>, String> {
     // Constant opacity in a graphics state dictionary arrived in PDF 1.4.
     if opacity < 1.0 && parse_version(&document.version) < (1, 4) {
         document.version = "1.4".into();
@@ -341,11 +344,11 @@ fn finish(mut document: Document, opacity: f32) -> Result<Vec<u8>, String> {
 /// The page's visible area in reading orientation, in points, with the matrix
 /// that maps it onto the page's own coordinates.
 #[derive(Clone, Copy)]
-struct Frame {
-    width: f32,
-    height: f32,
-    matrix: [f32; 6],
-    media_box: [f32; 4],
+pub(crate) struct Frame {
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) matrix: [f32; 6],
+    pub(crate) media_box: [f32; 4],
 }
 
 impl Frame {
@@ -365,7 +368,7 @@ impl Frame {
 /// Letter, which is what readers assume for a page with no usable /MediaBox.
 const DEFAULT_MEDIA_BOX: [f32; 4] = [0.0, 0.0, 612.0, 792.0];
 
-fn page_frame(document: &Document, page_id: ObjectId) -> Result<Frame, String> {
+pub(crate) fn page_frame(document: &Document, page_id: ObjectId) -> Result<Frame, String> {
     let page = document
         .get_dictionary(page_id)
         .map_err(|error| format!("A PDF page could not be read: {error}"))?;
@@ -427,7 +430,7 @@ fn page_frame(document: &Document, page_id: ObjectId) -> Result<Frame, String> {
     })
 }
 
-fn resolve<'a>(document: &'a Document, value: &'a Object) -> Option<&'a Object> {
+pub(crate) fn resolve<'a>(document: &'a Document, value: &'a Object) -> Option<&'a Object> {
     match value {
         Object::Reference(id) => document.get_object(*id).ok(),
         value => Some(value),
@@ -436,7 +439,7 @@ fn resolve<'a>(document: &'a Document, value: &'a Object) -> Option<&'a Object> 
 
 /// A rectangle's corners in either order, normalised to lower left and upper
 /// right as the spec says readers should.
-fn rectangle(document: &Document, value: &Object) -> Option<[f32; 4]> {
+pub(crate) fn rectangle(document: &Document, value: &Object) -> Option<[f32; 4]> {
     let numbers = value
         .as_array()
         .ok()?

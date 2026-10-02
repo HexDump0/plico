@@ -14,9 +14,17 @@ import init, {
 	pdf_protection,
 	protect_pdf,
 	add_page_numbers,
-	add_watermark
+	add_watermark,
+	crop_pdf
 } from './wasm/plico_engine.js';
-import type { PdfImageOptions, PdfOutput, PdfWorkerRequest, PdfWorkerResponse } from './types';
+import { contentBounds, padArea } from './crop-area';
+import type {
+	CropOptions,
+	PdfImageOptions,
+	PdfOutput,
+	PdfWorkerRequest,
+	PdfWorkerResponse
+} from './types';
 
 const ready = init();
 
@@ -109,6 +117,75 @@ class WorkerFilterFactory {
 	destroy() {}
 }
 
+async function openPdf(input: ArrayBuffer, password: string) {
+	const pdfjs = await import('pdfjs-dist');
+	const workerUrl = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+	pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
+	return pdfjs.getDocument({
+		data: new Uint8Array(input),
+		password: password || undefined,
+		disableFontFace: true,
+		cMapUrl: '/pdfjs/cmaps/',
+		cMapPacked: true,
+		standardFontDataUrl: '/pdfjs/standard_fonts/',
+		CanvasFactory: WorkerCanvasFactory,
+		FilterFactory: WorkerFilterFactory
+	});
+}
+
+/// Renders each page small enough to stay quick, a point or so per pixel,
+/// and finds what it draws. Blank pages are left out.
+async function trimmedAreas(
+	input: ArrayBuffer,
+	password: string,
+	options: Extract<CropOptions, { mode: 'auto' }>
+) {
+	if (!Number.isFinite(options.padding) || options.padding < 0 || options.padding > 144) {
+		throw new Error('Choose a padding between 0 and 2 inches.');
+	}
+	if (typeof OffscreenCanvas === 'undefined') {
+		throw new Error('This browser cannot find page margins.');
+	}
+	// pdf.js may take ownership of what it is given, and the engine still
+	// needs these bytes.
+	const task = await openPdf(input.slice(0), password);
+	try {
+		const pdf = await task.promise;
+		const pages: number[] = [];
+		const areas: number[] = [];
+		for (const number of options.pages) {
+			if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) {
+				throw new Error(`Pages must be between 1 and ${pdf.numPages}.`);
+			}
+			const page = await pdf.getPage(number);
+			const size = page.getViewport({ scale: 1 });
+			const viewport = page.getViewport({
+				scale: Math.min(1, Math.sqrt(1_500_000 / (size.width * size.height)))
+			});
+			const canvas = new OffscreenCanvas(
+				Math.max(1, Math.ceil(viewport.width)),
+				Math.max(1, Math.ceil(viewport.height))
+			);
+			const context = canvas.getContext('2d', { willReadFrequently: true });
+			if (!context) throw new Error('This browser cannot find page margins.');
+			await page.render({
+				canvas: canvas as unknown as HTMLCanvasElement,
+				viewport,
+				background: 'rgb(255,255,255)'
+			}).promise;
+			const bounds = contentBounds(context.getImageData(0, 0, canvas.width, canvas.height));
+			page.cleanup();
+			if (!bounds) continue;
+			pages.push(number);
+			areas.push(...padArea(bounds, options.padding, size.width, size.height));
+		}
+		if (pages.length === 0) throw new Error('These pages are blank, so there is nothing to trim.');
+		return { pages, areas };
+	} finally {
+		await task.destroy();
+	}
+}
+
 async function exportPdfImages(
 	input: ArrayBuffer,
 	password: string,
@@ -127,19 +204,7 @@ async function exportPdfImages(
 		throw new Error('This browser cannot export PDF pages to images.');
 	}
 
-	const pdfjs = await import('pdfjs-dist');
-	const workerUrl = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
-	pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
-	const task = pdfjs.getDocument({
-		data: new Uint8Array(input),
-		password: password || undefined,
-		disableFontFace: true,
-		cMapUrl: '/pdfjs/cmaps/',
-		cMapPacked: true,
-		standardFontDataUrl: '/pdfjs/standard_fonts/',
-		CanvasFactory: WorkerCanvasFactory,
-		FilterFactory: WorkerFilterFactory
-	});
+	const task = await openPdf(input, password);
 	try {
 		const pdf = await task.promise;
 		const pages = options.pages ?? Array.from({ length: pdf.numPages }, (_, index) => index + 1);
@@ -301,6 +366,24 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.opacity,
 					options.behind,
 					options.tile
+				)
+			});
+			return;
+		}
+		if (request.operation === 'crop') {
+			const { options } = request;
+			const password = request.passwords[0] ?? '';
+			const { pages, areas } =
+				options.mode === 'auto'
+					? await trimmedAreas(request.files[0], password, options)
+					: { pages: options.pages, areas: options.pages.flatMap(() => options.area) };
+			postOutput(id, {
+				format: 'pdf',
+				bytes: crop_pdf(
+					new Uint8Array(request.files[0]),
+					password,
+					Uint32Array.from(pages),
+					Float32Array.from(areas)
 				)
 			});
 			return;

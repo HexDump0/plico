@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 80 unit tests against
+Evidence comes from two places. `cargo test` runs 90 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -348,7 +348,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-three tools exist, the catalogue advertises about forty
+### Twenty-four tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -465,6 +465,33 @@ a form field whose widget covers the corner (`issue19083.pdf`), a fuzzed file,
 and pages where pdf.js under Node stops drawing before the end of the content
 (`images_1bit_grayscale.pdf`, `issue4706.pdf`, `issue7821.pdf`,
 `issue20294_reduced.pdf`), where poppler shows the number in the right place.
+
+### Crops are checked by rendering, with 11 known failures
+
+`npm run test:raster:crop` crops every page of every corpus file to an
+off-centre area (10% left, 5% top, 15% right, 20% bottom) with each edge
+snapped to a whole pixel at the render scale, then requires the cropped render
+to match that part of the source render pixel for pixel. Different margins on
+every side mean a crop mapped through the wrong `/Rotate` keeps the wrong part
+of the page and fails; feeding it a vertically mirrored area fails 13 of the
+first 20 files, so it does catch that.
+
+Baseline 2026-10-02: 920 files compared, 42 refused by the engine (lopdf will
+not load them, or `issue7229.pdf`'s unreadable page), 11 failures:
+
+- lopdf load/save loss shared with merge (7): the five stream-decoding files,
+  `issue13147.pdf`, and `multiple-filters-length-zero.pdf`, whose plain load and
+  save already differs from the source (0.09%, under merge's threshold).
+- pdf.js shading edges (4): `issue10339_reduced.pdf`, `issue6769.pdf`,
+  `issue6769_no_matrix.pdf`, `radial_gradients.pdf` differ by one row of
+  antialiasing along a gradient's edge. The page is moved by whole pixels, but
+  pdf.js does not rasterise shadings the same at every offset. Poppler renders
+  the cropped and source pages identically (0.000%) for the first three and the
+  last, so the crop itself is right.
+
+Crop boxes are written rounded to a thousandth of a point. Before that, f32
+fractions wrote values like `168.39998` for `168.4`; it changed none of the
+failures above, but keeps the numbers short.
 
 ### No fuzzing
 

@@ -1,6 +1,7 @@
 import { BLANK_SOURCE, sourceKey } from './sources';
 import type {
 	CompressOptions,
+	CropOptions,
 	ImagePdfOptions,
 	OrganizePage,
 	PageNumberOptions,
@@ -151,6 +152,21 @@ export async function processWatermark(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'watermark', files: buffers, passwords: [password], options },
+		signal
+	);
+}
+
+export async function processCrop(
+	file: File,
+	password: string,
+	options: CropOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'crop', files: [buffer], passwords: [password], options },
 		signal
 	);
 }

@@ -50,6 +50,7 @@ const supportedToolIds = new Set([
 	'pdf-to-pdfa',
 	'page-numbers',
 	'watermark',
+	'crop',
 	'organize',
 	'extract',
 	'remove',

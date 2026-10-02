@@ -1,6 +1,7 @@
 mod archive;
 mod bindings;
 mod compression;
+mod crop;
 mod documents;
 mod images;
 mod security;
@@ -10,11 +11,12 @@ mod tests;
 
 pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{
-    add_page_numbers, add_watermark, compress_pdf, convert_to_pdfa, images_to_pdf, merge_pdfs,
-    organize_pdfs, pdf_protection, pdfa_standard_fonts, protect_pdf, split_pdf_every,
+    add_page_numbers, add_watermark, compress_pdf, convert_to_pdfa, crop_pdf, images_to_pdf,
+    merge_pdfs, organize_pdfs, pdf_protection, pdfa_standard_fonts, protect_pdf, split_pdf_every,
     split_pdf_ranges, unlock_pdf,
 };
 pub use compression::{CompressOptions, compress_pdf_bytes, compress_pdf_bytes_with_password};
+pub use crop::{PageCrop, crop_pdf_bytes};
 pub use documents::{
     OrganizeItem, SplitMode, merge_pdf_bytes, merge_pdf_bytes_with_options,
     merge_pdf_bytes_with_passwords, organize_pdf_bytes, organize_pdf_items, organize_pdfs_bytes,

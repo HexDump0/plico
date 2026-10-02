@@ -17,6 +17,7 @@ rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
 rust/plico-engine/src/stamps.rs                             page numbers and watermarks drawn onto existing pages
+rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/assets/icc/                               ICC profiles for PDF/A (Ghostscript's, AGPL)
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
@@ -32,6 +33,8 @@ src/lib/pdf/wasm/                                           generated, gitignore
 src/lib/tool-catalog.ts                                     the ~40 advertised tools
 scripts/raster-compare.mjs                                  rendered-output comparison over the corpus
 scripts/raster-stamp.mjs                                    rendered check of page numbers and watermarks
+scripts/raster-crop.mjs                                     rendered check of cropping
+src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
 testing/                                                    local corpus, gitignored
 ```
 
@@ -51,6 +54,7 @@ npm run test:engine   # cargo test
 npm run test:corpus   # needs a corpus, see below
 npm run test:raster   # needs a corpus, renders and compares output
 npm run test:raster:stamp  # needs a corpus, renders stamped output
+npm run test:raster:crop   # needs a corpus, renders cropped output
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
@@ -81,6 +85,10 @@ conform; 290 are refused (245 unembedded fonts, 30 annotations without an
 appearance, 12 attachments, 3 XFA forms). The 99 that do not conform are listed
 in `ISSUES.md`. Every one of those claims a conformance it lacks, so this number
 should only go down. If your change moves it, say so.
+
+The crop raster harness is red on 11 files, 7 of them the same lopdf load/save
+losses and 4 where pdf.js antialiases a shading edge differently once the page
+moves; poppler renders those 4 identically. `ISSUES.md` has the list.
 
 The stamp raster harness is red on 7 files, all lopdf load/save losses shared
 with merge, and reports 37 pages where the number drew nothing visible, each
@@ -130,10 +138,10 @@ fix something it detects, it refuses with the reason; veraPDF over the corpus is
 how undetected cases are found. `validatePdfA`-style self-checks are not
 evidence.
 
-Stamping edits pages in place: no page tree rebuild, no renumbering. Lay a
-stamp out in the page's visible frame, which is `/CropBox` (clipped to
-`/MediaBox`) turned by `/Rotate` and scaled by `/UserUnit`, never raw
-`/MediaBox` coordinates. Wrap existing content in `q`/`Q` and close any states
+Stamping and cropping edit pages in place: no page tree rebuild, no
+renumbering. Lay a stamp or a crop out in the page's visible frame, which is
+`/CropBox` (clipped to `/MediaBox`) turned by `/Rotate` and scaled by
+`/UserUnit`, never raw `/MediaBox` coordinates. Wrap existing content in `q`/`Q` and close any states
 the page left open, or the stamp is drawn through the page's last transform.
 Never add to `/Resources` other pages share; give the page its own shallow copy.
 

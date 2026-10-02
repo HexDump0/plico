@@ -112,6 +112,13 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'crop';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: CropOptions;
+	  }
+	| {
+			id: number;
 			operation: 'pdf-to-images';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -172,3 +179,13 @@ export type WatermarkOptions = StampText & {
 	behind: boolean;
 	tile: boolean;
 };
+
+/// Left, top, right and bottom edges as fractions of the page as it is
+/// displayed, measured from its top left.
+export type CropArea = [number, number, number, number];
+
+/// `pages` lists the pages to crop, from 1. Manual crops each to the same
+/// area; auto trims each to what it draws, keeping `padding` points around it.
+export type CropOptions =
+	| { mode: 'manual'; pages: number[]; area: CropArea }
+	| { mode: 'auto'; pages: number[]; padding: number };

@@ -2,10 +2,10 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, FontFamily, ImagePdfOptions, OrganizeItem, PageNumberOptions, PageOrientation,
-    PdfALevel, Position, ProtectOptions, Protection, SplitMode, StandardFont, TextStyle,
-    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
-    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, images_to_pdf_bytes,
+    CompressOptions, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop, PageNumberOptions,
+    PageOrientation, PdfALevel, Position, ProtectOptions, Protection, SplitMode, StandardFont,
+    TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
+    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, images_to_pdf_bytes,
     merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes, protection_of,
     split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
@@ -244,6 +244,27 @@ pub fn convert_to_pdfa(
         })
         .collect::<Vec<_>>();
     convert_to_pdfa_bytes(input, password, level, &fonts).map_err(|error| JsValue::from_str(&error))
+}
+
+/// `areas` holds four numbers for each page in `pages`: its left, top, right
+/// and bottom edges as fractions of the visible page, from its top left.
+#[wasm_bindgen]
+pub fn crop_pdf(
+    input: &[u8],
+    password: &str,
+    pages: &[u32],
+    areas: &[f32],
+) -> Result<Vec<u8>, JsValue> {
+    let (areas, remainder) = areas.as_chunks::<4>();
+    if !remainder.is_empty() || areas.len() != pages.len() {
+        return Err(JsValue::from_str("A crop area is incomplete."));
+    }
+    let crops = pages
+        .iter()
+        .zip(areas)
+        .map(|(&page, &area)| PageCrop { page, area })
+        .collect::<Vec<_>>();
+    crop_pdf_bytes(input, password, &crops).map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]

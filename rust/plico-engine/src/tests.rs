@@ -18,9 +18,10 @@ use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
 use crate::{
-    FontFamily, PageNumberOptions, PdfALevel, Position, ProtectOptions, Protection, StandardFont,
-    TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes,
-    convert_to_pdfa_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
+    FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position, ProtectOptions, Protection,
+    StandardFont, TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes,
+    add_watermark_bytes, convert_to_pdfa_bytes, crop_pdf_bytes, protect_pdf_bytes, protection_of,
+    standard_fonts_for_pdfa,
 };
 
 fn image_pdf_options() -> ImagePdfOptions {
@@ -2825,4 +2826,186 @@ fn pdfa_recognises_standard_font_aliases_only() {
     assert_eq!(needed("ABCDEF+CourierNew,Italic"), vec!["Courier-Oblique"]);
     assert!(needed("ArialNarrow").is_empty());
     assert!(needed("Arial-Black").is_empty());
+}
+
+fn page_box(document: &Document, page: u32, key: &[u8]) -> Option<[f32; 4]> {
+    let page = document.get_dictionary(document.get_pages()[&page]).ok()?;
+    let values = page.get(key).ok()?.as_array().ok()?;
+    let values = values
+        .iter()
+        .map(|value| value.as_float().unwrap())
+        .collect::<Vec<_>>();
+    values.try_into().ok()
+}
+
+fn assert_box(found: Option<[f32; 4]>, expected: [f32; 4]) {
+    let found = found.expect("the box is missing");
+    assert!(
+        found
+            .iter()
+            .zip(expected)
+            .all(|(value, expected)| (value - expected).abs() < 0.01),
+        "{found:?} is not {expected:?}"
+    );
+}
+
+fn crop(page: u32, area: [f32; 4]) -> PageCrop {
+    PageCrop { page, area }
+}
+
+#[test]
+fn crops_the_area_given_from_the_top_left() {
+    let input = pdf_with_pages(
+        &[(
+            "0 0 m",
+            dictionary! { "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()] },
+        )],
+        dictionary! {},
+    );
+    let output = crop_pdf_bytes(&input, "", &[crop(1, [0.1, 0.25, 0.6, 0.75])]).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert_box(
+        page_box(&document, 1, b"CropBox"),
+        [20.0, 100.0, 120.0, 300.0],
+    );
+    assert_box(
+        page_box(&document, 1, b"MediaBox"),
+        [20.0, 100.0, 120.0, 300.0],
+    );
+    assert_eq!(page_contents(&output)[0], "0 0 m");
+}
+
+#[test]
+fn crops_the_half_the_reader_sees_on_a_turned_page() {
+    // The reader's left half of a 200 by 400 page, at each rotation.
+    for (rotation, expected) in [
+        (0, [0.0, 0.0, 100.0, 400.0]),
+        (90, [0.0, 0.0, 200.0, 200.0]),
+        (180, [100.0, 0.0, 200.0, 400.0]),
+        (270, [0.0, 200.0, 200.0, 400.0]),
+    ] {
+        let input = pdf_with_pages(
+            &[(
+                "",
+                dictionary! {
+                    "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()],
+                    "Rotate" => rotation,
+                },
+            )],
+            dictionary! {},
+        );
+        let output = crop_pdf_bytes(&input, "", &[crop(1, [0.0, 0.0, 0.5, 1.0])]).unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        assert_box(page_box(&document, 1, b"CropBox"), expected);
+    }
+}
+
+#[test]
+fn crops_within_an_existing_crop_box_and_honours_user_units() {
+    let cropped = pdf_with_pages(
+        &[(
+            "",
+            dictionary! {
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+                "CropBox" => vec![50.into(), 60.into(), 150.into(), 160.into()],
+            },
+        )],
+        dictionary! {},
+    );
+    let output = crop_pdf_bytes(&cropped, "", &[crop(1, [0.0, 0.0, 0.5, 0.5])]).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert_box(
+        page_box(&document, 1, b"CropBox"),
+        [50.0, 110.0, 100.0, 160.0],
+    );
+
+    let mut large = square_page(200);
+    large.set("UserUnit", 2);
+    let input = pdf_with_pages(&[("", large)], dictionary! {});
+    let output = crop_pdf_bytes(&input, "", &[crop(1, [0.0, 0.0, 0.5, 0.5])]).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert_box(
+        page_box(&document, 1, b"CropBox"),
+        [0.0, 100.0, 100.0, 200.0],
+    );
+}
+
+#[test]
+fn crops_only_the_pages_given_and_leaves_inherited_boxes_alone() {
+    let input = pdf_with_pages(
+        &[
+            ("1", dictionary! {}),
+            ("2", dictionary! {}),
+            ("3", dictionary! {}),
+        ],
+        dictionary! { "MediaBox" => vec![0.into(), 0.into(), 100.into(), 100.into()] },
+    );
+    let output = crop_pdf_bytes(
+        &input,
+        "",
+        &[crop(2, [0.5, 0.0, 1.0, 0.5]), crop(3, [0.0, 0.0, 1.0, 1.0])],
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert_eq!(page_box(&document, 1, b"MediaBox"), None);
+    assert_eq!(page_box(&document, 1, b"CropBox"), None);
+    assert_box(
+        page_box(&document, 2, b"CropBox"),
+        [50.0, 50.0, 100.0, 100.0],
+    );
+    // An area covering the whole page changes nothing.
+    assert_eq!(page_box(&document, 3, b"CropBox"), None);
+    assert_eq!(page_contents(&output), ["1", "2", "3"]);
+}
+
+#[test]
+fn clips_print_boxes_and_drops_thumbnails() {
+    let mut document = Document::load_mem(&pdf_with_pages(
+        &[(
+            "",
+            dictionary! {
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+                "TrimBox" => vec![10.into(), 10.into(), 190.into(), 190.into()],
+                "ArtBox" => vec![0.into(), 150.into(), 200.into(), 200.into()],
+            },
+        )],
+        dictionary! {},
+    ))
+    .unwrap();
+    let page = document.get_pages()[&1];
+    let thumbnail = document.add_object(Stream::new(dictionary! {}, vec![0; 3]));
+    document
+        .get_dictionary_mut(page)
+        .unwrap()
+        .set("Thumb", thumbnail);
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+
+    let output = crop_pdf_bytes(&input, "", &[crop(1, [0.0, 0.5, 0.5, 1.0])]).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    assert_box(page_box(&document, 1, b"CropBox"), [0.0, 0.0, 100.0, 100.0]);
+    assert_box(
+        page_box(&document, 1, b"TrimBox"),
+        [10.0, 10.0, 100.0, 100.0],
+    );
+    // The art box lies wholly in the part cropped away.
+    assert_eq!(page_box(&document, 1, b"ArtBox"), None);
+    let page = document.get_dictionary(document.get_pages()[&1]).unwrap();
+    assert!(!page.has(b"Thumb"));
+}
+
+#[test]
+fn crop_rejects_bad_areas_and_pages() {
+    let input = numbered_pdf(2);
+    let error = |crops: &[PageCrop]| crop_pdf_bytes(&input, "", crops).unwrap_err();
+    assert!(error(&[]).contains("at least one page"));
+    assert!(error(&[crop(1, [0.5, 0.0, 0.5, 1.0])]).contains("inside the page"));
+    assert!(error(&[crop(1, [0.0, 0.0, 1.2, 1.0])]).contains("inside the page"));
+    assert!(error(&[crop(1, [0.0, 0.0, f32::NAN, 1.0])]).contains("inside the page"));
+    assert!(error(&[crop(1, [0.0, 0.0, 0.001, 1.0])]).contains("too small"));
+    assert!(error(&[crop(3, [0.0, 0.0, 0.5, 1.0])]).contains("between 1 and 2"));
+    assert!(
+        error(&[crop(1, [0.0, 0.0, 0.5, 1.0]), crop(1, [0.5, 0.0, 1.0, 1.0])])
+            .contains("two crop areas")
+    );
 }
