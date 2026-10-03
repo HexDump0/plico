@@ -1,5 +1,6 @@
 import { BLANK_SOURCE, sourceKey } from './sources';
 import type {
+	AnnotateOptions,
 	CompressOptions,
 	CropOptions,
 	ImagePdfOptions,
@@ -194,6 +195,23 @@ export async function processSign(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'sign', files: buffers, passwords: [password], options },
+		signal
+	);
+}
+
+/// `images` are the pictures image annotations draw, by their `image` index.
+export async function processAnnotate(
+	file: File,
+	password: string,
+	options: AnnotateOptions,
+	images: File[] = [],
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all([file, ...images].map((source) => source.arrayBuffer()));
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'annotate', files: buffers, passwords: [password], options },
 		signal
 	);
 }

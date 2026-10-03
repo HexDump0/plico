@@ -7,7 +7,7 @@ use super::FontFamily;
 
 /// Where the tops of capital letters sit above the baseline, which is how
 /// text is centred visually rather than on its full ascent.
-pub(super) fn cap_height(family: FontFamily, bold: bool) -> f32 {
+pub(crate) fn cap_height(family: FontFamily, bold: bool) -> f32 {
     match (family, bold) {
         (FontFamily::Helvetica, _) => 0.718,
         (FontFamily::Times, false) => 0.662,
@@ -16,7 +16,7 @@ pub(super) fn cap_height(family: FontFamily, bold: bool) -> f32 {
     }
 }
 
-pub(super) fn base_font(family: FontFamily, bold: bool) -> &'static str {
+pub(crate) fn base_font(family: FontFamily, bold: bool) -> &'static str {
     match (family, bold) {
         (FontFamily::Helvetica, false) => "Helvetica",
         (FontFamily::Helvetica, true) => "Helvetica-Bold",
@@ -28,7 +28,7 @@ pub(super) fn base_font(family: FontFamily, bold: bool) -> &'static str {
 }
 
 /// Width of already encoded text, in thousandths of the font size.
-pub(super) fn text_width(family: FontFamily, bold: bool, encoded: &[u8]) -> u32 {
+pub(crate) fn text_width(family: FontFamily, bold: bool, encoded: &[u8]) -> u32 {
     let widths = match (family, bold) {
         (FontFamily::Helvetica, false) => &HELVETICA,
         (FontFamily::Helvetica, true) => &HELVETICA_BOLD,
@@ -77,7 +77,7 @@ pub(crate) fn win_ansi_char(code: u8) -> Option<char> {
 
 /// WinAnsiEncoding is Latin-1 plus typographic punctuation in 0x80 to 0x9F.
 /// `None` for anything it cannot represent, including control characters.
-pub(super) fn win_ansi(character: char) -> Option<u8> {
+pub(crate) fn win_ansi(character: char) -> Option<u8> {
     let code = match character {
         ' '..='~' | '\u{A0}'..='\u{FF}' => character as u8,
         '€' => 0x80,

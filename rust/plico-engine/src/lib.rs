@@ -1,3 +1,4 @@
+mod annotate;
 mod archive;
 mod bindings;
 mod compression;
@@ -11,11 +12,14 @@ mod stamps;
 #[cfg(test)]
 mod tests;
 
+pub use annotate::{
+    Annotation, AnnotationKind, Markup, NOTE_SIZE, Shape, TEXT_PADDING, annotate_pdf_bytes,
+};
 pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{
-    add_page_numbers, add_watermark, compress_pdf, convert_to_pdfa, crop_pdf, images_to_pdf,
-    merge_pdfs, organize_pdfs, pdf_protection, pdfa_standard_fonts, protect_pdf, redact_pdf,
-    redaction_text, sign_pdf, split_pdf_every, split_pdf_ranges, unlock_pdf,
+    add_page_numbers, add_watermark, annotate_pdf, compress_pdf, convert_to_pdfa, crop_pdf,
+    images_to_pdf, merge_pdfs, organize_pdfs, pdf_protection, pdfa_standard_fonts, protect_pdf,
+    redact_pdf, redaction_text, sign_pdf, split_pdf_every, split_pdf_ranges, unlock_pdf,
 };
 pub use compression::{CompressOptions, compress_pdf_bytes, compress_pdf_bytes_with_password};
 pub use crop::{PageCrop, crop_pdf_bytes};

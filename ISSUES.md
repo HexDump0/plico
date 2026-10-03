@@ -126,6 +126,47 @@ arguments it gained for passwords and bookmarks. Every merge threw, was counted
 as refused, and the harness passed while comparing nothing. Re-measured after
 the fix: the same 9 failures listed below.
 
+### Objects added in place could answer a dangling reference
+
+`renumber()` keeps merges safe, but the tools that edit in place (stamps,
+sign, flatten, redact, PDF/A, annotate) add objects without renumbering, and
+lopdf numbers new objects from `max_id`, which counts only objects that
+exist. In `ZapfDingbats.pdf` two popups name parents (ids 60 and 61) that
+were never written; annotating gave them the new highlight and its
+appearance stream as parents. `load_document` now raises `max_id` past every
+referenced id, so dangling references stay dangling. Corpus baselines did not
+move. Test: `objects_added_in_place_never_answer_a_reference_to_a_missing_one`.
+
+### Identical resources were stored once per copy
+
+Merging ten files made from one template embedded the template's fonts and
+images ten times. `share_identical_objects` now makes identical streams and
+identical font, font descriptor, graphics state and encoding dictionaries one
+object, repeating until nothing changes, since two fonts only match once their
+font files have become one. Pages, annotations and fields are never shared.
+Digest matches are compared byte for byte. Merge, Split, Organize and Compress
+all write through it; it replaced Compress's single-pass stream dedupe. Ten
+copies of `160F-2019.pdf` merged went from 9.9 to 1.8 times one copy's size,
+`tracemonkey.pdf` from 9.7 to 5.4. Corpus merge output went from 87.1% to
+85.8% of input, compress from 67.2% to 67.1%. Merge, Split and Organize then
+started writing object streams, which Compress and the in-place tools
+already did, taking merge output to 77.3%. Test:
+`merging_copies_of_one_document_stores_their_shared_objects_once`.
+
+### Inherited resources were copied onto every page
+
+A page tree node's direct `/Resources` dictionary was cloned onto each page
+under it when pages took their inherited attributes, which would have
+inflated a long document badly. It is now moved into one object first and
+the pages share the reference. Test:
+`inherited_resources_are_shared_by_reference_not_copied_onto_each_page`.
+
+### Reference rewriting recursed
+
+Rewriting references walked nested arrays and dictionaries recursively, so a
+deep enough nesting could overflow the wasm stack, a trap rather than an
+error. `rewrite_references` walks with a stack instead.
+
 ### Smaller ones
 
 `Document::load_mem` applied no decompression limit, so a small file could
@@ -307,13 +348,6 @@ either randomness or a content hash, and neither is in the dependency tree
 today. Leaving it out keeps merges reproducible, which is worth something for a
 local-first tool, so this is a trade rather than a straight bug.
 
-### Reference rewriting recurses
-
-`remap_object` recurses through arrays and dictionaries. A deeply nested array
-could overflow the wasm stack, which is a trap rather than a catchable error.
-lopdf's own parser and `traverse_objects` have the same shape, so a document that
-breaks this breaks during parsing first. Worth an explicit depth cap anyway.
-
 ---
 
 ## Open, performance and size
@@ -338,36 +372,6 @@ nothing here has benchmarked that yet.
 
 `codegen-units = 1` and `panic = "abort"` were measured and kept: 201 422 to
 198 055 brotli, 1.7%.
-
-### Object streams are not used on write
-
-An earlier read of this said lopdf writes a classic cross-reference table. That
-was wrong. `save_to` already emits a cross-reference _stream_
-(`/Type /XRef /W [1 4 2]`). The remaining win is object streams, which pack
-non-stream objects such as page and annotation dictionaries into one compressed
-blob. `Document::save_modern()` turns both on. Worth measuring against the
-corpus, guarded so the header version is at least 1.5.
-
-### Identical resources are never shared
-
-Merging ten invoices generated from one template embeds the same font ten times.
-A bottom-up hash over the object graph would let identical subtrees collapse to
-one. Neither lopdf nor pdf-lib does this. mutool does. For template-heavy merges
-this is a step change rather than a percentage.
-
-Current corpus output is 87.1% of input size, from pruning and compression
-alone.
-
-### Inherited attributes are copied by value
-
-`inheritable_attributes` writes the resolved value onto each page. When the
-ancestor held `/Resources` as a direct dictionary rather than a reference, that
-dictionary is cloned onto every page under it. A 500 page document with a large
-direct `/Resources` at the root would inflate badly.
-
-No sign of it in the corpus, which came out at 87.1% overall, so this is a
-latent risk rather than an observed one. The fix is to promote a direct value to
-one indirect object per ancestor and share the reference.
 
 ### Peak memory is roughly twice the input plus the output
 
@@ -435,9 +439,9 @@ Compress now repacks object streams, recompresses Flate streams, re-encodes
 eligible JPEGs, and converts large 8-bit Flate RGB/grayscale images to JPEG
 when that saves bytes. Its strongest setting also downsizes eligible images.
 The pdf.js corpus compress check covers 924 files with unchanged page counts
-and decoded page content. Strong output is 67.2% of input size; 919 files rebuild
-smaller and 5 pass through. The same figures were measured from a clean checkout
-of the pre-refactor commit and after the 2026-09-20 module split.
+and decoded page content. Strong output is 67.1% of input size; 919 files rebuild
+smaller and 5 pass through. It was 67.2%, measured both before and after the
+2026-09-20 module split, until identical objects were shared (2026-10-03).
 Metadata and thumbnail removal are optional because a rewrite that guarantees
 their removal can make an already compact PDF larger.
 This is structural evidence, not a rendered image comparison. JPXDecode,

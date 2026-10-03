@@ -1,6 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, dictionary};
+use md5::{Digest, Md5};
+
+use crate::compression::packed_options;
 
 /// The attributes a page may omit and inherit from an ancestor node in the page tree.
 /// (ISO 32000-1, 7.7.3.4 lists these four)
@@ -415,7 +419,7 @@ fn add_file_bookmarks(
 
 /// PDF text strings are PDFDocEncoding or UTF-16BE with a byte order mark.
 /// ASCII is valid PDFDocEncoding as-is; anything else goes out as UTF-16.
-fn text_string(text: &str) -> Object {
+pub(crate) fn text_string(text: &str) -> Object {
     if text.is_ascii() {
         return Object::string_literal(text);
     }
@@ -484,8 +488,37 @@ pub(crate) fn load_document(
     if document.get_pages().is_empty() {
         return Err(format!("PDF {position} has no pages."));
     }
+    reserve_referenced_ids(&mut document);
 
     Ok(document)
+}
+
+/// lopdf gives each new object the id after `max_id`, which only counts objects
+/// that exist. A reference to one that does not can name an id past all of
+/// them, and an object added there answers it: annotating gave two popups whose
+/// parents were missing the new highlight and its appearance as parents
+/// (pdf.js corpus: ZapfDingbats.pdf). Every tool that edits in place adds
+/// objects, so new ids start past every id referenced, keeping such references
+/// dangling. Merge renumbers instead and sets its own `max_id`.
+fn reserve_referenced_ids(document: &mut Document) {
+    let mut highest = document.max_id;
+    let mut pending = document
+        .objects
+        .values()
+        .chain(document.trailer.iter().map(|(_, value)| value))
+        .collect::<Vec<_>>();
+    while let Some(object) = pending.pop() {
+        match object {
+            Object::Reference((id, _)) => highest = highest.max(*id),
+            Object::Array(items) => pending.extend(items),
+            Object::Dictionary(dictionary) => {
+                pending.extend(dictionary.iter().map(|(_, value)| value))
+            }
+            Object::Stream(stream) => pending.extend(stream.dict.iter().map(|(_, value)| value)),
+            _ => {}
+        }
+    }
+    document.max_id = highest;
 }
 
 fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
@@ -543,6 +576,7 @@ fn assemble_documents_in_order(
         } else {
             available.into_iter().collect::<Vec<_>>()
         };
+        share_inherited_resources(&mut document);
         let inherited = page_order
             .iter()
             .map(|(_, page_id)| {
@@ -690,6 +724,178 @@ pub(crate) fn inheritable_attributes(
     found
 }
 
+/// A page tree node's direct /Resources would be copied onto every page under
+/// it once pages take their inherited attributes, so it is moved into an
+/// object of its own first and the pages share a reference to it.
+fn share_inherited_resources(document: &mut Document) {
+    let nodes = document
+        .objects
+        .iter()
+        .filter_map(|(id, object)| {
+            let node = object.as_dict().ok()?;
+            (node.has(b"Kids") && node.get(b"Resources").ok()?.as_dict().is_ok()).then_some(*id)
+        })
+        .collect::<Vec<_>>();
+    for id in nodes {
+        let Some(resources) = document
+            .get_dictionary_mut(id)
+            .ok()
+            .and_then(|node| node.remove(b"Resources"))
+        else {
+            continue;
+        };
+        let shared = document.add_object(resources);
+        if let Ok(node) = document.get_dictionary_mut(id) {
+            node.set("Resources", shared);
+        }
+    }
+}
+
+/// Dictionaries that mean the same wherever they are used, so identical
+/// copies can be one object. Pages, annotations, fields and the like have an
+/// identity of their own and never qualify.
+const SHAREABLE_TYPES: [&[u8]; 4] = [b"Font", b"FontDescriptor", b"ExtGState", b"Encoding"];
+
+/// Two fonts only look identical once the font files they point at have
+/// become one, so sharing repeats, a level deeper each time.
+const MAX_SHARING_PASSES: usize = 8;
+
+const MAX_FINGERPRINT_DEPTH: usize = 32;
+
+/// Makes identical streams and shareable dictionaries one object, so merging
+/// ten invoices made from one template embeds its fonts and logo once.
+pub(crate) fn share_identical_objects(document: &mut Document) {
+    for _ in 0..MAX_SHARING_PASSES {
+        let mut keepers = HashMap::<(Vec<u8>, [u8; 16]), ObjectId>::new();
+        let mut replaced = BTreeMap::new();
+        for (&id, object) in &document.objects {
+            let Some(key) = fingerprint(object) else {
+                continue;
+            };
+            match keepers.entry(key) {
+                Entry::Occupied(keeper) => {
+                    // A digest match is checked byte for byte, so a crafted
+                    // collision cannot swap one image for another.
+                    let same = match (object, document.objects.get(keeper.get())) {
+                        (Object::Stream(found), Some(Object::Stream(kept))) => {
+                            found.content == kept.content
+                        }
+                        _ => true,
+                    };
+                    if same {
+                        replaced.insert(id, *keeper.get());
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(id);
+                }
+            }
+        }
+        if replaced.is_empty() {
+            return;
+        }
+        for id in replaced.keys() {
+            document.objects.remove(id);
+        }
+        rewrite_references(
+            document
+                .objects
+                .values_mut()
+                .chain(document.trailer.iter_mut().map(|(_, value)| value)),
+            |id| {
+                if let Some(&keeper) = replaced.get(id) {
+                    *id = keeper;
+                }
+            },
+        );
+    }
+}
+
+/// What makes `object` identical to another that can stand in for it: its
+/// dictionary written out, references included, and a digest of any stream
+/// content. `None` for objects that are not shared.
+fn fingerprint(object: &Object) -> Option<(Vec<u8>, [u8; 16])> {
+    let (dictionary, content) = match object {
+        Object::Stream(stream) => (&stream.dict, Some(&stream.content)),
+        Object::Dictionary(dictionary) => (dictionary, None),
+        _ => return None,
+    };
+    let kind = dictionary.get(b"Type").and_then(Object::as_name).ok();
+    let shareable = match content {
+        Some(_) => !matches!(kind, Some(b"XRef" | b"ObjStm")),
+        None => kind.is_some_and(|kind| SHAREABLE_TYPES.contains(&kind)),
+    };
+    if !shareable {
+        return None;
+    }
+    let mut written = Vec::new();
+    encode_dictionary(dictionary, &mut written, 0)?;
+    let digest = content.map_or([0; 16], |content| Md5::digest(content).into());
+    Some((written, digest))
+}
+
+/// Keys in sorted order, since order means nothing in a dictionary. /Length
+/// is left out: stream content is compared on its own, and the same length
+/// can be written directly or through a reference.
+fn encode_dictionary(dictionary: &Dictionary, out: &mut Vec<u8>, depth: usize) -> Option<()> {
+    let mut entries = dictionary
+        .iter()
+        .filter(|(key, _)| key.as_slice() != b"Length")
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(key, _)| *key);
+    out.push(b'<');
+    for (key, value) in entries {
+        out.extend((key.len() as u32).to_le_bytes());
+        out.extend(key);
+        encode(value, out, depth + 1)?;
+    }
+    out.push(b'>');
+    Some(())
+}
+
+fn encode(object: &Object, out: &mut Vec<u8>, depth: usize) -> Option<()> {
+    if depth > MAX_FINGERPRINT_DEPTH {
+        return None;
+    }
+    match object {
+        Object::Null => out.push(b'n'),
+        Object::Boolean(value) => out.extend([b'b', u8::from(*value)]),
+        Object::Integer(value) => {
+            out.push(b'i');
+            out.extend(value.to_le_bytes());
+        }
+        Object::Real(value) => {
+            out.push(b'r');
+            out.extend(value.to_bits().to_le_bytes());
+        }
+        Object::Name(name) => {
+            out.push(b'/');
+            out.extend((name.len() as u32).to_le_bytes());
+            out.extend(name);
+        }
+        Object::String(text, _) => {
+            out.push(b's');
+            out.extend((text.len() as u32).to_le_bytes());
+            out.extend(text);
+        }
+        Object::Reference((number, generation)) => {
+            out.push(b'R');
+            out.extend(number.to_le_bytes());
+            out.extend(generation.to_le_bytes());
+        }
+        Object::Array(items) => {
+            out.push(b'[');
+            for item in items {
+                encode(item, out, depth + 1)?;
+            }
+            out.push(b']');
+        }
+        Object::Dictionary(dictionary) => encode_dictionary(dictionary, out, depth)?,
+        Object::Stream(_) => return None,
+    }
+    Some(())
+}
+
 /// Moves every object into `[start, start + count)`, rewriting references to
 /// match, and reports where each one landed.
 ///
@@ -709,42 +915,42 @@ fn renumber(document: &mut Document, start: u32) -> BTreeMap<ObjectId, ObjectId>
         .collect::<BTreeMap<_, _>>();
     let unresolved = (start + moved.len() as u32, 0);
 
-    let mut objects = std::mem::take(&mut document.objects);
-    for object in objects.values_mut() {
-        remap_object(object, &moved, unresolved);
-    }
-    document.objects = objects
+    rewrite_references(
+        document
+            .objects
+            .values_mut()
+            .chain(document.trailer.iter_mut().map(|(_, value)| value)),
+        |id| *id = moved.get(id).copied().unwrap_or(unresolved),
+    );
+    document.objects = std::mem::take(&mut document.objects)
         .into_iter()
         .map(|(id, object)| (moved[&id], object))
         .collect();
-
-    remap_dictionary(&mut document.trailer, &moved, unresolved);
     document.max_id = start + moved.len() as u32;
 
     moved
 }
 
-fn remap_object(object: &mut Object, moved: &BTreeMap<ObjectId, ObjectId>, unresolved: ObjectId) {
-    match object {
-        Object::Reference(id) => *id = moved.get(id).copied().unwrap_or(unresolved),
-        Object::Array(items) => {
-            for item in items {
-                remap_object(item, moved, unresolved);
-            }
-        }
-        Object::Dictionary(dictionary) => remap_dictionary(dictionary, moved, unresolved),
-        Object::Stream(stream) => remap_dictionary(&mut stream.dict, moved, unresolved),
-        _ => {}
-    }
-}
-
-fn remap_dictionary(
-    dictionary: &mut Dictionary,
-    moved: &BTreeMap<ObjectId, ObjectId>,
-    unresolved: ObjectId,
+/// Calls `rewrite` on every reference inside `roots`. Walks with a stack
+/// rather than recursion: a deeply nested array would otherwise overflow the
+/// wasm stack, which is a trap rather than an error.
+pub(crate) fn rewrite_references<'a>(
+    roots: impl IntoIterator<Item = &'a mut Object>,
+    mut rewrite: impl FnMut(&mut ObjectId),
 ) {
-    for (_, value) in dictionary.iter_mut() {
-        remap_object(value, moved, unresolved);
+    let mut pending = roots.into_iter().collect::<Vec<_>>();
+    while let Some(object) = pending.pop() {
+        match object {
+            Object::Reference(id) => rewrite(id),
+            Object::Array(items) => pending.extend(items.iter_mut()),
+            Object::Dictionary(dictionary) => {
+                pending.extend(dictionary.iter_mut().map(|(_, value)| value))
+            }
+            Object::Stream(stream) => {
+                pending.extend(stream.dict.iter_mut().map(|(_, value)| value))
+            }
+            _ => {}
+        }
     }
 }
 
@@ -794,8 +1000,6 @@ const PASSWORD_PADDING: [u8; 32] = [
 ];
 
 fn recover_user_password(document: &Document, owner: &[u8], revision: i64) -> Option<Vec<u8>> {
-    use md5::{Digest, Md5};
-
     let encrypt = document.get_encrypted().ok()?;
     let owner_value = encrypt.get(b"O").ok()?.as_str().ok()?.get(..32)?;
     let key_length = if revision == 2 {
@@ -858,15 +1062,19 @@ fn write_document(mut document: Document) -> Result<Vec<u8>, String> {
     // Collects each input's superseded catalog and page tree nodes, along with
     // the outline items and name trees that only those referenced.
     document.prune_objects();
+    share_identical_objects(&mut document);
     // Compacts the ids pruning left gaps in. Not lopdf's `renumber_objects()`:
     // it would slide a real object onto the id `renumber()` reserved for
     // references to missing objects, and those would then resolve to it.
     renumber(&mut document, 1);
     document.compress();
 
+    // Packed only, unlike `write_compressed`, which also writes a plain copy and
+    // keeps the smaller: that clones the document, and merges are where inputs
+    // are largest.
     let mut bytes = Vec::new();
     document
-        .save_to(&mut bytes)
+        .save_with_options(&mut bytes, packed_options())
         .map_err(|error| format!("The PDF could not be created: {error}"))?;
     Ok(bytes)
 }

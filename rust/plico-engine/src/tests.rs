@@ -330,12 +330,13 @@ fn drops_unreachable_objects() {
         .iter()
         .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
         .collect::<BTreeMap<_, _>>();
-    // startxref reaches the cross-reference stream, not the object graph, so
-    // the reader always leaves that one looking unreferenced.
+    // startxref reaches the cross-reference stream, not the object graph, and
+    // the reader keeps the object streams it unpacked, so those always look
+    // unreferenced.
     let leaked = document
         .prune_objects()
         .into_iter()
-        .filter(|id| types[id] != b"XRef")
+        .filter(|id| !matches!(types[id].as_slice(), b"XRef" | b"ObjStm"))
         .collect::<Vec<_>>();
 
     assert!(leaked.is_empty(), "unreachable objects kept: {leaked:?}");
@@ -563,7 +564,7 @@ fn split_output_drops_unreachable_pages_and_objects() {
     let leaked = document
         .prune_objects()
         .into_iter()
-        .filter(|id| types[id] != b"XRef")
+        .filter(|id| !matches!(types[id].as_slice(), b"XRef" | b"ObjStm"))
         .collect::<Vec<_>>();
 
     assert_eq!(page_contents(&outputs[0]), ["3"]);
@@ -4399,4 +4400,557 @@ fn redaction_reads_cids_an_encoding_cmap_gives_with_bfchar() {
     // A at 50, B (CID 2, 10 points wide) at 55, the third code at 65.
     assert!((left(1) - 55.0).abs() < 0.01, "{}", left(1));
     assert!((left(2) - 65.0).abs() < 0.01, "{}", left(2));
+}
+
+fn annotation(page: u32, kind: crate::AnnotationKind<'static>) -> crate::Annotation<'static> {
+    crate::Annotation {
+        page,
+        kind,
+        color: [1.0, 0.0, 0.0],
+        opacity: 1.0,
+        comment: "",
+    }
+}
+
+/// The page's annotations as dictionaries, with each one's appearance content.
+fn page_annotations(bytes: &[u8], page: u32) -> Vec<(Dictionary, String)> {
+    let document = Document::load_mem(bytes).unwrap();
+    let page_id = document.get_pages()[&page];
+    let Ok(annotations) = document
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Annots")
+        .and_then(Object::as_array)
+    else {
+        return Vec::new();
+    };
+    annotations
+        .iter()
+        .map(|entry| {
+            let annotation = document
+                .get_dictionary(entry.as_reference().unwrap())
+                .unwrap()
+                .clone();
+            let normal = annotation
+                .get(b"AP")
+                .and_then(Object::as_dict)
+                .and_then(|appearance| appearance.get(b"N"))
+                .and_then(Object::as_reference)
+                .unwrap();
+            let stream = document.get_object(normal).unwrap().as_stream().unwrap();
+            let content = String::from_utf8_lossy(
+                &stream
+                    .decompressed_content()
+                    .unwrap_or(stream.content.clone()),
+            )
+            .into_owned();
+            assert_eq!(
+                floats(stream.dict.get(b"BBox").unwrap()),
+                floats(annotation.get(b"Rect").unwrap()),
+                "the appearance would be fitted rather than drawn as written"
+            );
+            (annotation, content)
+        })
+        .collect()
+}
+
+fn floats(value: &Object) -> Vec<f32> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item.as_float().unwrap())
+        .collect()
+}
+
+fn subtype(annotation: &Dictionary) -> String {
+    String::from_utf8_lossy(annotation.get(b"Subtype").unwrap().as_name().unwrap()).into_owned()
+}
+
+#[test]
+fn annotates_with_appearances_placed_where_the_reader_points() {
+    use crate::{AnnotationKind, Markup, Shape};
+    let input = pdf_with_pages(&[("0 0 m", square_page(200))], dictionary! {});
+    let output = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[
+            annotation(
+                1,
+                AnnotationKind::Markup {
+                    style: Markup::Highlight,
+                    boxes: vec![[0.1, 0.1, 0.5, 0.2]],
+                },
+            ),
+            annotation(
+                1,
+                AnnotationKind::Shape {
+                    shape: Shape::Rectangle,
+                    area: [0.5, 0.5, 1.0, 1.0],
+                    width: 2.0,
+                    fill: None,
+                },
+            ),
+            annotation(
+                1,
+                AnnotationKind::Ink {
+                    strokes: vec![vec![[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]]],
+                    width: 4.0,
+                },
+            ),
+        ],
+        &[],
+        false,
+    )
+    .unwrap();
+    let annotations = page_annotations(&output, 1);
+    assert_eq!(
+        annotations
+            .iter()
+            .map(|(found, _)| subtype(found))
+            .collect::<Vec<_>>(),
+        ["Highlight", "Square", "Ink"]
+    );
+    let (highlight, content) = &annotations[0];
+    assert_box(
+        floats(highlight.get(b"Rect").unwrap()).try_into().ok(),
+        [20.0, 160.0, 100.0, 180.0],
+    );
+    // Upper left, upper right, lower left, lower right.
+    assert_eq!(
+        floats(highlight.get(b"QuadPoints").unwrap()),
+        [20.0, 180.0, 100.0, 180.0, 20.0, 160.0, 100.0, 160.0]
+    );
+    assert!(content.contains("20 160 80 20 re"), "{content}");
+    assert_eq!(highlight.get(b"F").unwrap().as_i64().unwrap(), 4);
+    let (square, content) = &annotations[1];
+    assert_box(
+        floats(square.get(b"Rect").unwrap()).try_into().ok(),
+        [100.0, 0.0, 200.0, 100.0],
+    );
+    // The border sits inside the box.
+    assert!(content.contains("101 1 98 98 re"), "{content}");
+    let (ink, _) = &annotations[2];
+    assert_eq!(
+        floats(&ink.get(b"InkList").unwrap().as_array().unwrap()[0]),
+        [0.0, 200.0, 100.0, 100.0, 200.0, 200.0]
+    );
+    assert_box(
+        floats(ink.get(b"Rect").unwrap()).try_into().ok(),
+        [-2.0, 98.0, 202.0, 202.0],
+    );
+    assert!(page_contents(&output)[0].contains("0 0 m"));
+}
+
+#[test]
+fn annotates_the_spot_the_reader_sees_on_a_turned_page() {
+    use crate::AnnotationKind;
+    let input = pdf_with_pages(
+        &[(
+            "",
+            dictionary! {
+                "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()],
+                "Rotate" => 90,
+            },
+        )],
+        dictionary! {},
+    );
+    // Seen turned, the page is 400 by 200 and its top left is the page's own
+    // bottom left.
+    let output = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[annotation(
+            1,
+            AnnotationKind::Line {
+                from: [0.0, 0.0],
+                to: [0.25, 0.0],
+                width: 1.0,
+                arrow: false,
+            },
+        )],
+        &[],
+        false,
+    )
+    .unwrap();
+    let (line, content) = &page_annotations(&output, 1)[0];
+    assert_eq!(floats(line.get(b"L").unwrap()), [0.0, 0.0, 0.0, 100.0]);
+    // Drawn through the frame, so the appearance turns with the page.
+    assert!(content.contains("0 1 -1 0 200 0 cm"), "{content}");
+}
+
+#[test]
+fn text_boxes_wrap_in_the_box_and_keep_their_font() {
+    use crate::{AnnotationKind, FontFamily};
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    let output = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[crate::Annotation {
+            comment: "Résumé",
+            ..annotation(
+                1,
+                AnnotationKind::Text {
+                    // 60 points wide, so 56 inside the padding.
+                    area: [0.0, 0.0, 0.3, 0.5],
+                    text: "Hello there world",
+                    family: FontFamily::Courier,
+                    bold: false,
+                    size: 10.0,
+                    fill: Some([1.0, 1.0, 0.0]),
+                },
+            )
+        }],
+        &[],
+        false,
+    )
+    .unwrap();
+    let (text, content) = &page_annotations(&output, 1)[0];
+    assert_eq!(subtype(text), "FreeText");
+    // Courier is 6 points a letter at 10 points: "Hello" fits, "Hello there"
+    // does not.
+    let lines = content.matches(" Tj").count();
+    assert_eq!(lines, 3, "{content}");
+    assert!(content.contains("<48656C6C6F> Tj"), "{content}");
+    assert_eq!(floats(text.get(b"C").unwrap()), [1.0, 1.0, 0.0]);
+    let comment = lopdf::decode_text_string(text.get(b"Contents").unwrap()).unwrap();
+    assert_eq!(comment, "Résumé");
+
+    let refused = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[annotation(
+            1,
+            AnnotationKind::Text {
+                area: [0.0, 0.0, 0.5, 0.5],
+                text: "日本",
+                family: FontFamily::Helvetica,
+                bold: false,
+                size: 10.0,
+                fill: None,
+            },
+        )],
+        &[],
+        false,
+    );
+    assert!(refused.unwrap_err().contains("“日”"));
+}
+
+#[test]
+fn wraps_long_words_inside_and_keeps_line_breaks() {
+    use crate::FontFamily;
+    let lines = crate::annotate::wrap("ab\n\nabcdefgh", FontFamily::Courier, false, 10.0, 30.0);
+    assert_eq!(
+        lines,
+        [
+            b"ab".to_vec(),
+            Vec::new(),
+            b"abcde".to_vec(),
+            b"fgh".to_vec()
+        ]
+    );
+}
+
+#[test]
+fn flattened_annotations_are_drawn_into_the_page() {
+    use crate::{AnnotationKind, Shape};
+    let input = pdf_with_pages(&[("0 0 m", square_page(200))], dictionary! {});
+    let ellipse = || {
+        annotation(
+            1,
+            AnnotationKind::Shape {
+                shape: Shape::Ellipse,
+                area: [0.0, 0.0, 0.5, 0.5],
+                width: 1.0,
+                fill: Some([0.0, 0.0, 1.0]),
+            },
+        )
+    };
+    let output = crate::annotate_pdf_bytes(&input, "", &[ellipse(), ellipse()], &[], true).unwrap();
+    assert!(page_annotations(&output, 1).is_empty());
+    let (_, drawing, _) = flattened_page(&output);
+    assert_eq!(drawing.matches("Do").count(), 2, "{drawing}");
+    assert!(page_contents(&output)[0].contains("0 0 m"));
+
+    let note = crate::Annotation {
+        comment: "Look",
+        ..annotation(1, AnnotationKind::Note { at: [0.5, 0.5] })
+    };
+    assert!(crate::annotate_pdf_bytes(&input, "", &[note], &[], true).is_err());
+}
+
+#[test]
+fn notes_images_and_translucent_marks_are_annotations_readers_open() {
+    use crate::AnnotationKind;
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    let output = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[
+            crate::Annotation {
+                comment: "Check this",
+                opacity: 0.5,
+                ..annotation(1, AnnotationKind::Note { at: [0.95, 0.0] })
+            },
+            annotation(
+                1,
+                AnnotationKind::Image {
+                    place: [0.5, 0.5, 0.5],
+                    bytes: Box::leak(rgba_png().into_boxed_slice()),
+                },
+            ),
+        ],
+        &[],
+        false,
+    )
+    .unwrap();
+    let annotations = page_annotations(&output, 1);
+    let (note, content) = &annotations[0];
+    assert_eq!(subtype(note), "Text");
+    // Pulled back onto the page.
+    assert_box(
+        floats(note.get(b"Rect").unwrap()).try_into().ok(),
+        [180.0, 180.0, 200.0, 200.0],
+    );
+    assert_eq!(note.get(b"CA").unwrap().as_float().unwrap(), 0.5);
+    assert!(content.contains("/G0 gs"), "{content}");
+    let (image, _) = &annotations[1];
+    assert_eq!(subtype(image), "Stamp");
+    // Twice as wide as tall.
+    assert_box(
+        floats(image.get(b"Rect").unwrap()).try_into().ok(),
+        [100.0, 50.0, 200.0, 100.0],
+    );
+    assert!(Document::load_mem(&output).unwrap().version.as_str() >= "1.4");
+}
+
+#[test]
+fn annotate_rejects_what_is_off_the_page() {
+    use crate::AnnotationKind;
+    let input = numbered_pdf(1);
+    let off = annotation(
+        1,
+        AnnotationKind::Markup {
+            style: crate::Markup::Underline,
+            boxes: vec![[0.5, 0.5, 1.5, 0.6]],
+        },
+    );
+    assert!(crate::annotate_pdf_bytes(&input, "", &[off], &[], false).is_err());
+    let missing_page = annotation(2, AnnotationKind::Note { at: [0.0, 0.0] });
+    assert!(crate::annotate_pdf_bytes(&input, "", &[missing_page], &[], false).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[], false).is_err());
+}
+
+#[test]
+fn objects_added_in_place_never_answer_a_reference_to_a_missing_one() {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let content_id = document.add_object(Stream::new(dictionary! {}, b"0 0 m".to_vec()));
+    let page_id = document.new_object_id();
+    // Two past the last object: the /Size lopdf writes already covers the
+    // one after it, so this is the first id an object added after loading
+    // takes.
+    let missing = (document.max_id + 2, 0);
+    let popup_id = document.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Popup",
+        "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+        "Parent" => missing,
+    });
+    let missing = (document.max_id + 1, 0);
+    document
+        .get_dictionary_mut(popup_id)
+        .unwrap()
+        .set("Parent", missing);
+    document.objects.insert(
+        page_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            "Contents" => content_id,
+            "Annots" => vec![popup_id.into()],
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Count" => 1,
+            "Kids" => vec![page_id.into()],
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog_id);
+    // Two past the last object: the /Size lopdf writes already covers the
+    // one after it, so this is the first id an object added after loading
+    // takes.
+    let missing = (document.max_id + 2, 0);
+    document
+        .get_dictionary_mut(popup_id)
+        .unwrap()
+        .set("Parent", missing);
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+
+    let output = crate::annotate_pdf_bytes(
+        &input,
+        "",
+        &[crate::Annotation {
+            comment: "Note",
+            ..annotation(1, crate::AnnotationKind::Note { at: [0.0, 0.0] })
+        }],
+        &[],
+        false,
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let parents = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .filter(|dictionary| {
+            dictionary.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Popup")
+        })
+        .filter_map(|popup| popup.get(b"Parent").and_then(Object::as_reference).ok())
+        .collect::<Vec<_>>();
+    assert_eq!(parents.len(), 1);
+    assert!(
+        document.get_object(parents[0]).is_err(),
+        "the popup's missing parent became {:?}",
+        document.get_object(parents[0])
+    );
+}
+
+#[test]
+fn annotate_deletes_existing_annotations_with_their_popups_and_fields() {
+    let (input, _) = annotated_pdf(vec![square([10, 10, 60, 40])], None, dictionary! {});
+    let document = Document::load_mem(&input).unwrap();
+    let page_id = document.get_pages()[&1];
+    let existing = document
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Annots")
+        .and_then(Object::as_array)
+        .unwrap()[0]
+        .as_reference()
+        .unwrap();
+    let output = crate::annotate_pdf_bytes(&input, "", &[], &[existing], false).unwrap();
+    assert!(page_annotations(&output, 1).is_empty());
+    assert!(page_contents(&output)[0].contains("0 0 m"));
+    // An id that is not an annotation on any page.
+    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[(9_999, 0)], false).is_err());
+}
+
+#[test]
+fn merging_copies_of_one_document_stores_their_shared_objects_once() {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let program = document.add_object(Stream::new(dictionary! {}, vec![7; 4_000]));
+    let descriptor = document.add_object(dictionary! {
+        "Type" => "FontDescriptor",
+        "FontName" => "Example",
+        "FontFile2" => program,
+    });
+    let font = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "TrueType",
+        "BaseFont" => "Example",
+        "FontDescriptor" => descriptor,
+    });
+    let content = document.add_object(Stream::new(dictionary! {}, b"BT /F1 9 Tf ET".to_vec()));
+    let page = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => content,
+    });
+    // Direct resources on the tree node, which every page inherits.
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Count" => 1,
+            "Kids" => vec![page.into()],
+            "MediaBox" => vec![0.into(), 0.into(), 100.into(), 100.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+
+    let output = merge_pdf_bytes(&[&input, &input, &input]).unwrap();
+    let merged = Document::load_mem(&output).unwrap();
+    let count = |kind: &[u8]| {
+        merged
+            .objects
+            .values()
+            .filter(|object| {
+                object
+                    .as_dict()
+                    .ok()
+                    .and_then(|dictionary| dictionary.get(b"Type").ok())
+                    .and_then(|value| value.as_name().ok())
+                    == Some(kind)
+            })
+            .count()
+    };
+    assert_eq!(count(b"Font"), 1);
+    assert_eq!(count(b"FontDescriptor"), 1);
+    let programs = merged
+        .objects
+        .values()
+        .filter(|object| {
+            object.as_stream().is_ok_and(|stream| {
+                stream
+                    .decompressed_content()
+                    .unwrap_or(stream.content.clone())
+                    .len()
+                    == 4_000
+            })
+        })
+        .count();
+    assert_eq!(programs, 1);
+    // Pages are never shared, however alike, and each still finds its font.
+    let pages = merged.get_pages();
+    assert_eq!(pages.len(), 3);
+    for page in pages.values() {
+        let resources = merged
+            .get_dictionary(*page)
+            .unwrap()
+            .get(b"Resources")
+            .and_then(Object::as_reference)
+            .and_then(|id| merged.get_dictionary(id))
+            .unwrap();
+        assert!(resources.get(b"Font").is_ok());
+    }
+}
+
+#[test]
+fn inherited_resources_are_shared_by_reference_not_copied_onto_each_page() {
+    let input = pdf_with_pages(
+        &[("0 0 m", dictionary! {}), ("1 1 m", dictionary! {})],
+        dictionary! {
+            "MediaBox" => vec![0.into(), 0.into(), 100.into(), 100.into()],
+            "Resources" => dictionary! { "ProcSet" => vec![Object::Name(b"PDF".to_vec())] },
+        },
+    );
+    let output = merge_pdf_bytes(&[&input, &one_page_pdf("x")]).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let references = document
+        .get_pages()
+        .values()
+        .take(2)
+        .map(|&page| {
+            document
+                .get_dictionary(page)
+                .unwrap()
+                .get(b"Resources")
+                .unwrap()
+                .as_reference()
+                .expect("the resources were copied by value")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(references[0], references[1]);
 }

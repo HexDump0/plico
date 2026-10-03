@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
-use crate::documents::{MAX_DECOMPRESSED_STREAM, load_document};
+use crate::documents::{MAX_DECOMPRESSED_STREAM, load_document, share_identical_objects};
 use flate2::{Compression, write::ZlibEncoder};
 use lopdf::{Dictionary, Document, Object, ObjectId, SaveOptions};
 
@@ -55,7 +54,7 @@ pub fn compress_pdf_bytes_with_password(
             options.max_image_dimension,
         );
     }
-    deduplicate_streams(&mut document);
+    share_identical_objects(&mut document);
     document.prune_objects();
 
     let output = write_compressed(document)?;
@@ -72,18 +71,23 @@ pub fn compress_pdf_bytes_with_password(
     }
 }
 
-pub(crate) fn write_compressed(mut document: Document) -> Result<Vec<u8>, String> {
-    // Object streams pack non-stream objects (page dictionaries, annotations,
-    // font metadata) into one compressed blob, the main size win after stream
-    // recompression. Object streams need PDF 1.5; the writer raises the header
-    // version itself. For small documents the added structure can outweigh the
-    // savings, so both layouts are written and the smaller one ships.
-    let modern = SaveOptions::builder()
+/// Object streams pack non-stream objects (page dictionaries, annotations,
+/// font metadata) into one compressed blob. They need PDF 1.5; the writer
+/// raises the header version itself.
+pub(crate) fn packed_options() -> SaveOptions {
+    SaveOptions::builder()
         .use_object_streams(true)
         .use_xref_streams(true)
         .max_objects_per_stream(200)
         .compression_level(9)
-        .build();
+        .build()
+}
+
+pub(crate) fn write_compressed(mut document: Document) -> Result<Vec<u8>, String> {
+    // Object streams are the main size win after stream recompression, but for
+    // small documents the added structure can outweigh the savings, so both
+    // layouts are written and the smaller one ships.
+    let modern = packed_options();
 
     let mut packed = Vec::new();
     let mut plain = Vec::new();
@@ -200,128 +204,5 @@ pub(crate) fn filter_matches(dict: &Dictionary, name: &[u8]) -> bool {
             items.len() == 1 && items[0].as_name().is_ok_and(|filter| filter == name)
         }
         _ => false,
-    }
-}
-
-/// Finds stream objects with identical dictionary attributes (ignoring /Length)
-/// and identical content bytes, replacing references to redundant copies with
-/// a single canonical object id.
-fn deduplicate_streams(document: &mut Document) -> usize {
-    let stream_ids: Vec<ObjectId> = document
-        .objects
-        .iter()
-        .filter_map(|(id, object)| {
-            let Object::Stream(stream) = object else {
-                return None;
-            };
-            if stream
-                .dict
-                .get(b"Type")
-                .and_then(Object::as_name)
-                .is_ok_and(|name| name == b"ObjStm" || name == b"XRef")
-            {
-                return None;
-            }
-            Some(*id)
-        })
-        .collect();
-
-    let mut by_len: BTreeMap<usize, Vec<ObjectId>> = BTreeMap::new();
-    for id in stream_ids {
-        if let Some(Object::Stream(stream)) = document.objects.get(&id) {
-            by_len.entry(stream.content.len()).or_default().push(id);
-        }
-    }
-
-    let mut replacements: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
-    for (_len, group) in by_len {
-        if group.len() < 2 {
-            continue;
-        }
-        let mut canonical: Vec<ObjectId> = Vec::new();
-        for id in group {
-            let Some(Object::Stream(current)) = document.objects.get(&id) else {
-                continue;
-            };
-            let mut found_canon = None;
-            for &canon_id in &canonical {
-                let Some(Object::Stream(canon)) = document.objects.get(&canon_id) else {
-                    continue;
-                };
-                if current.content == canon.content
-                    && stream_dicts_match(&current.dict, &canon.dict)
-                {
-                    found_canon = Some(canon_id);
-                    break;
-                }
-            }
-            if let Some(target) = found_canon {
-                replacements.insert(id, target);
-            } else {
-                canonical.push(id);
-            }
-        }
-    }
-
-    if replacements.is_empty() {
-        return 0;
-    }
-
-    let count = replacements.len();
-    for object in document.objects.values_mut() {
-        replace_references(object, &replacements);
-    }
-    replace_references_in_dict(&mut document.trailer, &replacements);
-
-    for id in replacements.keys() {
-        document.objects.remove(id);
-    }
-
-    count
-}
-
-fn stream_dicts_match(a: &Dictionary, b: &Dictionary) -> bool {
-    let a_keys: BTreeSet<_> = a
-        .iter()
-        .map(|(k, _)| k.as_slice())
-        .filter(|k| *k != b"Length")
-        .collect();
-    let b_keys: BTreeSet<_> = b
-        .iter()
-        .map(|(k, _)| k.as_slice())
-        .filter(|k| *k != b"Length")
-        .collect();
-    if a_keys != b_keys {
-        return false;
-    }
-    for key in a_keys {
-        if a.get(key).ok() != b.get(key).ok() {
-            return false;
-        }
-    }
-    true
-}
-
-fn replace_references(object: &mut Object, replacements: &BTreeMap<ObjectId, ObjectId>) {
-    match object {
-        Object::Reference(id) => {
-            if let Some(target) = replacements.get(id) {
-                *id = *target;
-            }
-        }
-        Object::Array(items) => {
-            for item in items {
-                replace_references(item, replacements);
-            }
-        }
-        Object::Dictionary(dict) => replace_references_in_dict(dict, replacements),
-        Object::Stream(stream) => replace_references_in_dict(&mut stream.dict, replacements),
-        _ => {}
-    }
-}
-
-fn replace_references_in_dict(dict: &mut Dictionary, replacements: &BTreeMap<ObjectId, ObjectId>) {
-    for (_, value) in dict.iter_mut() {
-        replace_references(value, replacements);
     }
 }

@@ -548,7 +548,7 @@ fn matrix(values: [f32; 6]) -> String {
         .join(" ")
 }
 
-fn set_annotations(
+pub(crate) fn set_annotations(
     document: &mut Document,
     page_id: ObjectId,
     remaining: Vec<Object>,

@@ -15,6 +15,7 @@ import init, {
 	protect_pdf,
 	add_page_numbers,
 	add_watermark,
+	annotate_pdf,
 	crop_pdf,
 	flatten_pdf,
 	sign_pdf,
@@ -23,6 +24,7 @@ import init, {
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
 import type {
+	AnnotateOptions,
 	CropOptions,
 	PageGlyphs,
 	PdfImageOptions,
@@ -38,6 +40,84 @@ const ready = init();
 const fontIndex = { helvetica: 0, times: 1, courier: 2 } as const;
 
 type PackedOutput = PdfOutput;
+
+const annotationKind = {
+	highlight: 0,
+	underline: 1,
+	strikeout: 2,
+	squiggly: 3,
+	ink: 4,
+	rectangle: 5,
+	ellipse: 6,
+	line: 7,
+	arrow: 8,
+	text: 9,
+	note: 10,
+	image: 11
+} as const;
+
+const NO_FILL = 0xffffffff;
+
+/// Packs annotations into the flat arrays `annotate_pdf` takes.
+function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptions) {
+	const { annotations } = options;
+	const points = annotations.map((annotation): number[] => {
+		switch (annotation.kind) {
+			case 'ink':
+				return annotation.strokes.flatMap((stroke, index) => [
+					...(index ? [NaN, NaN] : []),
+					...stroke.flat()
+				]);
+			case 'line':
+			case 'arrow':
+				return [...annotation.from, ...annotation.to];
+			case 'rectangle':
+			case 'ellipse':
+			case 'text':
+				return annotation.area;
+			case 'note':
+				return annotation.at;
+			case 'image':
+				return annotation.place;
+			default:
+				return annotation.boxes.flat();
+		}
+	});
+	const images = annotations.flatMap((annotation) =>
+		annotation.kind === 'image' ? [new Uint8Array(files[1 + annotation.image])] : []
+	);
+	const imageBytes = new Uint8Array(images.reduce((total, image) => total + image.length, 0));
+	let offset = 0;
+	for (const image of images) {
+		imageBytes.set(image, offset);
+		offset += image.length;
+	}
+	return annotate_pdf(
+		new Uint8Array(files[0]),
+		password,
+		Uint8Array.from(annotations, (annotation) => annotationKind[annotation.kind]),
+		Uint32Array.from(annotations, (annotation) => annotation.page),
+		Uint32Array.from(annotations, (annotation) => annotation.color),
+		Float32Array.from(annotations, (annotation) => annotation.opacity),
+		Float32Array.from(annotations, (annotation) =>
+			annotation.kind === 'text' ? annotation.size : 'width' in annotation ? annotation.width : 0
+		),
+		Uint32Array.from(annotations, (annotation) =>
+			'fill' in annotation && annotation.fill !== null ? annotation.fill : NO_FILL
+		),
+		Uint8Array.from(annotations, (annotation) =>
+			annotation.kind === 'text' ? fontIndex[annotation.family] * 2 + Number(annotation.bold) : 0
+		),
+		Uint32Array.from(points, (values) => values.length),
+		Float32Array.from(points.flat()),
+		annotations.map((annotation) => (annotation.kind === 'text' ? annotation.text : '')),
+		annotations.map((annotation) => annotation.comment),
+		imageBytes,
+		Uint32Array.from(images, (image) => image.length),
+		Uint32Array.from(options.remove),
+		options.flatten
+	);
+}
 
 function packageOutputs(
 	parts: Uint8Array[],
@@ -496,6 +576,13 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				request.formsOnly
 			) as [Uint8Array, number];
 			postOutput(id, { format: 'pdf', bytes }, kept);
+			return;
+		}
+		if (request.operation === 'annotate') {
+			postOutput(id, {
+				format: 'pdf',
+				bytes: annotate(request.files, request.passwords[0] ?? '', request.options)
+			});
 			return;
 		}
 		if (request.operation === 'sign') {

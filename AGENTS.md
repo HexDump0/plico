@@ -19,6 +19,7 @@ rust/plico-engine/src/security.rs                           protect, unlock, and
 rust/plico-engine/src/stamps.rs                             page numbers, watermarks and signatures drawn onto existing pages
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
+rust/plico-engine/src/annotate.rs                           annotations with stored appearances, or drawn into pages
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
 rust/plico-engine/src/redact/content.rs                     content stream rewriting that removes what lies under a box
@@ -85,7 +86,7 @@ npm run test:corpus
 ```
 
 Current baseline on that corpus: 982 files, 49 that lopdf will not load at all,
-9 needing a real password, 924 merged and checked, output at 87.1% of input size.
+9 needing a real password, 924 merged and checked, output at 77.3% of input size.
 If your change moves any of those numbers, say so.
 
 The raster harness is currently red on 9 files. Do not be surprised by that; it
@@ -178,6 +179,15 @@ renumbering. Lay a stamp or a crop out in the page's visible frame, which is
 the page left open, or the stamp is drawn through the page's last transform.
 Never add to `/Resources` other pages share; give the page its own shallow copy.
 
+Annotating edits pages in place too. Each appearance's `/BBox` is its
+annotation's `/Rect` in page space, with the content turned into the frame
+inside it, so readers draw it without fitting and it holds on turned pages.
+
+New objects never take an id something already references. lopdf numbers
+them from `max_id`, which only counts objects that exist, so a dangling
+reference would come to name whatever was added next. `load_document` raises
+`max_id` past every referenced id for that reason.
+
 ## lopdf notes
 
 Pinned at 0.44 with `default-features = false, features = ["wasm_js"]`.
@@ -186,8 +196,9 @@ Pinned at 0.44 with `default-features = false, features = ["wasm_js"]`.
 page order matches id order. The engine no longer depends on that, and should
 not start.
 
-`save_to` already writes a cross-reference _stream_, not a classic table. Object
-streams are the remaining size win and live behind `save_modern()`.
+Every tool writes object streams. Merge, Split and Organize write them only
+(`write_document`); the in-place tools and Compress also write a plain copy
+and keep the smaller (`write_compressed`), which clones the document.
 
 `Stream::compress` only acts when `/Filter` is absent, so already-compressed
 streams are not touched. Most real streams arrive compressed, which means merge
@@ -198,9 +209,10 @@ cycles are collected.
 
 There is no helper for inherited attributes. That is on us.
 
-When a merged file is reloaded, the cross-reference stream object looks
-unreferenced, because `startxref` reaches it rather than the object graph. Filter
-`/Type /XRef` out before asserting that nothing leaked.
+When an output is reloaded, the cross-reference stream looks unreferenced,
+because `startxref` reaches it rather than the object graph, and so do the
+object streams lopdf unpacked. Filter `/Type /XRef` and `/Type /ObjStm` out
+before asserting that nothing leaked.
 
 ## Conventions
 

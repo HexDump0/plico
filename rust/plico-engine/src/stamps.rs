@@ -7,7 +7,9 @@
 
 mod standard_fonts;
 
-pub(crate) use standard_fonts::{standard_width, win_ansi_char};
+pub(crate) use standard_fonts::{
+    base_font, cap_height, standard_width, text_width, win_ansi, win_ansi_char,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -116,7 +118,7 @@ pub struct WatermarkOptions<'a> {
 const MAX_TILES: usize = 1_000;
 
 /// Line spacing, as a multiple of the font size.
-const LEADING: f32 = 1.2;
+pub(crate) const LEADING: f32 = 1.2;
 
 pub fn add_page_numbers_bytes(
     input: &[u8],
@@ -320,7 +322,7 @@ pub fn add_signature_bytes(
     finish(document, 1.0)
 }
 
-fn check_style(style: &TextStyle) -> Result<(), String> {
+pub(crate) fn check_style(style: &TextStyle) -> Result<(), String> {
     if !(1.0..=1_000.0).contains(&style.size) {
         return Err("Choose a text size between 1 and 1,000 points.".into());
     }
@@ -965,11 +967,11 @@ fn open_states(document: &Document, page_id: ObjectId) -> usize {
         })
 }
 
-fn matrix(values: [f32; 6]) -> String {
+pub(crate) fn matrix(values: [f32; 6]) -> String {
     values.map(number).join(" ")
 }
 
-fn number(value: f32) -> String {
+pub(crate) fn number(value: f32) -> String {
     let text = format!("{value:.4}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
     match text {

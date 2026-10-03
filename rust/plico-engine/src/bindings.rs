@@ -2,13 +2,14 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop, PageImage,
-    PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions, Protection,
-    RedactOptions, Redacted, Redaction, SignaturePlacement, SplitMode, StandardFont, TextStyle,
-    Unremovable, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
-    add_watermark_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
-    flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items,
-    page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes, split_pdf_bytes_with_password,
+    Annotation, AnnotationKind, CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, Markup,
+    OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
+    ProtectOptions, Protection, RedactOptions, Redacted, Redaction, Shape, SignaturePlacement,
+    SplitMode, StandardFont, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, annotate_pdf_bytes,
+    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, flatten_pdf_bytes,
+    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, page_texts,
+    protect_pdf_bytes, protection_of, redact_pdf_bytes, split_pdf_bytes_with_password,
     standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
@@ -583,4 +584,169 @@ pub fn redaction_text(input: &[u8], password: &str) -> Result<Array, JsValue> {
         result.push(&entry);
     }
     Ok(result)
+}
+
+/// Sets an annotation's `fill` to nothing.
+const NO_FILL: u32 = u32::MAX;
+
+/// Adds annotations, one per entry of `kinds`: 0 highlight, 1 underline,
+/// 2 strike out, 3 squiggly, 4 ink, 5 rectangle, 6 ellipse, 7 line, 8 arrow,
+/// 9 text box, 10 note, 11 image. Each takes `lengths[i]` numbers from
+/// `points`, fractions of the page as displayed from its top left: four per
+/// box for markup, x and y pairs for ink with a NaN pair between strokes,
+/// a box for shapes and text, two points for lines, a point for notes, and
+/// left, top and width for images. `colors` and `fills` are 0xRRGGBB, with
+/// `fills` 0xFFFFFFFF for none. `sizes` is the stroke width in points, or the
+/// font size for text. `fonts` is the family (0 Helvetica, 1 Times, 2
+/// Courier) times two, plus one for bold. `texts` and `comments` hold one
+/// string each. Images take their bytes from `images` in order, split by
+/// `image_lengths`. `remove` deletes the annotations already in the file with
+/// those object numbers (pdf.js reports them as "41R"). `flatten` draws
+/// everything into the pages instead.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn annotate_pdf(
+    input: &[u8],
+    password: &str,
+    kinds: &[u8],
+    pages: &[u32],
+    colors: &[u32],
+    opacities: &[f32],
+    sizes: &[f32],
+    fills: &[u32],
+    fonts: &[u8],
+    lengths: &[u32],
+    points: &[f32],
+    texts: Vec<String>,
+    comments: Vec<String>,
+    images: &[u8],
+    image_lengths: &[u32],
+    remove: &[u32],
+    flatten: bool,
+) -> Result<Vec<u8>, JsValue> {
+    let count = kinds.len();
+    let incomplete = || JsValue::from_str("An annotation is incomplete.");
+    if [
+        pages.len(),
+        colors.len(),
+        opacities.len(),
+        sizes.len(),
+        fills.len(),
+        fonts.len(),
+        lengths.len(),
+        texts.len(),
+        comments.len(),
+    ]
+    .iter()
+    .any(|&length| length != count)
+        || lengths.iter().map(|&length| length as usize).sum::<usize>() != points.len()
+        || image_lengths
+            .iter()
+            .map(|&length| length as usize)
+            .sum::<usize>()
+            != images.len()
+    {
+        return Err(incomplete());
+    }
+    let rgb = |color: u32| [16, 8, 0].map(|shift| ((color >> shift) & 0xFF) as f32 / 255.0);
+    let (mut offset, mut image_offset, mut image_index) = (0, 0, 0);
+    let mut annotations = Vec::with_capacity(count);
+    for index in 0..count {
+        let values = &points[offset..offset + lengths[index] as usize];
+        offset += values.len();
+        let size = sizes[index];
+        let fill = (fills[index] != NO_FILL).then(|| rgb(fills[index]));
+        let pair = |values: &[f32]| <[f32; 2]>::try_from(values).map_err(|_| incomplete());
+        let quad = |values: &[f32]| <[f32; 4]>::try_from(values).map_err(|_| incomplete());
+        let kind = match kinds[index] {
+            kind @ 0..=3 => {
+                let (boxes, remainder) = values.as_chunks::<4>();
+                if boxes.is_empty() || !remainder.is_empty() {
+                    return Err(incomplete());
+                }
+                AnnotationKind::Markup {
+                    style: [
+                        Markup::Highlight,
+                        Markup::Underline,
+                        Markup::StrikeOut,
+                        Markup::Squiggly,
+                    ][kind as usize],
+                    boxes: boxes.to_vec(),
+                }
+            }
+            4 => {
+                let (pairs, remainder) = values.as_chunks::<2>();
+                if !remainder.is_empty() {
+                    return Err(incomplete());
+                }
+                let strokes = pairs
+                    .split(|point| point.iter().any(|value| value.is_nan()))
+                    .filter(|stroke| !stroke.is_empty())
+                    .map(<[_]>::to_vec)
+                    .collect();
+                AnnotationKind::Ink {
+                    strokes,
+                    width: size,
+                }
+            }
+            kind @ 5..=6 => AnnotationKind::Shape {
+                shape: if kind == 5 {
+                    Shape::Rectangle
+                } else {
+                    Shape::Ellipse
+                },
+                area: quad(values)?,
+                width: size,
+                fill,
+            },
+            kind @ 7..=8 => {
+                let [x0, y0, x1, y1] = quad(values)?;
+                AnnotationKind::Line {
+                    from: [x0, y0],
+                    to: [x1, y1],
+                    width: size,
+                    arrow: kind == 8,
+                }
+            }
+            9 => AnnotationKind::Text {
+                area: quad(values)?,
+                text: &texts[index],
+                family: match fonts[index] / 2 {
+                    1 => FontFamily::Times,
+                    2 => FontFamily::Courier,
+                    _ => FontFamily::Helvetica,
+                },
+                bold: fonts[index] % 2 == 1,
+                size,
+                fill,
+            },
+            10 => AnnotationKind::Note { at: pair(values)? },
+            11 => {
+                let length = *image_lengths.get(image_index).ok_or_else(incomplete)? as usize;
+                let bytes = &images[image_offset..image_offset + length];
+                image_offset += length;
+                image_index += 1;
+                let [left, top, width] = <[f32; 3]>::try_from(values).map_err(|_| incomplete())?;
+                AnnotationKind::Image {
+                    place: [left, top, width],
+                    bytes,
+                }
+            }
+            _ => {
+                return Err(JsValue::from_str(
+                    "This kind of annotation is not supported.",
+                ));
+            }
+        };
+        annotations.push(Annotation {
+            page: pages[index],
+            kind,
+            color: rgb(colors[index]),
+            opacity: opacities[index],
+            comment: &comments[index],
+        });
+    }
+    let remove = remove.iter().map(|&number| (number, 0)).collect::<Vec<_>>();
+    annotate_pdf_bytes(input, password, &annotations, &remove, flatten)
+        .map_err(|error| JsValue::from_str(&error))
 }

@@ -135,6 +135,14 @@ export type PdfWorkerRequest =
 	| { id: number; operation: 'redact-text'; files: ArrayBuffer[]; passwords: string[] }
 	| {
 			id: number;
+			operation: 'annotate';
+			// The PDF, then each image an annotation draws.
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: AnnotateOptions;
+	  }
+	| {
+			id: number;
 			operation: 'crop';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -227,6 +235,46 @@ export type CropOptions =
 /// edge, top edge and width as fractions of the page as displayed, from the
 /// top left. Its height follows from the image.
 export type SignOptions = { pages: number[]; place: [number, number, number] };
+
+/// A point as a fraction of the page as displayed, from its top left.
+export type PagePoint = [number, number];
+
+/// What an annotation draws. Boxes are left, top, right and bottom fractions
+/// like `CropArea`; widths and sizes are in points; fills are 0xRRGGBB or
+/// null. `image` indexes the images sent after the PDF.
+export type AnnotationMark =
+	| { kind: 'highlight' | 'underline' | 'strikeout' | 'squiggly'; boxes: CropArea[] }
+	| { kind: 'ink'; strokes: PagePoint[][]; width: number }
+	| { kind: 'rectangle' | 'ellipse'; area: CropArea; width: number; fill: number | null }
+	| { kind: 'line' | 'arrow'; from: PagePoint; to: PagePoint; width: number }
+	| {
+			kind: 'text';
+			area: CropArea;
+			text: string;
+			family: 'helvetica' | 'times' | 'courier';
+			bold: boolean;
+			size: number;
+			fill: number | null;
+	  }
+	| { kind: 'note'; at: PagePoint }
+	| { kind: 'image'; place: [number, number, number]; image: number };
+
+/// `color` is 0xRRGGBB; `comment` is what readers show when it is opened.
+export type PageAnnotation = AnnotationMark & {
+	page: number;
+	color: number;
+	opacity: number;
+	comment: string;
+};
+
+/// `remove` holds the object numbers of annotations already in the file to
+/// delete, as pdf.js reports them in `id` ("41R" is 41). `flatten` draws the
+/// annotations into the pages instead.
+export type AnnotateOptions = {
+	annotations: PageAnnotation[];
+	remove: number[];
+	flatten: boolean;
+};
 
 /// One redaction box: left, top, right and bottom as fractions of the page as
 /// displayed, from its top left.

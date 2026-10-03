@@ -92,11 +92,12 @@ fn unreachable_count(document: &mut Document) -> usize {
         .iter()
         .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
         .collect::<BTreeMap<_, _>>();
-    // startxref reaches the cross-reference stream, not the object graph.
+    // startxref reaches the cross-reference stream, not the object graph, and
+    // the reader keeps the object streams it unpacked.
     document
         .prune_objects()
         .into_iter()
-        .filter(|id| types[id] != b"XRef")
+        .filter(|id| !matches!(types[id].as_slice(), b"XRef" | b"ObjStm"))
         .count()
 }
 
