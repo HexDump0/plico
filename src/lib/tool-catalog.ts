@@ -53,6 +53,7 @@ const supportedToolIds = new Set([
 	'crop',
 	'sign',
 	'flatten',
+	'redact',
 	'organize',
 	'extract',
 	'remove',

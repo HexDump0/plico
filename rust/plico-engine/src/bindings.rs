@@ -2,13 +2,14 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop,
+    CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, OrganizeItem, PageCrop, PageImage,
     PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions, Protection,
-    SignaturePlacement, SplitMode, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
-    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, flatten_pdf_bytes,
-    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, protect_pdf_bytes,
-    protection_of, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
+    RedactOptions, Redacted, Redaction, SignaturePlacement, SplitMode, StandardFont, TextStyle,
+    Unremovable, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
+    add_watermark_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
+    flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items,
+    page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes, split_pdf_bytes_with_password,
+    standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -478,5 +479,108 @@ pub fn flatten_pdf(input: &[u8], password: &str, forms_only: bool) -> Result<Arr
     let result = Array::new();
     result.push(&Uint8Array::from(flattened.bytes.as_slice()));
     result.push(&JsValue::from(flattened.kept as u32));
+    Ok(result)
+}
+
+/// Redacts `areas` (left, top, right, bottom fractions, four per entry of
+/// `pages`) and paints them `color` (0xRRGGBB). `images` holds one JPG or PNG
+/// for each page in `image_pages`, drawn instead of that page.
+///
+/// Returns the PDF and the pages drawn from a picture, or, when some page
+/// needs a picture it was not given, `undefined`, those pages, and why each
+/// does: 0 for text in a font that cannot be measured, 1 for an image that
+/// cannot be decoded, 2 for content that cannot be read.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn redact_pdf(
+    input: &[u8],
+    password: &str,
+    pages: &[u32],
+    areas: &[f32],
+    color: u32,
+    remove_metadata: bool,
+    image_pages: &[u32],
+    images: Array,
+) -> Result<Array, JsValue> {
+    let (areas, remainder) = areas.as_chunks::<4>();
+    if !remainder.is_empty() || areas.len() != pages.len() {
+        return Err(JsValue::from_str("A redaction area is incomplete."));
+    }
+    let redactions = pages
+        .iter()
+        .zip(areas)
+        .map(|(&page, &area)| Redaction { page, area })
+        .collect::<Vec<_>>();
+    let pictures = images
+        .iter()
+        .map(|image| Uint8Array::new(&image).to_vec())
+        .collect::<Vec<_>>();
+    if pictures.len() != image_pages.len() {
+        return Err(JsValue::from_str("A page picture is missing."));
+    }
+    let page_images = image_pages
+        .iter()
+        .zip(&pictures)
+        .map(|(&page, image)| PageImage { page, image })
+        .collect::<Vec<_>>();
+    let channel = |shift: u32| ((color >> shift) & 0xFF) as f32 / 255.0;
+    let redacted = redact_pdf_bytes(
+        input,
+        password,
+        RedactOptions {
+            redactions: &redactions,
+            color: [channel(16), channel(8), channel(0)],
+            remove_metadata,
+            page_images: &page_images,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))?;
+    let result = Array::new();
+    match redacted {
+        Redacted::Done { bytes, imaged } => {
+            result.push(&Uint8Array::from(bytes.as_slice()));
+            result.push(&js_sys::Uint32Array::from(imaged.as_slice()));
+        }
+        Redacted::NeedsImages(needed) => {
+            let pages = needed.iter().map(|(page, _)| *page).collect::<Vec<_>>();
+            let reasons = needed
+                .iter()
+                .map(|(_, reason)| match reason {
+                    Unremovable::Text => 0u8,
+                    Unremovable::Image => 1,
+                    Unremovable::Content => 2,
+                })
+                .collect::<Vec<_>>();
+            result.push(&JsValue::UNDEFINED);
+            result.push(&js_sys::Uint32Array::from(pages.as_slice()));
+            result.push(&Uint8Array::from(reasons.as_slice()));
+        }
+    }
+    Ok(result)
+}
+
+/// Each page's glyphs as `[boxes, text, ends]`: four fractions per glyph as
+/// in `redact_pdf`, the page's text, and where each glyph's text ends in it,
+/// in UTF-16 units.
+#[wasm_bindgen]
+pub fn redaction_text(input: &[u8], password: &str) -> Result<Array, JsValue> {
+    let pages = page_texts(input, password).map_err(|error| JsValue::from_str(&error))?;
+    let result = Array::new();
+    for page in pages {
+        let boxes = page.boxes.concat();
+        let mut text = String::new();
+        let mut ends = Vec::with_capacity(page.text.len());
+        let mut length = 0u32;
+        for glyph in &page.text {
+            text.push_str(glyph);
+            length += glyph.encode_utf16().count() as u32;
+            ends.push(length);
+        }
+        let entry = Array::new();
+        entry.push(&js_sys::Float32Array::from(boxes.as_slice()));
+        entry.push(&JsValue::from_str(&text));
+        entry.push(&js_sys::Uint32Array::from(ends.as_slice()));
+        result.push(&entry);
+    }
     Ok(result)
 }

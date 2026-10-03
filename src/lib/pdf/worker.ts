@@ -17,15 +17,20 @@ import init, {
 	add_watermark,
 	crop_pdf,
 	flatten_pdf,
-	sign_pdf
+	sign_pdf,
+	redact_pdf,
+	redaction_text
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
 import type {
 	CropOptions,
+	PageGlyphs,
 	PdfImageOptions,
 	PdfOutput,
 	PdfWorkerRequest,
-	PdfWorkerResponse
+	PdfWorkerResponse,
+	PicturedPage,
+	RedactOptions
 } from './types';
 
 const ready = init();
@@ -186,6 +191,118 @@ async function trimmedAreas(
 	} finally {
 		await task.destroy();
 	}
+}
+
+/// Pictures of `pages` as the reader sees them, with their boxes painted in,
+/// for pages the engine cannot redact in place. Rendered at up to 300 DPI and
+/// written as whichever of PNG and JPEG is smaller: PNG for text and line
+/// art, JPEG for photographs.
+async function redactionPictures(
+	input: ArrayBuffer,
+	password: string,
+	pages: number[],
+	options: RedactOptions
+) {
+	if (typeof OffscreenCanvas === 'undefined') {
+		throw new Error('This browser cannot redact this PDF.');
+	}
+	const fill = `#${options.color.toString(16).padStart(6, '0')}`;
+	// pdf.js may take ownership of what it is given.
+	const task = await openPdf(input.slice(0), password);
+	try {
+		const pdf = await task.promise;
+		const pictures: Uint8Array[] = [];
+		for (const number of pages) {
+			const page = await pdf.getPage(number);
+			const size = page.getViewport({ scale: 1 });
+			const viewport = page.getViewport({
+				scale: Math.min(300 / 72, Math.sqrt(30_000_000 / (size.width * size.height)))
+			});
+			const canvas = new OffscreenCanvas(
+				Math.max(1, Math.ceil(viewport.width)),
+				Math.max(1, Math.ceil(viewport.height))
+			);
+			const context = canvas.getContext('2d');
+			if (!context) throw new Error('This browser cannot redact this PDF.');
+			await page.render({
+				canvas: canvas as unknown as HTMLCanvasElement,
+				viewport,
+				background: 'rgb(255,255,255)'
+			}).promise;
+			page.cleanup();
+			// Out to whole pixels, so no pixel under a box keeps any of what
+			// it showed.
+			context.fillStyle = fill;
+			for (const { area } of options.areas.filter((entry) => entry.page === number)) {
+				const left = Math.floor(area[0] * canvas.width);
+				const top = Math.floor(area[1] * canvas.height);
+				context.fillRect(
+					left,
+					top,
+					Math.ceil(area[2] * canvas.width) - left,
+					Math.ceil(area[3] * canvas.height) - top
+				);
+			}
+			const [png, jpeg] = await Promise.all([
+				canvas.convertToBlob({ type: 'image/png' }),
+				canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+			]);
+			const smaller = jpeg.size < png.size ? jpeg : png;
+			pictures.push(new Uint8Array(await smaller.arrayBuffer()));
+		}
+		return pictures;
+	} finally {
+		await task.destroy();
+	}
+}
+
+const unremovable = ['text', 'image', 'content'] as const;
+
+/// Redacts in place where it can, and draws from a picture each page the
+/// engine says it cannot, or every redacted page when asked to.
+async function redact(input: ArrayBuffer, password: string, options: RedactOptions) {
+	const bytes = new Uint8Array(input);
+	const pages = Uint32Array.from(options.areas, (entry) => entry.page);
+	const areas = Float32Array.from(options.areas.flatMap((entry) => entry.area));
+	const run = (imagePages: number[], images: Uint8Array[]) =>
+		redact_pdf(
+			bytes,
+			password,
+			pages,
+			areas,
+			options.color,
+			options.removeMetadata,
+			Uint32Array.from(imagePages),
+			images
+		) as [Uint8Array | undefined, Uint32Array, Uint8Array?];
+
+	let pictured: PicturedPage[] = options.asImages
+		? [...new Set(options.areas.map((entry) => entry.page))]
+				.sort((a, b) => a - b)
+				.map((page) => ({ page, reason: 'chosen' }))
+		: [];
+	const images = (list: PicturedPage[]) =>
+		redactionPictures(
+			input,
+			password,
+			list.map((entry) => entry.page),
+			options
+		);
+	const [first, listed, reasons] = run(
+		pictured.map((entry) => entry.page),
+		pictured.length ? await images(pictured) : []
+	);
+	if (first) return { bytes: first, pictured };
+	pictured = Array.from(listed, (page, index) => ({
+		page,
+		reason: unremovable[reasons?.[index] ?? 2] ?? 'content'
+	}));
+	const [output] = run(
+		pictured.map((entry) => entry.page),
+		await images(pictured)
+	);
+	if (!output) throw new Error('Some pages of this PDF could not be redacted.');
+	return { bytes: output, pictured };
 }
 
 async function exportPdfImages(
@@ -392,6 +509,29 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					Uint32Array.from(options.pages),
 					Float32Array.from(options.pages.flatMap(() => options.place))
 				)
+			});
+			return;
+		}
+		if (request.operation === 'redact') {
+			const { bytes, pictured } = await redact(
+				request.files[0],
+				request.passwords[0] ?? '',
+				request.options
+			);
+			const output = bytes.slice().buffer;
+			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf', pictured };
+			self.postMessage(response, { transfer: [output] });
+			return;
+		}
+		if (request.operation === 'redact-text') {
+			const pages = redaction_text(
+				new Uint8Array(request.files[0]),
+				request.passwords[0] ?? ''
+			) as [Float32Array, string, Uint32Array][];
+			const glyphs: PageGlyphs[] = pages.map(([boxes, text, ends]) => ({ boxes, text, ends }));
+			const response: PdfWorkerResponse = { id, ok: true, glyphs };
+			self.postMessage(response, {
+				transfer: glyphs.flatMap((page) => [page.boxes.buffer, page.ends.buffer])
 			});
 			return;
 		}

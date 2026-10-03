@@ -22,10 +22,11 @@ use std::path::{Path, PathBuf};
 
 use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 use plico_engine::{
-    CompressOptions, FontFamily, PageNumberOptions, PdfALevel, Position, ProtectOptions, SplitMode,
-    StandardFont, TextStyle, WatermarkContent, WatermarkOptions, add_page_numbers_bytes,
-    add_watermark_bytes, compress_pdf_bytes, convert_to_pdfa_bytes, merge_pdf_bytes,
-    protect_pdf_bytes, split_pdf_bytes, split_pdf_bytes_with_password, unlock_pdf_bytes,
+    CompressOptions, FontFamily, PageImage, PageNumberOptions, PdfALevel, Position, ProtectOptions,
+    RedactOptions, Redacted, Redaction, SplitMode, StandardFont, TextStyle, WatermarkContent,
+    WatermarkOptions, add_page_numbers_bytes, add_watermark_bytes, compress_pdf_bytes,
+    convert_to_pdfa_bytes, merge_pdf_bytes, page_texts, protect_pdf_bytes, redact_pdf_bytes,
+    split_pdf_bytes, split_pdf_bytes_with_password, unlock_pdf_bytes,
 };
 
 const DEFAULT_CORPUS: &str = "../../testing/pdfjs/test/pdfs";
@@ -839,4 +840,188 @@ fn converts_every_loadable_document_to_pdfa() {
         println!("  {failure}");
     }
     assert!(failures.is_empty(), "PDF/A conversion broke real PDFs");
+}
+
+/// A box across the middle of every page, where most pages have text,
+/// images and paths. Pages the engine asks a picture for get a blank one, as
+/// structure is all this checks; `npm run test:raster:redact` renders them.
+#[test]
+#[ignore = "needs a PDF corpus on disk"]
+fn redacts_every_loadable_document() {
+    let files = corpus_files();
+    assert!(!files.is_empty(), "corpus is empty");
+    let area = [0.2, 0.3, 0.8, 0.6];
+    let picture = {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0, 0, 0])
+            .unwrap();
+        bytes
+    };
+
+    let mut checked = 0usize;
+    let mut pages_checked = 0usize;
+    let mut pictured_files = Vec::new();
+    let mut pictured_pages = 0usize;
+    let mut reasons = BTreeMap::new();
+    let mut refused = Vec::new();
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(source) = Document::load_mem(&bytes) else {
+            continue;
+        };
+        if source.is_encrypted() {
+            continue;
+        }
+        let count = source.get_pages().len();
+        if count == 0 {
+            continue;
+        }
+        drop(source);
+        let redactions = (1..=count as u32)
+            .map(|page| Redaction { page, area })
+            .collect::<Vec<_>>();
+        let run = |images: &[PageImage<'_>]| {
+            std::panic::catch_unwind(|| {
+                redact_pdf_bytes(
+                    &bytes,
+                    "",
+                    RedactOptions {
+                        redactions: &redactions,
+                        color: [0.0; 3],
+                        remove_metadata: false,
+                        page_images: images,
+                    },
+                )
+            })
+        };
+        let first = match run(&[]) {
+            Ok(result) => result,
+            Err(_) => {
+                failures.push(format!("{name}: panicked"));
+                continue;
+            }
+        };
+        let (output, imaged) = match first {
+            Ok(Redacted::Done { bytes, imaged }) => (bytes, imaged),
+            Ok(Redacted::NeedsImages(pages)) => {
+                for (_, reason) in &pages {
+                    *reasons.entry(format!("{reason:?}")).or_insert(0usize) += 1;
+                }
+                let images = pages
+                    .iter()
+                    .map(|&(page, _)| PageImage {
+                        page,
+                        image: &picture,
+                    })
+                    .collect::<Vec<_>>();
+                match run(&images) {
+                    Ok(Ok(Redacted::Done { bytes, imaged })) => (bytes, imaged),
+                    Ok(Ok(Redacted::NeedsImages(more))) => {
+                        failures.push(format!("{name}: asked again for pictures of {more:?}"));
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        failures.push(format!("{name}: {error}"));
+                        continue;
+                    }
+                    Err(_) => {
+                        failures.push(format!("{name}: panicked with pictures"));
+                        continue;
+                    }
+                }
+            }
+            Err(error) if error.contains("damaged") => {
+                refused.push(name);
+                continue;
+            }
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let Ok(mut result) = Document::load_mem(&output) else {
+            failures.push(format!("{name}: redacted output would not reparse"));
+            continue;
+        };
+        if result.get_pages().len() != count {
+            failures.push(format!(
+                "{name}: {} pages, expected {count}",
+                result.get_pages().len()
+            ));
+            continue;
+        }
+        let types = result
+            .objects
+            .iter()
+            .map(|(id, object)| (*id, object.type_name().unwrap_or(b"").to_vec()))
+            .collect::<BTreeMap<_, _>>();
+        let leaked = result
+            .prune_objects()
+            .into_iter()
+            .filter(|id| types[id] != b"XRef" && types[id] != b"ObjStm")
+            .count();
+        if leaked > 0 {
+            failures.push(format!("{name}: {leaked} unreachable objects"));
+            continue;
+        }
+        // Nothing the engine itself reads as text may still lie under a box.
+        let texts = match page_texts(&output, "") {
+            Ok(texts) => texts,
+            Err(error) => {
+                failures.push(format!("{name}: output text unreadable: {error}"));
+                continue;
+            }
+        };
+        let survivor = texts.iter().enumerate().find_map(|(index, page)| {
+            page.boxes.iter().zip(&page.text).find_map(|(glyph, text)| {
+                let [left, top, right, bottom] = *glyph;
+                let width = (right.min(area[2]) - left.max(area[0])).max(0.0);
+                let height = (bottom.min(area[3]) - top.max(area[1])).max(0.0);
+                let size = (right - left) * (bottom - top);
+                let covered = if size <= 1e-9 {
+                    let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+                    x > area[0] && x < area[2] && y > area[1] && y < area[3]
+                } else {
+                    width * height >= 0.3 * size
+                };
+                covered.then(|| format!("page {}: {text:?} at {glyph:?}", index + 1))
+            })
+        });
+        if let Some(survivor) = survivor {
+            failures.push(format!("{name}: text left under the box, {survivor}"));
+            continue;
+        }
+        if !imaged.is_empty() {
+            pictured_pages += imaged.len();
+            pictured_files.push(format!("{name} {imaged:?}"));
+        }
+        pages_checked += count;
+        checked += 1;
+    }
+
+    println!("\nredact corpus: {checked} files, {pages_checked} pages redacted and checked");
+    println!(
+        "  pages drawn from a picture: {pictured_pages} in {} files",
+        pictured_files.len()
+    );
+    println!("  why: {reasons:?}");
+    for pictured in pictured_files.iter().take(40) {
+        println!("    {pictured}");
+    }
+    println!("  refused, page tree lists an unreadable page: {refused:?}");
+    for failure in failures.iter().take(30) {
+        println!("  {failure}");
+    }
+    if failures.len() > 30 {
+        println!("  ... and {} more", failures.len() - 30);
+    }
+    assert!(failures.is_empty(), "redaction failed on real PDFs");
 }

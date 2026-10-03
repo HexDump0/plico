@@ -127,6 +127,14 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'redact';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: RedactOptions;
+	  }
+	| { id: number; operation: 'redact-text'; files: ArrayBuffer[]; passwords: string[] }
+	| {
+			id: number;
 			operation: 'crop';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -146,9 +154,18 @@ export type PdfOutput = {
 };
 
 export type PdfWorkerResponse =
-	// `value` carries a count some operations report beside their file.
-	| { id: number; ok: true; bytes: ArrayBuffer; format: PdfOutput['format']; value?: number }
+	// `value` carries a count some operations report beside their file, and
+	// `pictured` the pages Redact drew from a picture.
+	| {
+			id: number;
+			ok: true;
+			bytes: ArrayBuffer;
+			format: PdfOutput['format'];
+			value?: number;
+			pictured?: PicturedPage[];
+	  }
 	| { id: number; ok: true; value: number }
+	| { id: number; ok: true; glyphs: PageGlyphs[] }
 	| { id: number; ok: false; error: string };
 
 // An empty `userPassword` opens without asking; an empty `ownerPassword` is
@@ -210,3 +227,27 @@ export type CropOptions =
 /// edge, top edge and width as fractions of the page as displayed, from the
 /// top left. Its height follows from the image.
 export type SignOptions = { pages: number[]; place: [number, number, number] };
+
+/// One redaction box: left, top, right and bottom as fractions of the page as
+/// displayed, from its top left.
+export type RedactArea = { page: number; area: CropArea };
+
+/// A box as the tool edits it.
+export type RedactMark = RedactArea & { id: number };
+
+/// `color` is 0xRRGGBB. `asImages` draws every redacted page from a picture.
+export type RedactOptions = {
+	areas: RedactArea[];
+	color: number;
+	removeMetadata: boolean;
+	asImages: boolean;
+};
+
+/// A page Redact drew from a picture, and why: by choice, or because text in a
+/// font that cannot be measured, an image that cannot be decoded, or content
+/// that cannot be read lay under a box.
+export type PicturedPage = { page: number; reason: 'chosen' | 'text' | 'image' | 'content' };
+
+/// A page's glyphs as the engine reads them: four fractions per glyph as in
+/// `CropArea`, the page's text, and where each glyph's text ends in it.
+export type PageGlyphs = { boxes: Float32Array; text: string; ends: Uint32Array };

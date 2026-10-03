@@ -10,6 +10,9 @@
 mod encodings;
 mod fonts;
 
+pub(crate) use encodings::{MAC_ROMAN, WIN_ANSI};
+pub(crate) use fonts::standard_equivalent;
+
 use std::collections::{BTreeSet, HashMap};
 
 use lopdf::content::Content;

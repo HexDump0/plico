@@ -99,7 +99,7 @@ pub(crate) fn write_compressed(mut document: Document) -> Result<Vec<u8>, String
     })
 }
 
-fn strip_metadata(document: &mut Document) -> bool {
+pub(crate) fn strip_metadata(document: &mut Document) -> bool {
     let mut removed = false;
     // /Info carries document properties; removing the whole entry lets the
     // reachability sweep collect it. Trailing producer marks are not preserved.

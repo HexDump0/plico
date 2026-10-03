@@ -3,7 +3,7 @@
 //! substitutions the annex makes; StandardEncoding comes from each font's
 //! metrics file instead.
 
-pub(super) const WIN_ANSI: [Option<&str>; 256] = [
+pub(crate) const WIN_ANSI: [Option<&str>; 256] = [
     None,
     None,
     None,
@@ -262,7 +262,7 @@ pub(super) const WIN_ANSI: [Option<&str>; 256] = [
     Some("ydieresis"),
 ];
 
-pub(super) const MAC_ROMAN: [Option<&str>; 256] = [
+pub(crate) const MAC_ROMAN: [Option<&str>; 256] = [
     None,
     None,
     None,

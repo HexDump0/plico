@@ -3492,3 +3492,911 @@ fn flattening_keeps_even_empty_fields_a_form_asks_viewers_to_redraw() {
     assert_eq!(output.kept, 1);
     assert_eq!(flattened_page(&output.bytes).0, ["Widget"]);
 }
+
+// Redaction. Pages are 600 by 800 points; areas are fractions of the page
+// from its top left, so a point y up the page is at 1 - y / 800.
+
+use crate::{PageImage, RedactOptions, Redacted, Redaction, redact_pdf_bytes};
+
+/// A 600 by 800 page drawing `content`. `build` adds whatever objects the
+/// page needs and returns its resources, extra page entries and extra
+/// catalog entries.
+fn redaction_pdf(
+    content: &[u8],
+    build: impl FnOnce(&mut Document, ObjectId) -> (Dictionary, Dictionary, Dictionary),
+) -> Vec<u8> {
+    let mut document = Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let (resources, extra, catalog_extra) = build(&mut document, page_id);
+    let content_id = document.add_object(Stream::new(dictionary! {}, content.to_vec()));
+    let mut page = dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => content_id,
+        "MediaBox" => vec![0.into(), 0.into(), 600.into(), 800.into()],
+        "Resources" => resources,
+    };
+    for (key, value) in extra {
+        page.set(key, value);
+    }
+    document.objects.insert(page_id, Object::Dictionary(page));
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }),
+    );
+    let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => pages_id };
+    for (key, value) in catalog_extra {
+        catalog.set(key, value);
+    }
+    let catalog_id = document.add_object(catalog);
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// Helvetica with no widths given, which readers measure from Adobe's metrics.
+fn helvetica_resources(document: &mut Document) -> Dictionary {
+    let font = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+        "Encoding" => "WinAnsiEncoding",
+    });
+    dictionary! { "Font" => dictionary! { "F1" => font } }
+}
+
+/// "Hello World" at 20 points from (100, 700): "Hello " is 51.12 points wide
+/// and "World" the 52.22 after it.
+const HELLO: &[u8] = b"BT /F1 20 Tf 100 700 Td (Hello World) Tj ET";
+
+/// Just over "World": the space before it is under the box by less than the
+/// quarter it takes to remove a glyph.
+const WORLD: [f32; 4] = [151.0 / 600.0, 0.1, 204.0 / 600.0, 0.1375];
+
+fn redact(input: &[u8], areas: &[(u32, [f32; 4])]) -> Redacted {
+    redact_with(input, areas, &[], false)
+}
+
+fn redact_with(
+    input: &[u8],
+    areas: &[(u32, [f32; 4])],
+    page_images: &[PageImage<'_>],
+    remove_metadata: bool,
+) -> Redacted {
+    let redactions = areas
+        .iter()
+        .map(|&(page, area)| Redaction { page, area })
+        .collect::<Vec<_>>();
+    redact_pdf_bytes(
+        input,
+        "",
+        RedactOptions {
+            redactions: &redactions,
+            color: [0.0, 0.0, 0.0],
+            remove_metadata,
+            page_images,
+        },
+    )
+    .unwrap()
+}
+
+fn redacted(result: Redacted) -> Vec<u8> {
+    match result {
+        Redacted::Done { bytes, imaged } => {
+            assert!(imaged.is_empty(), "drawn from pictures: {imaged:?}");
+            bytes
+        }
+        Redacted::NeedsImages(pages) => panic!("pages {pages:?} need pictures"),
+    }
+}
+
+/// Every stream in the file, decoded, as text.
+fn every_stream(bytes: &[u8]) -> String {
+    let document = Document::load_mem(bytes).unwrap();
+    document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .map(|stream| {
+            String::from_utf8_lossy(
+                &stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone()),
+            )
+            .into_owned()
+        })
+        .collect()
+}
+
+fn first_page_content(bytes: &[u8]) -> String {
+    let document = Document::load_mem(bytes).unwrap();
+    String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).into_owned()
+}
+
+#[test]
+fn redaction_removes_the_text_under_the_box_and_keeps_the_rest_in_place() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let output = redacted(redact(&input, &[(1, WORLD)]));
+    let content = first_page_content(&output);
+    // "Hello " stays, and the pen moves on by the width of "World", so
+    // anything after it on the line stays where it was.
+    assert!(content.contains("[<48656C6C6F20> -2611] TJ"), "{content}");
+    let everything = every_stream(&output);
+    assert!(!everything.contains("World"), "{everything}");
+    // The box is painted over where the text was.
+    assert!(
+        content.contains("0 0 0 rg\n151 690 53 30 re\nf"),
+        "{content}"
+    );
+}
+
+#[test]
+fn redaction_copies_what_it_leaves_alone_byte_for_byte() {
+    let content = b"0.123456789   0 0 1 0 0 cm\n1 0 0 RG 0 0 m 10 10 l S\n% a comment\nBT /F1 20 Tf 100 700 Td (Hello World) Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    // Over nothing at all.
+    let output = redacted(redact(&input, &[(1, [0.5, 0.5, 0.6, 0.6])]));
+    let written = first_page_content(&output);
+    for kept in [
+        "0.123456789   0 0 1 0 0 cm",
+        "1 0 0 RG",
+        "0 0 m",
+        "10 10 l",
+        "(Hello World) Tj",
+    ] {
+        assert!(written.contains(kept), "{kept} in {written}");
+    }
+}
+
+#[test]
+fn redaction_removes_glyphs_of_a_composite_font_and_reads_their_text() {
+    let content = b"BT /F2 10 Tf 50 500 Td <000100020003> Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        let to_unicode = document.add_object(Stream::new(
+            dictionary! {},
+            b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+              1 begincodespacerange <0000> <FFFF> endcodespacerange\n\
+              1 beginbfrange <0001> <0003> <0041> endbfrange\n\
+              endcmap CMapName currentdict /CMap defineresource pop end end"
+                .to_vec(),
+        ));
+        let descriptor = document.add_object(dictionary! {
+            "Type" => "FontDescriptor",
+            "FontName" => "Example",
+            "Ascent" => 900,
+            "Descent" => -200,
+        });
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type0",
+            "BaseFont" => "Example",
+            "Encoding" => "Identity-H",
+            "ToUnicode" => to_unicode,
+            "DescendantFonts" => vec![dictionary! {
+                "Type" => "Font",
+                "Subtype" => "CIDFontType2",
+                "BaseFont" => "Example",
+                "FontDescriptor" => descriptor,
+                "W" => vec![1.into(), vec![500.into(), 600.into(), 700.into()].into()],
+            }
+            .into()],
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F2" => font } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+
+    let texts = crate::page_texts(&input, "").unwrap();
+    assert_eq!(texts[0].text.concat(), "ABC");
+    let [left, top, right, bottom] = texts[0].boxes[1];
+    assert!((left * 600.0 - 55.0).abs() < 0.01, "{left}");
+    assert!((right * 600.0 - 61.0).abs() < 0.01, "{right}");
+    assert!(((1.0 - top) * 800.0 - 509.0).abs() < 0.01, "{top}");
+    assert!(((1.0 - bottom) * 800.0 - 498.0).abs() < 0.01, "{bottom}");
+
+    // Over most of B and none of A or C.
+    let area = [
+        55.5 / 600.0,
+        1.0 - 510.0 / 800.0,
+        60.5 / 600.0,
+        1.0 - 495.0 / 800.0,
+    ];
+    let output = redacted(redact(&input, &[(1, area)]));
+    let content = first_page_content(&output);
+    assert!(content.contains("[<0001> -600 <0003>] TJ"), "{content}");
+    assert_eq!(
+        crate::page_texts(&output, "").unwrap()[0].text.concat(),
+        "AC"
+    );
+}
+
+#[test]
+fn redaction_finds_text_where_readers_show_it_on_a_turned_page() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! { "Rotate" => 90 },
+            dictionary! {},
+        )
+    });
+    // The page is 800 wide and 600 tall as shown; "World" runs down it.
+    let output = redacted(redact(&input, &[(1, [0.865, 0.252, 0.9, 0.34])]));
+    assert!(first_page_content(&output).contains("[<48656C6C6F20> -2611] TJ"));
+    let texts = crate::page_texts(&input, "").unwrap();
+    let [left, top, ..] = texts[0].boxes[0];
+    // "H" at (100, 696) to (114.44, 716) on the page.
+    assert!((left * 800.0 - 696.0).abs() < 0.01, "{left}");
+    assert!((top * 600.0 - 100.0).abs() < 0.01, "{top}");
+}
+
+#[test]
+fn redaction_asks_for_a_picture_when_text_under_a_box_cannot_be_measured() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "TrueType",
+            "BaseFont" => "Mystery",
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F1" => font } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    assert!(matches!(
+        redact(&input, &[(1, WORLD)]),
+        Redacted::NeedsImages(pages) if pages.iter().map(|(page, _)| *page).eq([1])
+    ));
+    // Nowhere near its line, the text is no concern.
+    redacted(redact(&input, &[(1, [0.1, 0.8, 0.3, 0.9])]));
+
+    let picture = rgba_png();
+    let output = redact_with(
+        &input,
+        &[(1, WORLD)],
+        &[PageImage {
+            page: 1,
+            image: &picture,
+        }],
+        false,
+    );
+    let Redacted::Done { bytes, imaged } = output else {
+        panic!("a picture was given");
+    };
+    assert_eq!(imaged, [1]);
+    let content = first_page_content(&bytes);
+    assert!(content.contains("/Page Do"), "{content}");
+    assert!(!every_stream(&bytes).contains("World"));
+}
+
+/// A 4 by 4 image drawn over (0, 0) to (100, 100), every sample 200.
+fn image_pdf(filter: Option<&str>, samples: Vec<u8>, components: i64) -> Vec<u8> {
+    redaction_pdf(b"q 100 0 0 100 0 0 cm /Im1 Do Q", |document, _| {
+        let mut dict = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 4,
+            "Height" => 4,
+            "ColorSpace" => if components == 1 { "DeviceGray" } else { "DeviceRGB" },
+            "BitsPerComponent" => 8,
+        };
+        if let Some(filter) = filter {
+            dict.set("Filter", filter);
+        }
+        let image = document.add_object(Stream::new(dict, samples));
+        (
+            dictionary! { "XObject" => dictionary! { "Im1" => image } },
+            dictionary! {},
+            dictionary! {},
+        )
+    })
+}
+
+/// The page's images, decoded.
+fn page_images(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let document = Document::load_mem(bytes).unwrap();
+    document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .filter(|stream| stream.dict.get(b"Subtype").ok() == Some(&Object::Name(b"Image".to_vec())))
+        .map(|stream| {
+            stream
+                .decompressed_content()
+                .unwrap_or(stream.content.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn redaction_overwrites_the_pixels_under_the_box_in_a_copy() {
+    let input = image_pdf(None, vec![200; 48], 3);
+    // The left half: pixel centres at 12.5 and 37.5 points.
+    let output = redacted(redact(&input, &[(1, [0.0, 0.8, 50.0 / 600.0, 1.0])]));
+    let images = page_images(&output);
+    assert_eq!(images.len(), 1, "the original is gone");
+    for row in images[0].chunks(12) {
+        assert_eq!(row, [0, 0, 0, 0, 0, 0, 200, 200, 200, 200, 200, 200]);
+    }
+    assert!(first_page_content(&output).contains("/Redacted1 Do"));
+
+    // All of it under the box: it is not drawn at all.
+    let output = redacted(redact(&input, &[(1, [0.0, 0.8, 0.5, 1.0])]));
+    assert!(page_images(&output).is_empty());
+    assert!(!first_page_content(&output).contains("Do"));
+}
+
+#[test]
+fn redaction_reencodes_a_jpeg_with_the_pixels_under_the_box_painted() {
+    let jpeg = jpeg_bytes(32, 32, 95);
+    let original = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&jpeg))
+        .decode()
+        .unwrap();
+    let input = redaction_pdf(b"q 160 0 0 160 0 0 cm /Im1 Do Q", |document, _| {
+        let image = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 32,
+                "Height" => 32,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => "DCTDecode",
+            },
+            jpeg.clone(),
+        ));
+        (
+            dictionary! { "XObject" => dictionary! { "Im1" => image } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let output = redacted(redact(&input, &[(1, [0.0, 0.8, 80.0 / 600.0, 1.0])]));
+    let document = Document::load_mem(&output).unwrap();
+    let image = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .find(|stream| is_jpeg_image(&stream.dict))
+        .expect("still a JPEG");
+    let mut decoder =
+        zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&image.content));
+    let pixels = decoder.decode().unwrap();
+    let at =
+        |pixels: &[u8], x: usize, y: usize| pixels[(y * 32 + x) * 3..(y * 32 + x) * 3 + 3].to_vec();
+    assert!(
+        at(&pixels, 4, 8).iter().all(|&channel| channel < 16),
+        "{:?}",
+        at(&pixels, 4, 8)
+    );
+    // Right of the box, past the block its edge lies in: what the source had.
+    let (after, before) = (at(&pixels, 24, 8), at(&original, 24, 8));
+    assert!(
+        after
+            .iter()
+            .zip(&before)
+            .all(|(a, b)| (i32::from(*a) - i32::from(*b)).abs() < 8),
+        "{after:?} {before:?}"
+    );
+}
+
+#[test]
+fn redaction_asks_for_a_picture_for_an_image_it_cannot_decode() {
+    let input = image_pdf(Some("CCITTFaxDecode"), vec![0; 8], 1);
+    assert!(matches!(
+        redact(&input, &[(1, [0.0, 0.8, 50.0 / 600.0, 1.0])]),
+        Redacted::NeedsImages(pages) if pages.iter().map(|(page, _)| *page).eq([1])
+    ));
+    // Whole, it can simply go.
+    redacted(redact(&input, &[(1, [0.0, 0.8, 0.5, 1.0])]));
+}
+
+#[test]
+fn redaction_paints_an_unfiltered_inline_image_in_place() {
+    let mut content = b"q 100 0 0 100 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID ".to_vec();
+    content.extend_from_slice(&[0x80, 0x80, 0x80, 0x80]);
+    content.extend_from_slice(b" EI Q BT /F1 20 Tf 100 700 Td (Hello World) Tj ET");
+    let input = redaction_pdf(&content, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let output = redacted(redact(&input, &[(1, [0.0, 0.8, 50.0 / 600.0, 1.0])]));
+    let document = Document::load_mem(&output).unwrap();
+    let written = document.get_page_content(document.get_pages()[&1]);
+    let data = written
+        .windows(4)
+        .position(|window| window == b" ID ")
+        .map(|at| &written[at + 4..at + 8])
+        .unwrap();
+    assert_eq!(data, [0, 0x80, 0, 0x80]);
+    // The text after it was read past the image correctly.
+    assert!(String::from_utf8_lossy(&written).contains("(Hello World) Tj"));
+}
+
+/// Signed area of each closed subpath painted by `f`, from `m`, `l`, `h`.
+fn filled_area(content: &str) -> f64 {
+    let operations = Content::decode(content.as_bytes()).unwrap().operations;
+    let mut area = 0.0;
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    let close = |points: &mut Vec<(f64, f64)>| {
+        let mut twice = 0.0;
+        for index in 0..points.len() {
+            let (x0, y0) = points[index];
+            let (x1, y1) = points[(index + 1) % points.len()];
+            twice += x0 * y1 - x1 * y0;
+        }
+        points.clear();
+        twice.abs() / 2.0
+    };
+    let mut pending = 0.0;
+    for operation in operations {
+        let numbers = operation
+            .operands
+            .iter()
+            .filter_map(|operand| operand.as_float().ok().map(f64::from))
+            .collect::<Vec<_>>();
+        match operation.operator.as_str() {
+            "m" => {
+                pending += close(&mut points);
+                points.push((numbers[0], numbers[1]));
+            }
+            "l" => points.push((numbers[0], numbers[1])),
+            "h" => pending += close(&mut points),
+            "f" | "f*" => {
+                pending += close(&mut points);
+                area += pending;
+                pending = 0.0;
+            }
+            "re" | "S" | "n" => {
+                points.clear();
+                pending = 0.0;
+            }
+            _ => {}
+        }
+    }
+    area
+}
+
+#[test]
+fn redaction_cuts_the_box_out_of_filled_and_stroked_paths() {
+    let input = redaction_pdf(
+        b"0 0 1 rg 10 10 m 110 10 l 110 110 l 10 110 l h f 0 50 m 200 50 l S",
+        |_, _| (dictionary! {}, dictionary! {}, dictionary! {}),
+    );
+    // x 50 to 150, y 40 to 150: over part of the square and the line.
+    let area = [
+        50.0 / 600.0,
+        1.0 - 150.0 / 800.0,
+        150.0 / 600.0,
+        1.0 - 40.0 / 800.0,
+    ];
+    let output = redacted(redact(&input, &[(1, area)]));
+    let content = first_page_content(&output);
+    // The box's own fill is drawn with re, which the sum leaves out.
+    let square_left = 100.0 * 100.0 - 60.0 * 70.0;
+    assert!(
+        (filled_area(&content) - square_left).abs() < 0.01,
+        "{content}"
+    );
+    assert!(
+        content.contains("0 50 m\n50 50 l\n150 50 m\n200 50 l\nS"),
+        "{content}"
+    );
+}
+
+#[test]
+fn redaction_redacts_a_copy_of_a_form_and_leaves_other_pages_its_original() {
+    let mut document = Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let resources = helvetica_resources(&mut document);
+    let form = document.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Form",
+            "BBox" => vec![0.into(), 0.into(), 600.into(), 800.into()],
+            "Resources" => resources,
+        },
+        HELLO.to_vec(),
+    ));
+    let kids = (0..2)
+        .map(|_| {
+            let content = document.add_object(Stream::new(dictionary! {}, b"/Fm1 Do".to_vec()));
+            document
+                .add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "Contents" => content,
+                    "MediaBox" => vec![0.into(), 0.into(), 600.into(), 800.into()],
+                    "Resources" => dictionary! { "XObject" => dictionary! { "Fm1" => form } },
+                })
+                .into()
+        })
+        .collect::<Vec<Object>>();
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 2 }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut input = Vec::new();
+    document.save_to(&mut input).unwrap();
+
+    let output = redacted(redact(&input, &[(1, WORLD)]));
+    let texts = crate::page_texts(&output, "").unwrap();
+    assert_eq!(texts[0].text.concat(), "Hello ");
+    assert_eq!(texts[1].text.concat(), "Hello World");
+    assert!(first_page_content(&output).contains("/Redacted1 Do"));
+}
+
+#[test]
+fn redaction_removes_annotations_and_fields_under_the_box() {
+    let input = redaction_pdf(b"", |document, page_id| {
+        let comment = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![160.into(), 695.into(), 180.into(), 715.into()],
+            "Contents" => Object::string_literal("a private note"),
+            "P" => page_id,
+        });
+        let elsewhere = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![400.into(), 100.into(), 420.into(), 120.into()],
+            "Contents" => Object::string_literal("kept"),
+        });
+        let field = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::string_literal("name"),
+            "V" => Object::string_literal("a private name"),
+            "Rect" => vec![150.into(), 700.into(), 200.into(), 710.into()],
+        });
+        (
+            dictionary! {},
+            dictionary! { "Annots" => vec![comment.into(), elsewhere.into(), field.into()] },
+            dictionary! { "AcroForm" => dictionary! { "Fields" => vec![field.into()] } },
+        )
+    });
+    let output = redacted(redact(&input, &[(1, WORLD)]));
+    let document = Document::load_mem(&output).unwrap();
+    let raw = String::from_utf8_lossy(&output);
+    assert!(!raw.contains("private"), "{raw}");
+    let page = document.get_dictionary(document.get_pages()[&1]).unwrap();
+    assert_eq!(page.get(b"Annots").unwrap().as_array().unwrap().len(), 1);
+    assert!(document.catalog().unwrap().get(b"AcroForm").is_err());
+}
+
+#[test]
+fn redaction_drops_text_that_describes_what_was_removed() {
+    let content = b"/P <</MCID 0>> BDC /Span <</ActualText (Hello World)>> BDC BT /F1 20 Tf 100 700 Td (Hello World) Tj ET EMC EMC /P <</MCID 1>> BDC BT /F1 20 Tf 100 100 Td (Other) Tj ET EMC";
+    let input = redaction_pdf(content, |document, page_id| {
+        let resources = helvetica_resources(document);
+        let root = document.new_object_id();
+        let touched = document.add_object(dictionary! {
+            "Type" => "StructElem",
+            "S" => "P",
+            "P" => root,
+            "Pg" => page_id,
+            "K" => 0,
+            "Alt" => Object::string_literal("Hello World"),
+        });
+        let untouched = document.add_object(dictionary! {
+            "Type" => "StructElem",
+            "S" => "P",
+            "P" => root,
+            "Pg" => page_id,
+            "K" => 1,
+            "Alt" => Object::string_literal("Other"),
+        });
+        document.objects.insert(
+            root,
+            Object::Dictionary(dictionary! {
+                "Type" => "StructTreeRoot",
+                "K" => vec![touched.into(), untouched.into()],
+            }),
+        );
+        (
+            resources,
+            dictionary! { "StructParents" => 0 },
+            dictionary! { "StructTreeRoot" => root, "MarkInfo" => dictionary! { "Marked" => true } },
+        )
+    });
+    let output = redacted(redact(&input, &[(1, WORLD)]));
+    let raw = String::from_utf8_lossy(&output);
+    assert!(!raw.contains("World"));
+    assert!(!every_stream(&output).contains("World"));
+    let content = first_page_content(&output);
+    assert!(content.contains("/Span BMC"), "{content}");
+    let document = Document::load_mem(&output).unwrap();
+    let alts = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .filter_map(|element| element.get(b"Alt").ok())
+        .count();
+    assert_eq!(alts, 1, "the untouched element keeps its alternate text");
+}
+
+#[test]
+fn redaction_removes_metadata_when_asked() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let mut document = Document::load_mem(&input).unwrap();
+    let info =
+        document.add_object(dictionary! { "Title" => Object::string_literal("Hello World") });
+    document.trailer.set("Info", info);
+    let mut with_info = Vec::new();
+    document.save_to(&mut with_info).unwrap();
+
+    let kept = redacted(redact(&with_info, &[(1, WORLD)]));
+    assert!(Document::load_mem(&kept).unwrap().trailer.has(b"Info"));
+    let removed = redacted(redact_with(&with_info, &[(1, WORLD)], &[], true));
+    assert!(!Document::load_mem(&removed).unwrap().trailer.has(b"Info"));
+}
+
+#[test]
+fn redaction_rejects_bad_areas_and_pages() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let error = |areas: &[Redaction]| {
+        redact_pdf_bytes(
+            &input,
+            "",
+            RedactOptions {
+                redactions: areas,
+                color: [0.0; 3],
+                remove_metadata: false,
+                page_images: &[],
+            },
+        )
+        .err()
+        .unwrap()
+    };
+    assert!(error(&[]).contains("at least one"));
+    assert!(
+        error(&[Redaction {
+            page: 1,
+            area: [0.5, 0.5, 0.4, 0.6]
+        }])
+        .contains("inside")
+    );
+    assert!(
+        error(&[Redaction {
+            page: 1,
+            area: [0.0, 0.0, 1.5, 0.6]
+        }])
+        .contains("inside")
+    );
+    assert!(
+        error(&[Redaction {
+            page: 2,
+            area: [0.0, 0.0, 0.5, 0.5]
+        }])
+        .contains("between 1 and 1")
+    );
+}
+
+#[test]
+fn redaction_keeps_the_part_of_a_form_field_outside_the_box() {
+    let input = redaction_pdf(b"", |document, _| {
+        let resources = helvetica_resources(document);
+        // "Hello World" as the field shows it, drawn from its own origin.
+        let appearance = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => vec![0.into(), 0.into(), 300.into(), 30.into()],
+                "Resources" => resources,
+            },
+            b"BT /F1 20 Tf 0 4 Td (Hello World) Tj ET".to_vec(),
+        ));
+        let field = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::string_literal("name"),
+            "V" => Object::string_literal("Hello World"),
+            "Rect" => vec![100.into(), 696.into(), 400.into(), 726.into()],
+            "AP" => dictionary! { "N" => appearance },
+        });
+        (
+            dictionary! {},
+            dictionary! { "Annots" => vec![field.into()] },
+            dictionary! { "AcroForm" => dictionary! { "Fields" => vec![field.into()] } },
+        )
+    });
+    let output = redacted(redact(&input, &[(1, WORLD)]));
+    let document = Document::load_mem(&output).unwrap();
+    let page = document.get_dictionary(document.get_pages()[&1]).unwrap();
+    assert!(page.get(b"Annots").is_err(), "the field is gone");
+    assert!(document.catalog().unwrap().get(b"AcroForm").is_err());
+    // What it showed outside the box is now part of the page.
+    assert_eq!(
+        crate::page_texts(&output, "").unwrap()[0].text.concat(),
+        "Hello "
+    );
+    assert!(!String::from_utf8_lossy(&output).contains("World"));
+    assert!(!every_stream(&output).contains("World"));
+}
+
+#[test]
+fn redaction_moves_the_pen_past_character_spacing_too() {
+    // "a b c" at 10 points with 2 points between characters and 5 more
+    // after spaces: b starts at 117.34 and moves the pen 5.56 + 2.
+    let input = redaction_pdf(
+        b"BT /F1 10 Tf 2 Tc 5 Tw 100 500 Td (a b c) Tj ET",
+        |document, _| {
+            (
+                helvetica_resources(document),
+                dictionary! {},
+                dictionary! {},
+            )
+        },
+    );
+    let area = [
+        117.5 / 600.0,
+        1.0 - 510.0 / 800.0,
+        122.5 / 600.0,
+        1.0 - 495.0 / 800.0,
+    ];
+    let output = redacted(redact(&input, &[(1, area)]));
+    let content = first_page_content(&output);
+    assert!(content.contains("[<6120> -756 <2063>] TJ"), "{content}");
+    let texts = crate::page_texts(&output, "").unwrap();
+    // c is where it was, past b and the space after it, which word spacing
+    // widens: 117.34 + 7.56 + 9.78.
+    let c = texts[0].text.iter().position(|text| text == "c").unwrap();
+    assert!((texts[0].boxes[c][0] * 600.0 - 134.68).abs() < 0.01);
+}
+
+#[test]
+fn redaction_undoes_png_average_prediction_itself() {
+    // lopdf 0.44 decodes PNG Average rows wrongly (pdf.js corpus:
+    // issue14814.pdf). Rows here are Average-filtered, with the parameters
+    // held by reference, which lopdf alone would ignore.
+    let (width, height) = (4usize, 2usize);
+    let pixels = (0..width * height * 3)
+        .map(|index| (index * 37 % 251) as u8)
+        .collect::<Vec<_>>();
+    let row = width * 3;
+    let mut filtered = Vec::new();
+    for y in 0..height {
+        filtered.push(3);
+        for x in 0..row {
+            let left = if x >= 3 { pixels[y * row + x - 3] } else { 0 };
+            let above = if y > 0 { pixels[(y - 1) * row + x] } else { 0 };
+            let average = ((u16::from(left) + u16::from(above)) / 2) as u8;
+            filtered.push(pixels[y * row + x].wrapping_sub(average));
+        }
+    }
+    let compressed = deflate_best(&filtered).unwrap();
+    let input = redaction_pdf(b"q 100 0 0 100 0 0 cm /Im1 Do Q", |document, _| {
+        let parameters = document.add_object(dictionary! {
+            "Predictor" => 15,
+            "Colors" => 3,
+            "Columns" => 4,
+            "BitsPerComponent" => 8,
+        });
+        let image = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 4,
+                "Height" => 2,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => "FlateDecode",
+                "DecodeParms" => parameters,
+            },
+            compressed,
+        ));
+        (
+            dictionary! { "XObject" => dictionary! { "Im1" => image } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let output = redacted(redact(&input, &[(1, [0.0, 0.8, 50.0 / 600.0, 1.0])]));
+    let images = page_images(&output);
+    assert_eq!(images.len(), 1);
+    for y in 0..height {
+        let line = &images[0][y * row..(y + 1) * row];
+        assert_eq!(&line[..6], [0; 6], "row {y}: the left half is painted");
+        assert_eq!(&line[6..], &pixels[y * row + 6..(y + 1) * row], "row {y}");
+    }
+}
+
+#[test]
+fn redaction_leaves_a_pixel_that_still_shows_outside_the_box() {
+    // A one-pixel mask stretched into a rule across the page, as in pdf.js
+    // corpus issue4436r.pdf: the box hides part of its only pixel, whose
+    // colour shows either side, so the rule stays whole.
+    let mut content = b"q 180 0 0 1 10 600 cm BI /IM true /W 1 /H 1 /BPC 1 ID ".to_vec();
+    content.push(0);
+    content.extend_from_slice(b" EI Q");
+    let input = redaction_pdf(&content, |_, _| {
+        (dictionary! {}, dictionary! {}, dictionary! {})
+    });
+    let output = redacted(redact(&input, &[(1, [0.1, 0.2, 0.2, 0.3])]));
+    let written = first_page_content(&output);
+    assert!(
+        written.contains("BI /IM true /W 1 /H 1 /BPC 1 ID "),
+        "{written}"
+    );
+}
+
+#[test]
+fn redaction_reads_cids_an_encoding_cmap_gives_with_bfchar() {
+    // As bug920426.pdf in the pdf.js corpus does: codes map to CIDs through
+    // bfchar, and only CID 2 has a width of its own.
+    let content = b"BT /F2 10 Tf 50 500 Td <004100420043> Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        let encoding = document.add_object(Stream::new(
+            dictionary! { "Type" => "CMap", "CMapName" => "Example" },
+            b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+              1 begincodespacerange <0000> <FFFF> endcodespacerange\n\
+              1 beginbfchar <0042> <0002> endbfchar\n\
+              1 beginbfrange <0041> <0041> <0001> endbfrange\n\
+              endcmap end end"
+                .to_vec(),
+        ));
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type0",
+            "BaseFont" => "Example",
+            "Encoding" => encoding,
+            "DescendantFonts" => vec![dictionary! {
+                "Type" => "Font",
+                "Subtype" => "CIDFontType2",
+                "BaseFont" => "Example",
+                "DW" => 500,
+                "W" => vec![2.into(), vec![1000.into()].into()],
+            }
+            .into()],
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F2" => font } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let texts = crate::page_texts(&input, "").unwrap();
+    let left = |index: usize| texts[0].boxes[index][0] * 600.0;
+    // A at 50, B (CID 2, 10 points wide) at 55, the third code at 65.
+    assert!((left(1) - 55.0).abs() < 0.01, "{}", left(1));
+    assert!((left(2) - 65.0).abs() < 0.01, "{}", left(2));
+}

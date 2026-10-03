@@ -7,6 +7,8 @@
 
 mod standard_fonts;
 
+pub(crate) use standard_fonts::{standard_width, win_ansi_char};
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lopdf::content::Content;
@@ -826,7 +828,11 @@ impl Stamper {
     /// The copy is shallow. Shared resources first have their direct
     /// subdictionaries moved into objects of their own, so every copy refers to
     /// one font dictionary rather than duplicating it on each page.
-    fn own_resources(&mut self, document: &mut Document, page_id: ObjectId) -> Dictionary {
+    pub(crate) fn own_resources(
+        &mut self,
+        document: &mut Document,
+        page_id: ObjectId,
+    ) -> Dictionary {
         let mut node = Some(page_id);
         let mut found = None;
         for _ in 0..MAX_PAGE_TREE_DEPTH {

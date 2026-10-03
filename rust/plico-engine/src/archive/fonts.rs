@@ -106,7 +106,7 @@ impl Metrics {
 /// The standard 14 font an unembedded simple font stands for, from its name,
 /// including the aliases readers accept (Arial, Times New Roman, Courier New,
 /// with `,Bold` or `-BoldMT` style suffixes).
-pub(super) fn standard_equivalent(font: &Dictionary) -> Option<&'static str> {
+pub(crate) fn standard_equivalent(font: &Dictionary) -> Option<&'static str> {
     let subtype = font.get(b"Subtype").and_then(Object::as_name).ok()?;
     if !matches!(subtype, b"Type1" | b"MMType1" | b"TrueType") {
         return None;

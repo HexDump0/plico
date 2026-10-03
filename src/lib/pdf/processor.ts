@@ -4,6 +4,7 @@ import type {
 	CropOptions,
 	ImagePdfOptions,
 	OrganizePage,
+	PageGlyphs,
 	PageNumberOptions,
 	PdfOutput,
 	PdfImageOptions,
@@ -11,6 +12,7 @@ import type {
 	PdfWorkerResponse,
 	Protection,
 	ProtectOptions,
+	RedactOptions,
 	SignOptions,
 	SplitOptions,
 	WatermarkOptions
@@ -209,6 +211,44 @@ export async function processCrop(
 		{ id: ++requestId, operation: 'crop', files: [buffer], passwords: [password], options },
 		signal
 	);
+}
+
+/// The redacted PDF, and the pages drawn from a picture.
+export async function processRedact(
+	file: File,
+	password: string,
+	options: RedactOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'redact', files: [buffer], passwords: [password], options },
+		signal
+	);
+	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');
+	return {
+		bytes: new Uint8Array(response.bytes),
+		format: 'pdf' as const,
+		pictured: response.pictured ?? []
+	};
+}
+
+/// Where every glyph sits and what it reads, page by page.
+export async function redactionText(
+	file: File,
+	password: string,
+	signal?: AbortSignal
+): Promise<PageGlyphs[]> {
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'redact-text', files: [buffer], passwords: [password] },
+		signal
+	);
+	if (!('glyphs' in response)) throw new Error('The PDF engine returned no text.');
+	return response.glyphs;
 }
 
 // Writes a protected PDF back without its encryption, for consumers that

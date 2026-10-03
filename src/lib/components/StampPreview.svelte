@@ -12,6 +12,9 @@
 		behind = false,
 		stamped,
 		overlayEverywhere = false,
+		large = false,
+		current = $bindable(1),
+		note,
 		reducedMotion,
 		overlay,
 		onload,
@@ -26,6 +29,14 @@
 		/// Renders the overlay on unstamped pages too, for one that takes
 		/// input there, such as a click that moves the signature to the page.
 		overlayEverywhere?: boolean;
+		/// A bigger page, for tools worked on the page itself: drawing,
+		/// placing, picking words.
+		large?: boolean;
+		/// The page shown, from 1.
+		current?: number;
+		/// Replaces the pager's Skipped tag with a word about the page, or
+		/// nothing.
+		note?: (page: number) => string | undefined;
 		reducedMotion: boolean;
 		overlay: Snippet<[PreviewPage]>;
 		/// Once the PDF opens, with its page count and the open document.
@@ -43,7 +54,6 @@
 	let status = $state('Loading PDF...');
 	// The page asked for, then its size once known, then the page on screen.
 	// A page is only shown once drawn, so it arrives whole with its overlay.
-	let current = $state(1);
 	let target = $state<PreviewPage | null>(null);
 	let shown = $state.raw<{
 		page: PreviewPage;
@@ -55,11 +65,28 @@
 	let available = $state(0);
 	let viewportHeight = $state(900);
 	const pageCount = $derived(pdf?.numPages ?? 0);
-	const maxHeight = $derived(Math.max(320, Math.min(900, viewportHeight - 300)));
-	const isStamped = $derived(stamped(current));
+	const maxHeight = $derived(
+		large
+			? Math.max(360, Math.min(1100, viewportHeight - 220))
+			: Math.max(320, Math.min(900, viewportHeight - 300))
+	);
+	const maxWidth = $derived(large ? 760 : 560);
+	const tag = $derived(note ? note(current) : stamped(current) ? undefined : 'Skipped');
+	// Whichever way the page changed, by the pager or from outside.
+	let last = untrack(() => current);
+	$effect.pre(() => {
+		const now = current;
+		if (now !== last) {
+			travel = Math.sign(now - last);
+			last = now;
+		}
+	});
 
 	function fit(page: PreviewPage) {
-		const width = Math.max(1, Math.min(available, 560, (maxHeight * page.width) / page.height));
+		const width = Math.max(
+			1,
+			Math.min(available, maxWidth, (maxHeight * page.width) / page.height)
+		);
 		return { width, height: (width * page.height) / page.width };
 	}
 	const frame = $derived(shown ? fit(shown.page) : target ? fit(target) : null);
@@ -216,15 +243,13 @@
 
 	function go(offset: number) {
 		const next = Math.max(1, Math.min(pageCount, current + offset));
-		if (next === current) return;
-		travel = Math.sign(next - current);
-		current = next;
+		if (next !== current) current = next;
 	}
 </script>
 
 <svelte:window bind:innerHeight={viewportHeight} />
 
-<section aria-label="Preview" class="mx-auto w-full max-w-3xl space-y-6">
+<section aria-label="Preview" class="mx-auto w-full space-y-6 {large ? 'max-w-4xl' : 'max-w-3xl'}">
 	<div class="mx-auto flex w-fit max-w-full items-center gap-2 px-1">
 		<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={file.name}>{file.name}</p>
 		<span class="shrink-0 text-xs whitespace-nowrap text-muted"
@@ -304,8 +329,8 @@
 							out:roll={{ entering: false }}>{current}</span
 						>{/key}
 				</span>
-				<span class="ml-1">/ {pageCount}</span>{#if !isStamped}<span
-						class="ml-2 rounded-md bg-white/10 px-1.5 py-0.5 text-[11px]">Skipped</span
+				<span class="ml-1">/ {pageCount}</span>{#if tag}<span
+						class="ml-2 rounded-md bg-white/10 px-1.5 py-0.5 text-[11px]">{tag}</span
 					>{/if}
 			</p>
 			<button

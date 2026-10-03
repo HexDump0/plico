@@ -20,6 +20,11 @@ rust/plico-engine/src/stamps.rs                             page numbers, waterm
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
+rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
+rust/plico-engine/src/redact/content.rs                     content stream rewriting that removes what lies under a box
+rust/plico-engine/src/redact/lexer.rs                       content and CMap tokenizer that keeps byte spans
+rust/plico-engine/src/redact/fonts.rs                       glyph widths, extents and text for redaction and search
+rust/plico-engine/src/redact/pixels.rs                      image pixels overwritten under a box
 rust/plico-engine/assets/icc/                               ICC profiles for PDF/A (Ghostscript's, AGPL)
 rust/plico-engine/src/bindings.rs                           browser/wasm entry points
 rust/plico-engine/src/tests.rs                              generated-fixture unit tests
@@ -36,9 +41,11 @@ scripts/raster-compare.mjs                                  rendered-output comp
 scripts/raster-stamp.mjs                                    rendered check of page numbers and watermarks
 scripts/raster-crop.mjs                                     rendered check of cropping
 scripts/raster-flatten.mjs                                  rendered check of flattening
+scripts/raster-redact.mjs                                   poppler text and rendered check of redaction
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
+src/lib/pdf/redact-text.ts                                  finding text, picking words, and what a box removes
 testing/                                                    local corpus, gitignored
 ```
 
@@ -60,6 +67,7 @@ npm run test:raster   # needs a corpus, renders and compares output
 npm run test:raster:stamp  # needs a corpus, renders stamped output
 npm run test:raster:crop   # needs a corpus, renders cropped output
 npm run test:raster:flatten  # needs a corpus, renders flattened output
+npm run test:raster:redact   # needs a corpus and poppler, checks redacted output
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
@@ -93,6 +101,14 @@ should only go down. If your change moves it, say so.
 
 The flatten raster harness is red on 10 files: the same 7 load/save losses and
 3 that only pdf.js draws differently; poppler renders those identically.
+
+`npm run test:raster:redact` also needs poppler's `pdftotext`. Baseline
+2026-10-03: 916 files and 1,714 pages redacted, 183 of them drawn from a
+picture, 83,100 words under the box gone. Poppler reports one word still under
+a box, a false positive in `issue6387.pdf` (vertical text, which poppler places
+0.8 em above where it renders); 52 pages change outside the box, every one
+explained in `ISSUES.md`. A leak is the failure that matters here: if your
+change finds one, stop. If it moves either number, say so.
 
 The crop raster harness is red on 11 files, 7 of them the same lopdf load/save
 losses and 4 where pdf.js antialiases a shading edge differently once the page
@@ -145,6 +161,15 @@ PDF/A output must never claim a conformance it lacks. When the engine cannot
 fix something it detects, it refuses with the reason; veraPDF over the corpus is
 how undetected cases are found. `validatePdfA`-style self-checks are not
 evidence.
+
+Redaction removes, it never only covers. Anything under a box that the
+engine cannot take out exactly sends the page to a picture; it is never
+written out still there. A glyph's width that cannot be known is `None`,
+never a guess, because a glyph placed by a guessed width can sit beside the
+box that should have removed it. Operations that draw nothing under a box are
+copied byte for byte, which is why redaction has its own lexer rather than
+lopdf's parser, which re-encodes everything and drops inline images it cannot
+decode.
 
 Stamping and cropping edit pages in place: no page tree rebuild, no
 renumbering. Lay a stamp or a crop out in the page's visible frame, which is

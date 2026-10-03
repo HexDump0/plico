@@ -43,6 +43,38 @@ pub(super) fn text_width(family: FontFamily, bold: bool, encoded: &[u8]) -> u32 
         .sum()
 }
 
+/// The width of WinAnsiEncoding `code` in one of the standard 14 fonts, by
+/// its name, for a font a PDF uses without giving widths. `None` for the
+/// fonts with no table here (italics of Times, Symbol, ZapfDingbats) and for
+/// codes the encoding leaves undefined.
+pub(crate) fn standard_width(name: &str, code: u8) -> Option<u16> {
+    if name.starts_with("Courier") {
+        return (code >= 32 && win_ansi_char(code).is_some()).then_some(600);
+    }
+    let widths = match name {
+        "Helvetica" | "Helvetica-Oblique" => &HELVETICA,
+        "Helvetica-Bold" | "Helvetica-BoldOblique" => &HELVETICA_BOLD,
+        "Times-Roman" => &TIMES_ROMAN,
+        "Times-Bold" => &TIMES_BOLD,
+        _ => return None,
+    };
+    let width = *widths.get(usize::from(code).checked_sub(32)?)?;
+    (width > 0).then_some(width)
+}
+
+/// The character WinAnsiEncoding gives `code`, the reverse of [`win_ansi`].
+pub(crate) fn win_ansi_char(code: u8) -> Option<char> {
+    const HIGH: [char; 32] = [
+        '€', '\0', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\0', 'Ž', '\0', '\0',
+        '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\0', 'ž', 'Ÿ',
+    ];
+    match code {
+        0x20..=0x7E | 0xA0..=0xFF => Some(char::from(code)),
+        0x80..=0x9F => Some(HIGH[usize::from(code - 0x80)]).filter(|&found| found != '\0'),
+        _ => None,
+    }
+}
+
 /// WinAnsiEncoding is Latin-1 plus typographic punctuation in 0x80 to 0x9F.
 /// `None` for anything it cannot represent, including control characters.
 pub(super) fn win_ansi(character: char) -> Option<u8> {

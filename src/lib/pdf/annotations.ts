@@ -61,3 +61,42 @@ export async function flattenMarks(pdf: PDFDocumentProxy): Promise<AnnotationMar
 	}
 	return pages;
 }
+
+/// Every page's annotations that readers draw with no stored appearance,
+/// which Redact removes whole when a box touches them: it cannot draw them
+/// into the page to keep the part outside the box. Links show nothing and
+/// popups go with their parents, so neither is listed.
+export async function redactRemovals(pdf: PDFDocumentProxy): Promise<CropArea[][]> {
+	const pages: CropArea[][] = [];
+	for (let number = 1; number <= pdf.numPages; number++) {
+		const page = await pdf.getPage(number);
+		const viewport = page.getViewport({ scale: 1 });
+		const annotations: {
+			subtype: string;
+			rect: number[];
+			annotationFlags?: number;
+			hasAppearance?: boolean;
+		}[] = await page.getAnnotations();
+		pages.push(
+			annotations
+				.filter(
+					({ subtype, annotationFlags = 0, hasAppearance }) =>
+						!hasAppearance &&
+						subtype !== 'Link' &&
+						subtype !== 'Popup' &&
+						!(annotationFlags & (HIDDEN | NO_VIEW))
+				)
+				.map(({ rect }) => {
+					const [x0, y0] = viewport.convertToViewportPoint(rect[0], rect[1]);
+					const [x1, y1] = viewport.convertToViewportPoint(rect[2], rect[3]);
+					return [
+						Math.min(x0, x1) / viewport.width,
+						Math.min(y0, y1) / viewport.height,
+						Math.max(x0, x1) / viewport.width,
+						Math.max(y0, y1) / viewport.height
+					] as CropArea;
+				})
+		);
+	}
+	return pages;
+}

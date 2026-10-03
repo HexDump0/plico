@@ -3,7 +3,7 @@
 Known problems in Plico, ordered by how much they hurt. The engine section is
 the priority: it is the part that can corrupt a user's document silently.
 
-Evidence comes from two places. `cargo test` runs 103 unit tests against
+Evidence comes from two places. `cargo test` runs 124 unit tests against
 generated fixtures. `npm run test:corpus` merges every usable file in the pdf.js
 test corpus (982 files) with a generated page, then checks a one-page split and
 compression of every loadable file. Numbers below are from that run.
@@ -159,6 +159,48 @@ scripts need an embedded, subset font, which is a size and licensing decision.
 
 Standard 14 fonts without embedding are also not allowed in PDF/A, which does
 not matter until PDF/A output exists.
+
+### What redaction removes, and where it falls back
+
+Redaction removes rather than covers (see `AI/ARCHITECTURE.md`). Things a box
+touches that go entirely, so the page changes beyond the box:
+
+- A glyph goes whole once a box covers a quarter of it. Ordinary text loses
+  at most the letters cut by the edge, but a giant glyph goes too: the
+  one-glyph pages of `page_with_number.pdf` and its siblings (37 pages), the
+  Type 3 shapes in `ContentStream*Type3insideType3.pdf`. Text used as a clip
+  (`text_clip_cff_cid.pdf`, `pattern_text_embedded_font.pdf`) takes what it
+  clips with it. The preview tints such glyphs.
+- An annotation with no stored appearance goes whole, since there is nothing
+  to draw into the page and keep the part outside the box: highlights,
+  underlines and polygons pdf.js draws itself (`issue12337.pdf`,
+  `bug1538111.pdf`, `issue20062.pdf`). So does a text or choice field in a
+  form that asks readers to redraw its fields, whose stored look may show a
+  value no viewer shows (`bug1669099.pdf`, `bug1844576.pdf`,
+  `bug1844583.pdf`), and a widget whose box covers the area
+  (`issue19083.pdf`). The preview outlines the first kind.
+
+Pages drawn from a picture instead, 183 in the corpus, lose selectable text
+on that page only: JBIG2 (most of the 183, the JBIG2 test suite), CCITT,
+JPX and CMYK JPEG images under a box; text in a font without widths that are
+not the standard 14 (`ZapfDingbats.pdf`), or in a predefined CJK CMap
+(`issue13343.pdf`, 90ms-RKSJ-H); content that will not decode
+(`bomb_giant.pdf`). Bundling pdf.js's CMaps and a JBIG2 or CCITT decoder
+would bring most back in place.
+
+Not redacted yet, so content under a box survives in these: soft masks set by
+an ExtGState, tiling pattern cells, and Type 3 glyph procedures (the glyph
+goes whole, its procedure is not opened). Structure elements inside form XObjects keep their `/ActualText`.
+Subset fonts keep the outlines of removed glyphs, which says which letters
+appeared but not where. Bookmarks, attachments and document-level JavaScript
+are outside a page and untouched; "Remove metadata" covers Info and XMP.
+
+lopdf 0.44 decodes the PNG Average predictor wrongly (it adds half the pixel
+above to the whole pixel to the left), so anything that relies on it for
+predicted streams gets garbage on those rows (`issue14814.pdf`). Redaction
+undoes predictors itself. Compress escapes only because it caps decoding at
+the image's exact size, which predictor bytes exceed; do not lift that cap
+without the same fix.
 
 ### Stamping refuses a page tree it cannot fully read
 
@@ -348,7 +390,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-six tools exist, the catalogue advertises about forty
+### Twenty-seven tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -521,6 +563,37 @@ suspect (`bug1669099.pdf`), so those are kept. Empty fields with nothing stored
 and no /MK box are removed: 292 of the 297 appearance-less text fields in the
 corpus, which otherwise made flattening a blank form report hundreds of items
 it could not flatten.
+
+### Redaction is checked by an independent reader and by rendering
+
+`npm run test:raster:redact` puts a box over the middle of every page (the
+same region however the page is turned), then reads the result with poppler,
+which shares no code with the engine, and renders it with pdf.js. A word
+poppler finds mostly under the box is a leak; the box must render solid; the
+page outside the box, beyond a 24 pt margin, must render as before, except on
+pages drawn from a picture.
+
+Baseline 2026-10-03: 916 files, 1,714 pages, 83,100 words removed.
+
+- One reported leak, a false positive: `issue6387.pdf`, vertical text, where
+  poppler puts glyphs about 0.8 em above where pdf.js draws them. The render
+  shows "風" below the box.
+- 52 pages changed outside the box: the giant glyphs, clipping text and
+  annotations listed under "What redaction removes", and the lopdf load/save
+  losses shared with merge (`xobject-image.pdf`, `issue1293r.pdf`,
+  `issue7665.pdf`, `issue13147.pdf`). Those lose content, never leak it: the
+  rewritten page replaces the original bytes.
+
+It found four real bugs on its way to this, each now a unit test: lopdf's
+Average predictor, a one-pixel image stretched into a rule erased whole,
+CIDs mapped with bfchar, and vertical glyph boxes too tall to count as covered.
+It also found its own: poppler's `-bbox` is in media box space unless given
+`-cropbox`.
+
+`npm run test:corpus` also redacts every loadable file and checks structure
+and that nothing the engine reads as text lies under the box: 923 files,
+1,721 pages, 185 of them pictures (139 for images, 33 for text, 13 for
+content).
 
 ### No fuzzing
 

@@ -253,6 +253,76 @@ pub fn flatten_pdf_bytes(
     })
 }
 
+/// What an annotation shows, ready to draw into its page.
+pub(crate) struct Appearance {
+    /// Its stored normal appearance, a form XObject.
+    pub(crate) form: ObjectId,
+    /// Where that lands on the page.
+    pub(crate) matrix: [f32; 6],
+    /// Optional content that still decides whether it shows.
+    pub(crate) optional: Option<Object>,
+}
+
+/// What readers show for `annotation` on page `page_id`, by the rules
+/// flattening follows: nothing for hidden, print-only or popup annotations,
+/// nothing without a stored appearance, and nothing for a text or choice
+/// field in a form that asks readers to redraw its fields, since its stored
+/// look may not be what they show.
+pub(crate) fn appearance(
+    document: &mut Document,
+    page_id: ObjectId,
+    annotation: &Dictionary,
+) -> Option<Appearance> {
+    let flags = annotation.get(b"F").and_then(Object::as_i64).unwrap_or(0);
+    let subtype = name_of(annotation, b"Subtype").unwrap_or_default();
+    if flags & (HIDDEN | NO_VIEW) != 0 || subtype == b"Popup" {
+        return None;
+    }
+    let form = document
+        .catalog()
+        .ok()
+        .and_then(|catalog| catalog.get(b"AcroForm").ok())
+        .and_then(|value| resolve_dict(document, value))
+        .cloned();
+    let redraws_fields = form
+        .as_ref()
+        .and_then(|form| form.get(b"NeedAppearances").ok())
+        .and_then(|value| value.as_bool().ok())
+        .unwrap_or(false);
+    if subtype == b"Widget"
+        && redraws_fields
+        && matches!(
+            field_type(document, annotation).as_deref(),
+            Some(b"Tx" | b"Ch")
+        )
+    {
+        return None;
+    }
+    let normal = annotation
+        .get(b"AP")
+        .ok()
+        .and_then(|value| resolve_dict(document, value))
+        .and_then(|appearance| appearance.get(b"N").ok())
+        .cloned()?;
+    let state = chosen_state(document, annotation, normal)?;
+    let form_id = as_stream_id(document, state)?;
+    let rotation = page_rotation(document, page_id);
+    let matrix = placement(document, annotation, form_id, flags, rotation)?;
+    // A widget's appearance may lean on the form's default resources.
+    if let (Some(defaults), Ok(Object::Stream(stream))) = (
+        form.as_ref().and_then(|form| form.get(b"DR").ok()).cloned(),
+        document.get_object_mut(form_id),
+    ) && !stream.dict.has(b"Resources")
+    {
+        stream.dict.set("Resources", defaults);
+    }
+    Some(Appearance {
+        form: form_id,
+        matrix,
+        optional: annotation.get(b"OC").ok().cloned(),
+    })
+}
+
 fn resolve_dict<'a>(document: &'a Document, value: &'a Object) -> Option<&'a Dictionary> {
     resolve(document, value)?.as_dict().ok()
 }
@@ -495,7 +565,7 @@ fn set_annotations(
 }
 
 /// A popup only shows its parent's text, so it goes with its parent.
-fn remove_orphaned_popups(
+pub(crate) fn remove_orphaned_popups(
     document: &mut Document,
     removed: &BTreeSet<ObjectId>,
 ) -> Result<(), String> {
@@ -534,7 +604,11 @@ fn remove_orphaned_popups(
 /// Takes flattened widgets out of the form's field tree, and fields left with
 /// no widgets with them. A form with no fields left goes entirely, and so does
 /// XFA, which would otherwise show the old form in viewers that read it.
-fn prune_fields(document: &mut Document, catalog_id: ObjectId, widgets: &BTreeSet<ObjectId>) {
+pub(crate) fn prune_fields(
+    document: &mut Document,
+    catalog_id: ObjectId,
+    widgets: &BTreeSet<ObjectId>,
+) {
     let Some(form) = document
         .get_dictionary(catalog_id)
         .ok()
