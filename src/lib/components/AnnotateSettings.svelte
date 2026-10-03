@@ -87,7 +87,6 @@
 				? shapes.find((option) => option.id === values.kind)?.label
 				: undefined
 	);
-	const count = $derived(editor.ready.length);
 
 	let picker = $state<HTMLInputElement>();
 	let imageError = $state('');
@@ -477,14 +476,7 @@
 	</div>
 
 	<div>
-		<div class="mb-3 flex items-center justify-between">
-			<h2 class="text-sm font-semibold">Annotations</h2>
-			<span class="text-xs text-muted tabular-nums"
-				>{count === 0
-					? 'None'
-					: `${count} on ${editor.pageCount} ${editor.pageCount === 1 ? 'page' : 'pages'}`}</span
-			>
-		</div>
+		<h2 class="mb-3 text-sm font-semibold">Annotations</h2>
 		<div
 			class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
 			role="group"

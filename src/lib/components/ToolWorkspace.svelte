@@ -71,6 +71,7 @@
 	import PdfASettings from './PdfASettings.svelte';
 	import PasswordInput from './PasswordInput.svelte';
 	import StampPreview from './StampPreview.svelte';
+	import PageScroller from './PageScroller.svelte';
 	import StampOverlay from './StampOverlay.svelte';
 	import PageNumberSettings from './PageNumberSettings.svelte';
 	import WatermarkSettings from './WatermarkSettings.svelte';
@@ -868,11 +869,6 @@
 		redactWhole = [];
 		annotate.reset();
 	});
-	// Leaving a page lets go of what was picked on it.
-	$effect(() => {
-		void previewPage;
-		untrack(() => annotate.select(null));
-	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
 	$effect(() => {
@@ -1398,7 +1394,7 @@
 			<section
 				aria-label="Documents"
 				data-drag-area
-				class="relative isolate flex min-w-0 flex-col overflow-hidden px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
+				class="relative isolate flex min-w-0 flex-col overflow-clip px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10 {isSplit ||
 				isPdfToImage ||
 				isPageTool ||
 				isPagePreview
@@ -1479,6 +1475,19 @@
 													splitRanges[0].to === 1
 												)
 													splitRanges[0].to = count;
+											}}
+											onremove={() => workspace.remove(currentFile)}
+										/>{/key}
+								</div>
+							{:else if isAnnotate && currentFile}
+								<div class="w-full py-6 lg:pb-0">
+									{#key currentFile}<PageScroller
+											file={currentFile}
+											bind:current={previewPage}
+											overlay={stampOverlay}
+											onload={(count, pdf) => {
+												pageCount = count;
+												void readPageText(currentFile, pdf);
 											}}
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}

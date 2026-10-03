@@ -122,7 +122,6 @@ export class AnnotateEditor {
 	});
 	ready = $derived(this.marks.filter(filled));
 	signature = $derived(JSON.stringify([this.ready, this.flatten]));
-	pageCount = $derived(unique(this.ready.map((mark) => mark.page)).length);
 	hasNotes = $derived(this.ready.some((mark) => mark.kind === 'note'));
 	/// The first character in any text box the built-in fonts cannot draw.
 	undrawable = $derived(

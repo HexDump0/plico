@@ -427,7 +427,11 @@ picked, moved and resized where the tool lets them be. -->
 	bind:this={root}
 	bind:clientWidth={pixels}
 	role="presentation"
-	class="absolute inset-0 {editable ? `touch-none ${cursor}` : 'pointer-events-none'}"
+	class="absolute inset-0 {!editable
+		? 'pointer-events-none'
+		: tool === 'select'
+			? cursor
+			: `touch-none ${cursor}`}"
 	onpointerdown={(event) => begin(event)}
 	onpointermove={update}
 	onpointerup={end}
@@ -467,7 +471,7 @@ picked, moved and resized where the tool lets them be. -->
 					class="absolute rounded-[2px] {live
 						? groupOf(mark.kind) === 'markup'
 							? 'cursor-pointer'
-							: 'cursor-move'
+							: 'cursor-move touch-none'
 						: 'pointer-events-none'} outline-brand/70 focus-visible:outline-2 focus-visible:outline-brand {editor.selected !==
 						mark.id && live
 						? 'hover:outline-1 hover:outline-dashed'
@@ -518,7 +522,7 @@ picked, moved and resized where the tool lets them be. -->
 				{#each corners as item (item.corner)}
 					<div
 						role="presentation"
-						class="pointer-events-auto absolute size-7 {item.place}"
+						class="pointer-events-auto absolute size-7 touch-none {item.place}"
 						style:cursor={item.corner === 'nw' || item.corner === 'se'
 							? 'nwse-resize'
 							: 'nesw-resize'}
@@ -548,7 +552,7 @@ picked, moved and resized where the tool lets them be. -->
 				{@const [x, y] = selected[end]}
 				<div
 					role="presentation"
-					class="absolute size-7 -translate-1/2 cursor-grab"
+					class="absolute size-7 -translate-1/2 cursor-grab touch-none"
 					style:left={percent(x)}
 					style:top={percent(y)}
 					onpointerdown={(event) => grab(event, selected, end)}
