@@ -59,7 +59,7 @@ function apart(a: CropArea, b: CropArea) {
 	return b[0] - a[2] > Math.max(a[2] - a[0], b[2] - b[0]) / 3;
 }
 
-const isBlank = (text: string) => !text.trim();
+export const isBlank = (text: string) => !text.trim();
 
 function union(boxes: CropArea[]): CropArea {
 	return [
@@ -71,7 +71,7 @@ function union(boxes: CropArea[]): CropArea {
 }
 
 /// One box per line the glyphs run across, leaving out blanks at the ends.
-function lineBoxes(page: PageGlyphs, glyphs: number[]): CropArea[] {
+export function lineBoxes(page: PageGlyphs, glyphs: number[]): CropArea[] {
 	const lines: CropArea[][] = [];
 	for (const index of glyphs) {
 		if (isBlank(glyphText(page, index))) continue;

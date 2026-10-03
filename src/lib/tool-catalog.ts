@@ -54,6 +54,7 @@ const supportedToolIds = new Set([
 	'sign',
 	'flatten',
 	'redact',
+	'annotate',
 	'organize',
 	'extract',
 	'remove',

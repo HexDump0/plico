@@ -31,6 +31,7 @@
 		processSign,
 		processFlatten,
 		processRedact,
+		processAnnotate,
 		redactionText
 	} from '$lib/pdf/processor';
 	import type {
@@ -83,6 +84,9 @@
 	import FlattenSettings from './FlattenSettings.svelte';
 	import RedactOverlay from './RedactOverlay.svelte';
 	import RedactSettings from './RedactSettings.svelte';
+	import AnnotateOverlay from './AnnotateOverlay.svelte';
+	import AnnotateSettings from './AnnotateSettings.svelte';
+	import { AnnotateEditor } from '$lib/pdf/annotate-editor.svelte';
 	import { covered, findText } from '$lib/pdf/redact-text';
 	import { flattenMarks, redactRemovals, type AnnotationMark } from '$lib/pdf/annotations';
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
@@ -111,8 +115,11 @@
 	const isSign = $derived(tool.id === 'sign');
 	const isFlatten = $derived(tool.id === 'flatten');
 	const isRedact = $derived(tool.id === 'redact');
+	const isAnnotate = $derived(tool.id === 'annotate');
 	// Tools that show one page at a time and draw their result over it.
-	const isPagePreview = $derived(isStamp || isCrop || isSign || isFlatten || isRedact);
+	const isPagePreview = $derived(
+		isStamp || isCrop || isSign || isFlatten || isRedact || isAnnotate
+	);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
 			tool.id === 'pdf-to-png' ||
@@ -248,8 +255,9 @@
 	let redactQuery = $state('');
 	// The search hit being looked at, or -1.
 	let redactMatch = $state(-1);
+	const annotate = new AnnotateEditor();
 	// What the engine reads on each page, for finding text and picking words.
-	let redactText = $state.raw<PageGlyphs[] | 'reading' | 'unknown'>('reading');
+	let pageText = $state.raw<PageGlyphs[] | 'reading' | 'unknown'>('reading');
 	// Annotations a box removes whole when it touches them, by page.
 	let redactWhole = $state.raw<CropArea[][]>([]);
 	// Pages the last result drew from a picture.
@@ -482,7 +490,7 @@
 			(flattenFound === 'unknown' || flattenFound > 0)
 	);
 	const redactMatches = $derived(
-		isRedact && typeof redactText !== 'string' ? findText(redactText, redactQuery) : []
+		isRedact && typeof pageText !== 'string' ? findText(pageText, redactQuery) : []
 	);
 	const redactUnmarked = $derived(
 		redactMatches.filter(
@@ -498,9 +506,9 @@
 	);
 	const redactCurrent = $derived(redactMatches[redactMatch]);
 	const redactTextState = $derived(
-		typeof redactText === 'string'
-			? redactText
-			: redactText.every((page) => page.ends.length === 0)
+		typeof pageText === 'string'
+			? pageText
+			: pageText.every((page) => page.ends.length === 0)
 				? 'none'
 				: 'ready'
 	);
@@ -584,20 +592,32 @@
 			redactMatch < 0 ? (offset > 0 ? 0 : count - 1) : (redactMatch + offset + count) % count;
 		previewPage = redactMatches[redactMatch].page;
 	}
+	const annotateValid = $derived(
+		!!currentFile &&
+			pageCount > 0 &&
+			annotate.ready.length > 0 &&
+			!annotate.undrawable &&
+			!(annotate.flatten && annotate.hasNotes)
+	);
+	function annotateNote(page: number) {
+		const count = annotate.ready.filter((mark) => mark.page === page).length;
+		return count ? `${count} added` : undefined;
+	}
 	let redactReading = 0;
-	async function readRedactText(file: File, pdf: PDFDocumentProxy) {
+	async function readPageText(file: File, pdf: PDFDocumentProxy) {
 		const read = ++redactReading;
-		redactText = 'reading';
-		redactRemovals(pdf)
-			.then((pages) => {
-				if (read === redactReading) redactWhole = pages;
-			})
-			.catch(() => {});
+		pageText = 'reading';
+		if (isRedact)
+			redactRemovals(pdf)
+				.then((pages) => {
+					if (read === redactReading) redactWhole = pages;
+				})
+				.catch(() => {});
 		try {
 			const pages = await redactionText(file, workspace.passwordFor(file));
-			if (read === redactReading) redactText = pages;
+			if (read === redactReading) pageText = pages;
 		} catch {
-			if (read === redactReading) redactText = 'unknown';
+			if (read === redactReading) pageText = 'unknown';
 		}
 	}
 	$effect(() => {
@@ -640,35 +660,40 @@
 						? !currentFile || processing
 						: isFlatten
 							? !flattenValid || processing
-							: isRedact
-								? !redactValid || processing
-								: isSign
-									? !signValid || processing
-									: isCrop
-										? !cropValid || processing
-										: isStamp
-											? !stampValid || processing
-											: officeTool
-												? !currentFile || processing
-												: isMerge
-													? workspace.files.length < 2 ||
-														processing ||
-														!!dragged ||
-														!!keyboardPicked
-													: isSplit
-														? !splitValid || processing
-														: isPageTool
-															? !pageToolValid || processing
-															: isCompress
-																? workspace.files.length === 0 ||
-																	processing ||
-																	!!dragged ||
-																	!!keyboardPicked
-																: isPdfToImage
-																	? !pdfToImageValid || processing
-																	: isImageToPdf
-																		? !imagePdfValid || processing || !!dragged || !!keyboardPicked
-																		: true
+							: isAnnotate
+								? !annotateValid || processing
+								: isRedact
+									? !redactValid || processing
+									: isSign
+										? !signValid || processing
+										: isCrop
+											? !cropValid || processing
+											: isStamp
+												? !stampValid || processing
+												: officeTool
+													? !currentFile || processing
+													: isMerge
+														? workspace.files.length < 2 ||
+															processing ||
+															!!dragged ||
+															!!keyboardPicked
+														: isSplit
+															? !splitValid || processing
+															: isPageTool
+																? !pageToolValid || processing
+																: isCompress
+																	? workspace.files.length === 0 ||
+																		processing ||
+																		!!dragged ||
+																		!!keyboardPicked
+																	: isPdfToImage
+																		? !pdfToImageValid || processing
+																		: isImageToPdf
+																			? !imagePdfValid ||
+																				processing ||
+																				!!dragged ||
+																				!!keyboardPicked
+																			: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -681,29 +706,31 @@
 						? !currentFile
 						: isFlatten
 							? !flattenValid
-							: isRedact
-								? !redactValid
-								: isSign
-									? !signValid
-									: isCrop
-										? !cropValid
-										: isStamp
-											? !stampValid
-											: officeTool
-												? !currentFile
-												: isMerge
-													? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-													: isSplit
-														? !splitValid
-														: isPageTool
-															? !pageToolValid
-															: isCompress
-																? workspace.files.length === 0 || !!dragged || !!keyboardPicked
-																: isPdfToImage
-																	? !pdfToImageValid
-																	: isImageToPdf
-																		? !imagePdfValid || !!dragged || !!keyboardPicked
-																		: true
+							: isAnnotate
+								? !annotateValid
+								: isRedact
+									? !redactValid
+									: isSign
+										? !signValid
+										: isCrop
+											? !cropValid
+											: isStamp
+												? !stampValid
+												: officeTool
+													? !currentFile
+													: isMerge
+														? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+														: isSplit
+															? !splitValid
+															: isPageTool
+																? !pageToolValid
+																: isCompress
+																	? workspace.files.length === 0 || !!dragged || !!keyboardPicked
+																	: isPdfToImage
+																		? !pdfToImageValid
+																		: isImageToPdf
+																			? !imagePdfValid || !!dragged || !!keyboardPicked
+																			: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -717,33 +744,35 @@
 						? `${baseName}-pdfa`
 						: isFlatten
 							? `${baseName}-flattened`
-							: isRedact
-								? `${baseName}-redacted`
-								: isSign
-									? `${baseName}-signed`
-									: isCrop
-										? `${baseName}-cropped`
-										: isPageNumbers
-											? `${baseName}-numbered`
-											: isWatermark
-												? `${baseName}-watermarked`
-												: isMerge
-													? 'plico-merged'
-													: isImageToPdf
-														? 'plico-images'
-														: isSplit
-															? `${baseName}-split`
-															: isOrganize
-																? `${baseName}-organized`
-																: isExtract
-																	? `${baseName}-extracted`
-																	: isRemove
-																		? `${baseName}-pages-removed`
-																		: isRotate
-																			? `${baseName}-rotated`
-																			: isCompress
-																				? `${baseName}-compressed`
-																				: `${baseName}-images`
+							: isAnnotate
+								? `${baseName}-annotated`
+								: isRedact
+									? `${baseName}-redacted`
+									: isSign
+										? `${baseName}-signed`
+										: isCrop
+											? `${baseName}-cropped`
+											: isPageNumbers
+												? `${baseName}-numbered`
+												: isWatermark
+													? `${baseName}-watermarked`
+													: isMerge
+														? 'plico-merged'
+														: isImageToPdf
+															? 'plico-images'
+															: isSplit
+																? `${baseName}-split`
+																: isOrganize
+																	? `${baseName}-organized`
+																	: isExtract
+																		? `${baseName}-extracted`
+																		: isRemove
+																			? `${baseName}-pages-removed`
+																			: isRotate
+																				? `${baseName}-rotated`
+																				: isCompress
+																					? `${baseName}-compressed`
+																					: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -803,6 +832,7 @@
 		void signSignature;
 		void flattenFormsOnly;
 		void redactSignature;
+		void annotate.signature;
 		void markdownSignature;
 		void pdfaPart;
 		untrack(() => job.clear());
@@ -834,8 +864,14 @@
 		redactQuery = '';
 		redactPictured = [];
 		redactReading++;
-		redactText = 'reading';
+		pageText = 'reading';
 		redactWhole = [];
+		annotate.reset();
+	});
+	// Leaving a page lets go of what was picked on it.
+	$effect(() => {
+		void previewPage;
+		untrack(() => annotate.select(null));
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
@@ -885,6 +921,7 @@
 	onDestroy(() => {
 		job.clear();
 		if (watermarkImage) URL.revokeObjectURL(watermarkImage.url);
+		annotate.destroy();
 	});
 	async function protect() {
 		if (processing || !protectValid || !currentFile) return;
@@ -1013,6 +1050,19 @@
 				return output;
 			},
 			'Could not redact this PDF.',
+			() => downloadLink?.click()
+		);
+	}
+	async function addAnnotations() {
+		if (processing || !annotateValid || !currentFile) return;
+		annotate.finishEditing();
+		annotate.select(null);
+		const file = currentFile;
+		const { annotations, images } = annotate.payload();
+		const options = { annotations, remove: [], flatten: annotate.flatten };
+		await job.run(
+			(signal) => processAnnotate(file, workspace.passwordFor(file), options, images, signal),
+			'Could not annotate this PDF.',
 			() => downloadLink?.click()
 		);
 	}
@@ -1227,12 +1277,20 @@
 </script>
 
 {#snippet stampOverlay(page: PreviewPage)}
-	{#if isRedact}
+	{#if isAnnotate}
+		<AnnotateOverlay
+			{page}
+			editor={annotate}
+			glyphs={typeof pageText === 'string' ? undefined : pageText[page.number - 1]}
+			editable={!processing}
+			{reducedMotion}
+		/>
+	{:else if isRedact}
 		<RedactOverlay
 			{page}
 			marks={redactMarks.filter((mark) => mark.page === page.number)}
 			selected={redactSelected}
-			glyphs={typeof redactText === 'string' ? undefined : redactText[page.number - 1]}
+			glyphs={typeof pageText === 'string' ? undefined : pageText[page.number - 1]}
 			matches={redactUnmarked
 				.filter((match) => match.page === page.number && match !== redactCurrent)
 				.flatMap((match) => match.boxes)}
@@ -1430,17 +1488,17 @@
 									{#key currentFile}<StampPreview
 											file={currentFile}
 											behind={isWatermark && watermarkBehind}
-											stamped={isSign ? signed : stamped}
-											overlayEverywhere={isSign || isRedact}
-											large={isRedact || isCrop || isSign}
+											stamped={isSign ? signed : isAnnotate ? () => true : stamped}
+											overlayEverywhere={isSign || isRedact || isAnnotate}
+											large={isRedact || isCrop || isSign || isAnnotate}
 											bind:current={previewPage}
-											note={isRedact ? redactNote : undefined}
+											note={isRedact ? redactNote : isAnnotate ? annotateNote : undefined}
 											{reducedMotion}
 											overlay={stampOverlay}
 											onload={(count, pdf) => {
 												pageCount = count;
 												if (isFlatten) void scanFlatten(pdf);
-												if (isRedact) void readRedactText(currentFile, pdf);
+												if (isRedact || isAnnotate) void readPageText(currentFile, pdf);
 											}}
 											onrender={measureCrop}
 											onremove={() => workspace.remove(currentFile)}
@@ -1558,6 +1616,13 @@
 										Incorrect password
 									</p>{/if}
 							</div>{/if}
+					{:else if isAnnotate}
+						<AnnotateSettings
+							editor={annotate}
+							page={previewPage}
+							{reducedMotion}
+							disabled={processing}
+						/>
 					{:else if isRedact}
 						<RedactSettings
 							bind:query={redactQuery}
@@ -1764,6 +1829,21 @@
 								disabled={processing}
 							/>
 						</AdvancedOptions>
+					{:else if isAnnotate}
+						<AdvancedOptions {reducedMotion}>
+							<ToggleSwitch
+								bind:checked={annotate.flatten}
+								label="Draw into the page"
+								tone="brand"
+							/>
+							{#if annotate.flatten && annotate.hasNotes}<p
+									role="alert"
+									transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+									class="pt-1 text-xs text-convert"
+								>
+									Notes can't be drawn into the page
+								</p>{/if}
+						</AdvancedOptions>
 					{:else if isRedact}
 						<AdvancedOptions {reducedMotion}>
 							<ToggleSwitch bind:checked={redactMetadata} label="Remove metadata" tone="merge" />
@@ -1833,29 +1913,31 @@
 												? void convertPdfA()
 												: isFlatten
 													? void flatten()
-													: isRedact
-														? void redact()
-														: isSign
-															? void sign()
-															: isCrop
-																? void crop()
-																: isPageNumbers
-																	? void addPageNumbers()
-																	: isWatermark
-																		? void addWatermark()
-																		: isSplit
-																			? void split()
-																			: isPageTool
-																				? void organize()
-																				: officeTool
-																					? void convertOffice()
-																					: isCompress
-																						? void compress()
-																						: isPdfToImage
-																							? void convertPdfToImage()
-																							: isImageToPdf
-																								? void convertImagesToPdf()
-																								: void merge()}
+													: isAnnotate
+														? void addAnnotations()
+														: isRedact
+															? void redact()
+															: isSign
+																? void sign()
+																: isCrop
+																	? void crop()
+																	: isPageNumbers
+																		? void addPageNumbers()
+																		: isWatermark
+																			? void addWatermark()
+																			: isSplit
+																				? void split()
+																				: isPageTool
+																					? void organize()
+																					: officeTool
+																						? void convertOffice()
+																						: isCompress
+																							? void compress()
+																							: isPdfToImage
+																								? void convertPdfToImage()
+																								: isImageToPdf
+																									? void convertImagesToPdf()
+																									: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
@@ -1867,31 +1949,33 @@
 												? 'Converting to PDF/A'
 												: isFlatten
 													? 'Flattening PDF'
-													: isRedact
-														? 'Redacting PDF'
-														: isSign
-															? 'Signing PDF'
-															: isCrop
-																? 'Cropping PDF'
-																: isPageNumbers
-																	? 'Adding page numbers'
-																	: isWatermark
-																		? 'Adding watermark'
-																		: isSplit
-																			? 'Splitting PDF'
-																			: isPageTool
-																				? `${tool.label} in progress`
-																				: officeTool
-																					? officeStage === 'loading'
-																						? 'Loading converter...'
-																						: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																					: isCompress
-																						? 'Compressing PDF'
-																						: isPdfToImage
-																							? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																							: isImageToPdf
-																								? 'Converting images to PDF...'
-																								: 'Merging PDF'
+													: isAnnotate
+														? 'Annotating PDF'
+														: isRedact
+															? 'Redacting PDF'
+															: isSign
+																? 'Signing PDF'
+																: isCrop
+																	? 'Cropping PDF'
+																	: isPageNumbers
+																		? 'Adding page numbers'
+																		: isWatermark
+																			? 'Adding watermark'
+																			: isSplit
+																				? 'Splitting PDF'
+																				: isPageTool
+																					? `${tool.label} in progress`
+																					: officeTool
+																						? officeStage === 'loading'
+																							? 'Loading converter...'
+																							: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																						: isCompress
+																							? 'Compressing PDF'
+																							: isPdfToImage
+																								? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																								: isImageToPdf
+																									? 'Converting images to PDF...'
+																									: 'Merging PDF'
 									: tool.label}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -1921,27 +2005,29 @@
 														? 'Converting...'
 														: isFlatten
 															? 'Flattening...'
-															: isRedact
-																? 'Redacting...'
-																: isSign
-																	? 'Signing...'
-																	: isCrop
-																		? 'Cropping...'
-																		: isPageNumbers
-																			? 'Numbering...'
-																			: isWatermark
-																				? 'Watermarking...'
-																				: isSplit
-																					? 'Splitting...'
-																					: isPageTool
-																						? 'Processing...'
-																						: isCompress
-																							? 'Compressing...'
-																							: isPdfToImage
-																								? 'Converting...'
-																								: isImageToPdf
+															: isAnnotate
+																? 'Annotating...'
+																: isRedact
+																	? 'Redacting...'
+																	: isSign
+																		? 'Signing...'
+																		: isCrop
+																			? 'Cropping...'
+																			: isPageNumbers
+																				? 'Numbering...'
+																				: isWatermark
+																					? 'Watermarking...'
+																					: isSplit
+																						? 'Splitting...'
+																						: isPageTool
+																							? 'Processing...'
+																							: isCompress
+																								? 'Compressing...'
+																								: isPdfToImage
 																									? 'Converting...'
-																									: 'Merging...'}{:else}
+																									: isImageToPdf
+																										? 'Converting...'
+																										: 'Merging...'}{:else}
 										{tool.label}<IconArrowRight size={20} />{/if}</span
 								>
 								<span

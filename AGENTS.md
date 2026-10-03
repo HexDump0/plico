@@ -47,6 +47,8 @@ src/lib/pdf/crop-area.ts                                    content bounds and p
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
 src/lib/pdf/redact-text.ts                                  finding text, picking words, and what a box removes
+src/lib/pdf/annotate.ts                                     annotation geometry and appearance, mirroring annotate.rs
+src/lib/pdf/annotate-editor.svelte.ts                       Annotate's marks, selection, undo and style
 testing/                                                    local corpus, gitignored
 ```
 
