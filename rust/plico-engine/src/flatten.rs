@@ -323,16 +323,19 @@ pub(crate) fn appearance(
     })
 }
 
-fn resolve_dict<'a>(document: &'a Document, value: &'a Object) -> Option<&'a Dictionary> {
+pub(crate) fn resolve_dict<'a>(
+    document: &'a Document,
+    value: &'a Object,
+) -> Option<&'a Dictionary> {
     resolve(document, value)?.as_dict().ok()
 }
 
-fn name_of<'a>(dictionary: &'a Dictionary, key: &[u8]) -> Option<&'a [u8]> {
+pub(crate) fn name_of<'a>(dictionary: &'a Dictionary, key: &[u8]) -> Option<&'a [u8]> {
     dictionary.get(key).ok()?.as_name().ok()
 }
 
 /// A field's type is inherited from its parents (12.7.3.1).
-fn field_type(document: &Document, annotation: &Dictionary) -> Option<Vec<u8>> {
+pub(crate) fn field_type(document: &Document, annotation: &Dictionary) -> Option<Vec<u8>> {
     let mut node = annotation;
     for _ in 0..MAX_NESTING {
         if let Some(kind) = name_of(node, b"FT") {

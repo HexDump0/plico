@@ -794,7 +794,7 @@ fn smooth(points: &[(f32, f32)]) -> String {
     path
 }
 
-fn ellipse(x0: f32, y0: f32, x1: f32, y1: f32) -> String {
+pub(crate) fn ellipse(x0: f32, y0: f32, x1: f32, y1: f32) -> String {
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
     let (kx, ky) = (rx * KAPPA, ry * KAPPA);

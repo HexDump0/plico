@@ -3,6 +3,7 @@ import type {
 	AnnotateOptions,
 	CompressOptions,
 	CropOptions,
+	FillFormOptions,
 	ImagePdfOptions,
 	OrganizePage,
 	PageGlyphs,
@@ -173,6 +174,29 @@ export async function processFlatten(
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'flatten', files: [buffer], passwords: [password], formsOnly },
+		signal
+	);
+	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');
+	return {
+		bytes: new Uint8Array(response.bytes),
+		format: 'pdf' as const,
+		kept: response.value ?? 0
+	};
+}
+
+/// The filled PDF, and when flattened, how many fields were left as they were
+/// because they had nothing stored to draw.
+export async function processFillForm(
+	file: File,
+	password: string,
+	options: FillFormOptions,
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'fill-form', files: [buffer], passwords: [password], options },
 		signal
 	);
 	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');

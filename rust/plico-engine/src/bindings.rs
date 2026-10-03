@@ -2,15 +2,15 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    Annotation, AnnotationKind, CompressOptions, FlattenScope, FontFamily, ImagePdfOptions, Markup,
-    OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
-    ProtectOptions, Protection, RedactOptions, Redacted, Redaction, Shape, SignaturePlacement,
-    SplitMode, StandardFont, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, annotate_pdf_bytes,
-    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, flatten_pdf_bytes,
-    images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items, page_texts,
-    protect_pdf_bytes, protection_of, redact_pdf_bytes, split_pdf_bytes_with_password,
-    standard_fonts_for_pdfa, unlock_pdf_bytes,
+    Annotation, AnnotationKind, CompressOptions, FieldFill, FieldValue, FlattenScope, FontFamily,
+    ImagePdfOptions, Markup, OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation,
+    PdfALevel, Position, ProtectOptions, Protection, RedactOptions, Redacted, Redaction, Shape,
+    SignaturePlacement, SplitMode, StandardFont, TextStyle, Unremovable, WatermarkContent,
+    WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
+    annotate_pdf_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
+    fill_form_bytes, flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options,
+    organize_pdf_items, page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes,
+    split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -480,6 +480,54 @@ pub fn flatten_pdf(input: &[u8], password: &str, forms_only: bool) -> Result<Arr
     let result = Array::new();
     result.push(&Uint8Array::from(flattened.bytes.as_slice()));
     result.push(&JsValue::from(flattened.kept as u32));
+    Ok(result)
+}
+
+#[wasm_bindgen]
+/// One entry per field: `widgets` names a widget of it by object number,
+/// `kinds` says what its value is (0 text, 1 choices, 2 turn that widget on,
+/// 3 turn it off), and `counts` how many of `values` it takes, in order: one
+/// text, any number of export values, or none for a button. Returns the PDF
+/// and, when flattened, how many fields were left as they were.
+pub fn fill_form(
+    input: &[u8],
+    password: &str,
+    widgets: &[u32],
+    kinds: &[u8],
+    counts: &[u32],
+    values: Vec<String>,
+    flatten: bool,
+) -> Result<Array, JsValue> {
+    let incomplete = || JsValue::from_str("A field to fill is incomplete.");
+    if kinds.len() != widgets.len()
+        || counts.len() != widgets.len()
+        || counts.iter().map(|&count| count as usize).sum::<usize>() != values.len()
+    {
+        return Err(incomplete());
+    }
+    let mut offset = 0;
+    let mut fills = Vec::with_capacity(widgets.len());
+    for index in 0..widgets.len() {
+        let count = counts[index] as usize;
+        let range = offset..offset + count;
+        offset += count;
+        let value = match (kinds[index], count) {
+            (0, 1) => FieldValue::Text(&values[range.start]),
+            (1, _) => FieldValue::Choices(values[range].iter().map(String::as_str).collect()),
+            (2, 0) => FieldValue::Button(true),
+            (3, 0) => FieldValue::Button(false),
+            _ => return Err(incomplete()),
+        };
+        fills.push(FieldFill {
+            widget: (widgets[index], 0),
+            value,
+        });
+    }
+    let filled = fill_form_bytes(input, password, &fills, flatten)
+        .map_err(|error| JsValue::from_str(&error))?;
+    let result = Array::new();
+    result.push(&Uint8Array::from(filled.bytes.as_slice()));
+    result.push(&JsValue::from(filled.kept as u32));
     Ok(result)
 }
 

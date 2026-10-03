@@ -55,6 +55,7 @@ const supportedToolIds = new Set([
 	'flatten',
 	'redact',
 	'annotate',
+	'forms',
 	'organize',
 	'extract',
 	'remove',

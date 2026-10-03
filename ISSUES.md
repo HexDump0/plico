@@ -201,6 +201,25 @@ scripts need an embedded, subset font, which is a size and licensing decision.
 Standard 14 fonts without embedding are also not allowed in PDF/A, which does
 not matter until PDF/A output exists.
 
+### Filled form fields are drawn in the standard fonts
+
+`fill_form_bytes` draws each changed text or choice field in the standard 14
+font nearest the one its `/DA` names, so the same WinAnsi limit applies: text
+outside it is refused by field ("“Ж” in “Name” cannot be drawn with the
+built-in PDF fonts."), and a form whose own font is embedded (a Cyrillic or CJK
+form) cannot be filled with its own script. Using the field's font needs
+reverse-mapping Unicode through its encoding and checking a subset has the
+glyphs, which `redact/fonts.rs` half does already. Readers that redraw fields
+themselves (Acrobat, and anything when NeedAppearances is set) still show the
+value in the form's real font.
+
+Other limits, each deliberate for now: JavaScript format, keystroke and
+calculate actions do not run, so a total field is not totalled and a date is
+not reformatted; a rich text value (`/RV`) is dropped for the plain one; `/XFA`
+is removed, so an XFA-aware reader shows the AcroForm fields rather than the
+XFA copy of the form; a field with no widgets on a page cannot be reached from
+the UI, which reads fields from page annotations.
+
 ### What redaction removes, and where it falls back
 
 Redaction removes rather than covers (see `AI/ARCHITECTURE.md`). Things a box
@@ -394,7 +413,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-eight tools exist, the catalogue advertises about forty
+### Twenty-nine tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -598,6 +617,37 @@ It also found its own: poppler's `-bbox` is in media box space unless given
 and that nothing the engine reads as text lies under the box: 923 files,
 1,721 pages, 185 of them pictures (139 for images, 33 for text, 13 for
 content).
+
+### Form filling is checked by pdf.js, poppler and rendering, with 4 known failures
+
+`npm run test:forms` fills every field a person could fill in every corpus
+form through the wasm build: a short distinct text in each text field (cut to
+its `/MaxLen`), another option in each choice field, each check box turned the
+other way, another radio button chosen. pdf.js must read every value back, from
+every widget; poppler's `pdftotext -raw` must find each visible text in the
+flattened pages; and pdf.js renders of the filled and the filled-and-flattened
+file must match like the flatten check's.
+
+Baseline 2026-10-03: 97 forms and 787 fields filled, 643 texts found in the
+flattened pages, 11 fields left fillable by flattening, none refused. 83 forms
+rendered and compared. 4 failures, each understood:
+
+- `issue15096.pdf` (2, one per widget): an incremental update rewrote the two
+  radio buttons without `/Parent`, while the old parent still lists them as
+  kids and holds `/V /Choice2`. pdf.js keeps reading that value. The file
+  breaks the field tree; the engine follows the buttons' own dictionaries.
+- `issue13003.pdf`: an opaque square annotation lies over the fields. pdf.js
+  draws form fields above other annotations; flattening form fields only
+  puts them into the page content, under the square that stays an annotation.
+  Flatten's "Form fields" scope does the same.
+- `bug1802506.pdf`: the buttons pdf.js draws its own way, already a pdf.js-only
+  failure in the flatten check.
+
+The 14 forms that set NeedAppearances are compared apart, since pdf.js redraws
+their fields in its own way before flattening and draws the engine's
+appearances after. 6 differ by more than 0.1% of pixels, the largest
+(`bug1844583.pdf`, 9%) a page barely larger than its one field, where the two
+fonts' slightly different metrics are most of the page.
 
 ### No fuzzing
 

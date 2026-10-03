@@ -17,6 +17,7 @@ import init, {
 	add_watermark,
 	annotate_pdf,
 	crop_pdf,
+	fill_form,
 	flatten_pdf,
 	sign_pdf,
 	redact_pdf,
@@ -574,6 +575,26 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				new Uint8Array(request.files[0]),
 				request.passwords[0] ?? '',
 				request.formsOnly
+			) as [Uint8Array, number];
+			postOutput(id, { format: 'pdf', bytes }, kept);
+			return;
+		}
+		if (request.operation === 'fill-form') {
+			const { fills, flatten } = request.options;
+			const [bytes, kept] = fill_form(
+				new Uint8Array(request.files[0]),
+				request.passwords[0] ?? '',
+				Uint32Array.from(fills, (fill) => fill.widget),
+				Uint8Array.from(fills, (fill) =>
+					fill.kind === 'text' ? 0 : fill.kind === 'choices' ? 1 : fill.on ? 2 : 3
+				),
+				Uint32Array.from(fills, (fill) =>
+					fill.kind === 'text' ? 1 : fill.kind === 'choices' ? fill.choices.length : 0
+				),
+				fills.flatMap((fill) =>
+					fill.kind === 'text' ? [fill.text] : fill.kind === 'choices' ? fill.choices : []
+				),
+				flatten
 			) as [Uint8Array, number];
 			postOutput(id, { format: 'pdf', bytes }, kept);
 			return;

@@ -21,6 +21,8 @@
 		"test:raster:flatten": "node scripts/raster-flatten.mjs",
 		"pretest:raster:flatten": "npm run build:wasm",
 		"test:raster:redact": "node scripts/raster-redact.mjs",
+		"test:forms": "node scripts/forms-check.mjs",
+		"pretest:forms": "npm run build:wasm",
 		"pretest:raster:redact": "npm run build:wasm",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",

@@ -4954,3 +4954,562 @@ fn inherited_resources_are_shared_by_reference_not_copied_onto_each_page() {
         .collect::<Vec<_>>();
     assert_eq!(references[0], references[1]);
 }
+
+// Form filling. Fields sit on a 200 point page; widgets are 100 by 20 unless
+// a test says otherwise.
+
+use crate::{FieldFill, FieldValue, fill_form_bytes};
+
+fn widget(name: Option<&str>, kind: Option<&str>, rect: [i64; 4]) -> Dictionary {
+    let mut widget = dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Widget",
+        "Rect" => rect.iter().map(|&value| Object::Integer(value)).collect::<Vec<_>>(),
+        "F" => 4,
+    };
+    if let Some(name) = name {
+        widget.set("T", Object::string_literal(name));
+    }
+    if let Some(kind) = kind {
+        widget.set("FT", kind);
+    }
+    widget
+}
+
+/// A one page PDF whose form holds what `build` adds. `build` gets the page's
+/// id and returns the top-level fields and the widgets to put on the page.
+fn form_pdf(
+    form: Dictionary,
+    build: impl FnOnce(&mut Document, ObjectId) -> (Vec<ObjectId>, Vec<ObjectId>),
+) -> Vec<u8> {
+    let mut document = Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let (fields, widgets) = build(&mut document, page_id);
+    let content = document.add_object(Stream::new(dictionary! {}, b"0 0 m".to_vec()));
+    document.objects.insert(
+        page_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            "Annots" => widgets.into_iter().map(Object::Reference).collect::<Vec<_>>(),
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 },
+        ),
+    );
+    let mut form = form;
+    form.set(
+        "Fields",
+        fields
+            .into_iter()
+            .map(Object::Reference)
+            .collect::<Vec<_>>(),
+    );
+    form.set(
+        "DR",
+        dictionary! { "Font" => dictionary! {
+            "Helv" => dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" },
+            "TiRo" => dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Times-Roman" },
+        } },
+    );
+    if !form.has(b"DA") {
+        form.set("DA", Object::string_literal("/Helv 0 Tf 0 g"));
+    }
+    let catalog = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "AcroForm" => form,
+    });
+    document.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// A form with one field per widget, each a field and widget in one.
+fn simple_form(form: Dictionary, widgets: Vec<Dictionary>) -> (Vec<u8>, Vec<ObjectId>) {
+    let mut ids = Vec::new();
+    let bytes = form_pdf(form, |document, page| {
+        for mut widget in widgets {
+            widget.set("P", page);
+            ids.push(document.add_object(widget));
+        }
+        (ids.clone(), ids.clone())
+    });
+    (bytes, ids)
+}
+
+fn text_fill(widget: ObjectId, text: &str) -> FieldFill<'_> {
+    FieldFill {
+        widget,
+        value: FieldValue::Text(text),
+    }
+}
+
+/// The page's widgets in order, read back from the output.
+fn filled_widgets(bytes: &[u8]) -> (Document, Vec<Dictionary>) {
+    let document = Document::load_mem(bytes).unwrap();
+    let page = document.get_pages()[&1];
+    let widgets = document
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Annots")
+        .map(|annotations| {
+            annotations
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    document
+                        .get_dictionary(entry.as_reference().unwrap())
+                        .unwrap()
+                        .clone()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (document, widgets)
+}
+
+/// The normal appearance a widget shows, or the named state's.
+fn shown(document: &Document, widget: &Dictionary, state: Option<&[u8]>) -> (Stream, String) {
+    let normal = widget
+        .get(b"AP")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"N")
+        .unwrap();
+    let id = match state {
+        Some(state) => {
+            let states = match normal {
+                Object::Reference(id) => document.get_dictionary(*id).unwrap(),
+                states => states.as_dict().unwrap(),
+            };
+            states.get(state).unwrap().as_reference().unwrap()
+        }
+        None => normal.as_reference().unwrap(),
+    };
+    let stream = document
+        .get_object(id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .clone();
+    let content = String::from_utf8_lossy(
+        &stream
+            .decompressed_content()
+            .unwrap_or(stream.content.clone()),
+    )
+    .into_owned();
+    (stream, content)
+}
+
+fn hex_of(text: &str) -> String {
+    text.bytes().map(|byte| format!("{byte:02X}")).collect()
+}
+
+fn text_value(widget: &Dictionary) -> String {
+    lopdf::decode_text_string(widget.get(b"V").unwrap()).unwrap()
+}
+
+#[test]
+fn filling_a_text_field_sets_its_value_and_draws_it() {
+    let mut name = widget(Some("name"), Some("Tx"), [20, 150, 120, 170]);
+    name.set("DA", Object::string_literal("/TiRo 10 Tf 0 0 1 rg"));
+    name.set("RV", Object::string_literal("<body>old</body>"));
+    name.set(
+        "MK",
+        dictionary! { "BG" => vec![1.into()], "BC" => vec![0.into()] },
+    );
+    let (input, ids) = simple_form(dictionary! {}, vec![name]);
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "Ada Lovelace")], false).unwrap();
+    assert_eq!(output.kept, 0);
+    let (document, widgets) = filled_widgets(&output.bytes);
+    let field = &widgets[0];
+    assert_eq!(text_value(field), "Ada Lovelace");
+    assert!(
+        !field.has(b"RV"),
+        "a stale rich text value would be shown instead"
+    );
+    let (stream, content) = shown(&document, field, None);
+    assert!(content.contains(&hex_of("Ada Lovelace")), "{content}");
+    assert!(content.contains("/F0 10 Tf"), "{content}");
+    assert!(content.contains("0 0 1 rg"), "{content}");
+    assert!(
+        content.contains("/Tx BMC") && content.contains("EMC"),
+        "{content}"
+    );
+    // White background, black border, both from /MK.
+    assert!(
+        content.contains("1 g") && content.contains("0 G"),
+        "{content}"
+    );
+    let font = stream
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Font")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"F0")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let font = document.get_dictionary(font).unwrap();
+    assert_eq!(
+        font.get(b"BaseFont").unwrap().as_name().unwrap(),
+        b"Times-Roman"
+    );
+}
+
+#[test]
+fn filling_fits_automatic_text_to_the_field_and_honours_alignment() {
+    let mut right = widget(Some("right"), Some("Tx"), [20, 150, 120, 170]);
+    right.set("Q", 2);
+    let (input, ids) = simple_form(dictionary! {}, vec![right]);
+    let long = "a much longer text than fits at the usual size";
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], long)], false).unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    let (_, content) = shown(&document, &widgets[0], None);
+    let size = content
+        .lines()
+        .find(|line| line.ends_with(" Tf"))
+        .and_then(|line| line.split(' ').nth(1))
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    let width = crate::stamps::text_width(FontFamily::Helvetica, false, long.as_bytes()) as f32
+        / 1000.0
+        * size;
+    assert!(width <= 100.0 - 4.0 + 0.01, "{size}: {width}");
+    let x = content
+        .lines()
+        .find(|line| line.ends_with(" Tm"))
+        .and_then(|line| line.split(' ').nth(4))
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    assert!(
+        (x + width - 98.0).abs() < 0.01,
+        "right aligned, {x} + {width}"
+    );
+}
+
+#[test]
+fn filling_wraps_multiline_fields_and_spreads_combs() {
+    let mut notes = widget(Some("notes"), Some("Tx"), [20, 100, 120, 170]);
+    notes.set("Ff", 1 << 12);
+    notes.set("DA", Object::string_literal("/Helv 10 Tf 0 g"));
+    let mut code = widget(Some("code"), Some("Tx"), [20, 50, 120, 70]);
+    code.set("Ff", 1 << 24);
+    code.set("MaxLen", 5);
+    let (input, ids) = simple_form(dictionary! {}, vec![notes, code]);
+    let output = fill_form_bytes(
+        &input,
+        "",
+        &[
+            text_fill(ids[0], "first line\nand a second one that wraps around"),
+            text_fill(ids[1], "AB12"),
+        ],
+        false,
+    )
+    .unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    let (_, notes) = shown(&document, &widgets[0], None);
+    assert!(notes.matches(" Tm").count() >= 3, "{notes}");
+    let (_, code) = shown(&document, &widgets[1], None);
+    // One character a cell, each cell 20 points wide.
+    let xs = code
+        .lines()
+        .filter(|line| line.ends_with(" Tm"))
+        .map(|line| line.split(' ').nth(4).unwrap().parse::<f32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(xs.len(), 4, "{code}");
+    assert!(
+        xs.windows(2)
+            .all(|pair| (pair[1] - pair[0] - 20.0).abs() < 4.0),
+        "{xs:?}"
+    );
+}
+
+#[test]
+fn filling_turns_a_check_box_on_and_off() {
+    let (input, ids) = {
+        let mut ids = Vec::new();
+        let bytes = form_pdf(dictionary! {}, |document, page| {
+            let on = document.add_object(Stream::new(dictionary! {}, b"% on".to_vec()));
+            let off = document.add_object(Stream::new(dictionary! {}, b"% off".to_vec()));
+            let mut check = widget(Some("agree"), Some("Btn"), [20, 20, 40, 40]);
+            check.set("P", page);
+            check.set(
+                "AP",
+                dictionary! { "N" => dictionary! { "Yes" => on, "Off" => off } },
+            );
+            check.set("AS", "Off");
+            check.set("V", "Off");
+            ids.push(document.add_object(check));
+            (ids.clone(), ids.clone())
+        });
+        (bytes, ids)
+    };
+    let on = FieldFill {
+        widget: ids[0],
+        value: FieldValue::Button(true),
+    };
+    let output = fill_form_bytes(&input, "", &[on], false).unwrap();
+    let (_, widgets) = filled_widgets(&output.bytes);
+    assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Yes");
+    assert_eq!(widgets[0].get(b"V").unwrap().as_name().unwrap(), b"Yes");
+
+    let off = FieldFill {
+        widget: ids[0],
+        value: FieldValue::Button(false),
+    };
+    let output = fill_form_bytes(&output.bytes, "", &[off], false).unwrap();
+    let (_, widgets) = filled_widgets(&output.bytes);
+    assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Off");
+    assert_eq!(widgets[0].get(b"V").unwrap().as_name().unwrap(), b"Off");
+}
+
+#[test]
+fn filling_a_radio_group_turns_on_one_kid() {
+    let mut kids = Vec::new();
+    let input = form_pdf(dictionary! {}, |document, page| {
+        let parent = document.new_object_id();
+        for (index, state) in ["Red", "Blue"].iter().enumerate() {
+            let on = document.add_object(Stream::new(dictionary! {}, b"% on".to_vec()));
+            let off = document.add_object(Stream::new(dictionary! {}, b"% off".to_vec()));
+            let x = 20 + 30 * index as i64;
+            let mut kid = widget(None, None, [x, 20, x + 20, 40]);
+            kid.set("P", page);
+            kid.set("Parent", parent);
+            kid.set(
+                "AP",
+                dictionary! { "N" => dictionary! { *state => on, "Off" => off } },
+            );
+            kid.set("AS", if index == 0 { *state } else { "Off" });
+            kids.push(document.add_object(kid));
+        }
+        document.objects.insert(
+            parent,
+            Object::Dictionary(dictionary! {
+                "FT" => "Btn",
+                "Ff" => 1 << 15,
+                "T" => Object::string_literal("colour"),
+                "V" => "Red",
+                "Kids" => kids.iter().map(|&kid| Object::Reference(kid)).collect::<Vec<_>>(),
+            }),
+        );
+        (vec![parent], kids.clone())
+    });
+    let blue = FieldFill {
+        widget: kids[1],
+        value: FieldValue::Button(true),
+    };
+    let output = fill_form_bytes(&input, "", &[blue], false).unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    let states = widgets
+        .iter()
+        .map(|kid| kid.get(b"AS").unwrap().as_name().unwrap().to_vec())
+        .collect::<Vec<_>>();
+    assert_eq!(states, [b"Off".to_vec(), b"Blue".to_vec()]);
+    let parent = document
+        .get_dictionary(widgets[0].get(b"Parent").unwrap().as_reference().unwrap())
+        .unwrap();
+    assert_eq!(parent.get(b"V").unwrap().as_name().unwrap(), b"Blue");
+}
+
+#[test]
+fn filling_a_list_sets_its_value_and_indices_and_draws_the_choice() {
+    let mut list = widget(Some("size"), Some("Ch"), [20, 100, 120, 170]);
+    list.set(
+        "Opt",
+        vec![
+            Object::Array(vec![
+                Object::string_literal("s"),
+                Object::string_literal("Small"),
+            ]),
+            Object::Array(vec![
+                Object::string_literal("l"),
+                Object::string_literal("Large"),
+            ]),
+        ],
+    );
+    list.set("I", vec![0.into()]);
+    let (input, ids) = simple_form(dictionary! {}, vec![list]);
+    let choose = |choices: Vec<&'static str>| FieldFill {
+        widget: ids[0],
+        value: FieldValue::Choices(choices),
+    };
+    let output = fill_form_bytes(&input, "", &[choose(vec!["l"])], false).unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    assert_eq!(text_value(&widgets[0]), "l");
+    assert_eq!(
+        widgets[0].get(b"I").unwrap().as_array().unwrap(),
+        &vec![Object::Integer(1)]
+    );
+    let (_, content) = shown(&document, &widgets[0], None);
+    assert!(content.contains(&hex_of("Large")) && content.contains(&hex_of("Small")));
+    assert!(content.contains("0.6 0.75 0.85 rg"), "{content}");
+
+    let error = fill_form_bytes(&input, "", &[choose(vec!["m"])], false)
+        .err()
+        .unwrap();
+    assert!(error.contains("no option “m”"), "{error}");
+    let error = fill_form_bytes(&input, "", &[choose(vec!["s", "l"])], false)
+        .err()
+        .unwrap();
+    assert!(error.contains("Choose one option"), "{error}");
+}
+
+#[test]
+fn filling_refuses_what_it_cannot_save_faithfully() {
+    let mut locked = widget(Some("locked"), Some("Tx"), [20, 20, 120, 40]);
+    locked.set("Ff", 1);
+    let mut secret = widget(Some("secret"), Some("Tx"), [20, 50, 120, 70]);
+    secret.set("Ff", 1 << 13);
+    let mut short = widget(Some("short"), Some("Tx"), [20, 80, 120, 100]);
+    short.set("MaxLen", 3);
+    short.set("TU", Object::string_literal("Initials"));
+    let plain = widget(Some("plain"), Some("Tx"), [20, 110, 120, 130]);
+    let mut note = square([10, 10, 60, 40]);
+    note.remove(b"AP");
+    let (input, ids) = simple_form(dictionary! {}, vec![locked, secret, short, plain, note]);
+    let error = |fill: FieldFill<'_>| fill_form_bytes(&input, "", &[fill], false).err().unwrap();
+    assert!(error(text_fill(ids[0], "x")).contains("read-only"));
+    assert!(error(text_fill(ids[1], "x")).contains("password"));
+    assert!(error(text_fill(ids[2], "ABCD")).contains("“Initials” takes at most 3"));
+    let undrawable = error(text_fill(ids[3], "Жанна"));
+    assert!(undrawable.contains("“Ж” in “plain”"), "{undrawable}");
+    assert!(error(text_fill(ids[4], "x")).contains("no longer in this PDF"));
+    assert!(fill_form_bytes(&input, "", &[], false).is_err());
+}
+
+#[test]
+fn filling_draws_a_turned_widget_upright_in_its_own_box() {
+    let mut turned = widget(Some("turned"), Some("Tx"), [20, 20, 40, 120]);
+    turned.set("MK", dictionary! { "R" => 90 });
+    let (input, ids) = simple_form(dictionary! {}, vec![turned]);
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "up")], false).unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    let (stream, _) = shown(&document, &widgets[0], None);
+    let reals = |key: &[u8]| {
+        stream
+            .dict
+            .get(key)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_float().unwrap())
+            .collect::<Vec<_>>()
+    };
+    // 20 wide and 100 tall on the page, so 100 by 20 as the text reads.
+    assert_eq!(reals(b"BBox"), [0.0, 0.0, 100.0, 20.0]);
+    assert_eq!(reals(b"Matrix"), [0.0, 1.0, -1.0, 0.0, 20.0, 0.0]);
+}
+
+#[test]
+fn filling_draws_a_check_box_that_has_no_look_of_its_own() {
+    let mut bare = widget(Some("bare"), Some("Btn"), [20, 20, 40, 40]);
+    bare.set("MK", dictionary! { "BC" => vec![0.into()] });
+    let (input, ids) = simple_form(dictionary! {}, vec![bare]);
+    let on = FieldFill {
+        widget: ids[0],
+        value: FieldValue::Button(true),
+    };
+    let output = fill_form_bytes(&input, "", &[on], false).unwrap();
+    let (document, widgets) = filled_widgets(&output.bytes);
+    assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Yes");
+    let (stream, content) = shown(&document, &widgets[0], Some(b"Yes"));
+    assert!(content.contains("<34> Tj"), "a check: {content}");
+    let font = stream
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Font")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"F0")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    assert_eq!(
+        document
+            .get_dictionary(font)
+            .unwrap()
+            .get(b"BaseFont")
+            .unwrap()
+            .as_name()
+            .unwrap(),
+        b"ZapfDingbats"
+    );
+    let (_, off) = shown(&document, &widgets[0], Some(b"Off"));
+    assert!(!off.contains("Tj"), "{off}");
+}
+
+#[test]
+fn filling_and_flattening_draws_every_value_even_in_a_form_that_asks_for_redrawing() {
+    let mut untouched = widget(Some("untouched"), Some("Tx"), [20, 20, 120, 40]);
+    untouched.set("V", Object::string_literal("already there"));
+    let filled = widget(Some("filled"), Some("Tx"), [20, 50, 120, 70]);
+    let (input, ids) = simple_form(
+        dictionary! {
+            "NeedAppearances" => true,
+            "XFA" => Object::string_literal("<xdp/>"),
+        },
+        vec![untouched, filled],
+    );
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[1], "new")], true).unwrap();
+    assert_eq!(output.kept, 0);
+    let (subtypes, drawing, document) = flattened_page(&output.bytes);
+    assert!(subtypes.is_empty(), "{subtypes:?}");
+    assert_eq!(drawing.matches(" Do").count(), 2, "{drawing}");
+    assert!(!document.catalog().unwrap().has(b"AcroForm"));
+    let text = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .map(|stream| {
+            String::from_utf8_lossy(
+                &stream
+                    .decompressed_content()
+                    .unwrap_or(stream.content.clone()),
+            )
+            .into_owned()
+        })
+        .collect::<String>();
+    assert!(text.contains(&hex_of("already there")) && text.contains(&hex_of("new")));
+}
+
+#[test]
+fn filling_without_flattening_keeps_the_form_but_drops_xfa() {
+    let (input, ids) = simple_form(
+        dictionary! { "NeedAppearances" => true, "XFA" => Object::string_literal("<xdp/>") },
+        vec![widget(Some("name"), Some("Tx"), [20, 20, 120, 40])],
+    );
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "x")], false).unwrap();
+    let document = Document::load_mem(&output.bytes).unwrap();
+    let form = document
+        .catalog()
+        .unwrap()
+        .get(b"AcroForm")
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert!(!form.has(b"XFA"));
+    assert!(form.get(b"NeedAppearances").unwrap().as_bool().unwrap());
+}

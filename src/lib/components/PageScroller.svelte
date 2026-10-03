@@ -11,6 +11,7 @@
 		file,
 		current = $bindable(1),
 		overlay,
+		forms,
 		onload,
 		onremove
 	}: {
@@ -18,6 +19,9 @@
 		/// The page most in view, from 1.
 		current?: number;
 		overlay: Snippet<[PreviewPage]>;
+		/// Renders form fields apart from each page, handing over the canvases
+		/// pdf.js draws some of them on; see `ScrollerPage`.
+		forms?: (page: number, canvases: Map<string, HTMLCanvasElement | HTMLCanvasElement[]>) => void;
 		/// Once the PDF opens, with its page count and the open document.
 		onload: (count: number, pdf: PDFDocumentProxy) => void;
 		onremove: () => void;
@@ -264,6 +268,7 @@
 								{scale}
 								near={near[index] ?? false}
 								label={`Page ${page.number} of ${file.name}`}
+								forms={forms && ((canvases) => forms(page.number, canvases))}
 							/>
 							{@render overlay(page)}
 						</div>

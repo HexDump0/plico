@@ -20,6 +20,7 @@ rust/plico-engine/src/stamps.rs                             page numbers, waterm
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
 rust/plico-engine/src/annotate.rs                           annotations with stored appearances, or drawn into pages
+rust/plico-engine/src/forms.rs                              form field values and the appearances that show them
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
 rust/plico-engine/src/redact/content.rs                     content stream rewriting that removes what lies under a box
@@ -43,12 +44,14 @@ scripts/raster-stamp.mjs                                    rendered check of pa
 scripts/raster-crop.mjs                                     rendered check of cropping
 scripts/raster-flatten.mjs                                  rendered check of flattening
 scripts/raster-redact.mjs                                   poppler text and rendered check of redaction
+scripts/forms-check.mjs                                     pdf.js, poppler and rendered check of form filling
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
 src/lib/pdf/redact-text.ts                                  finding text, picking words, and what a box removes
 src/lib/pdf/annotate.ts                                     annotation geometry and appearance, mirroring annotate.rs
 src/lib/pdf/annotate-editor.svelte.ts                       Annotate's marks, selection, undo and style
+src/lib/pdf/form-fields.ts                                  form fields read with pdf.js, and the fills sent for them
 testing/                                                    local corpus, gitignored
 ```
 
@@ -71,6 +74,7 @@ npm run test:raster:stamp  # needs a corpus, renders stamped output
 npm run test:raster:crop   # needs a corpus, renders cropped output
 npm run test:raster:flatten  # needs a corpus, renders flattened output
 npm run test:raster:redact   # needs a corpus and poppler, checks redacted output
+npm run test:forms    # needs a corpus and poppler, fills every corpus form
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
@@ -112,6 +116,12 @@ a box, a false positive in `issue6387.pdf` (vertical text, which poppler places
 0.8 em above where it renders); 52 pages change outside the box, every one
 explained in `ISSUES.md`. A leak is the failure that matters here: if your
 change finds one, stop. If it moves either number, say so.
+
+`npm run test:forms` also needs poppler's `pdftotext`. Baseline 2026-10-03: 97
+forms and 787 fields filled and read back, none refused, red on 4 failures in
+3 files, each explained in `ISSUES.md`. A value that reads back wrong or a text
+missing from the flattened page is the failure that matters. If your change
+moves either number, say so.
 
 The crop raster harness is red on 11 files, 7 of them the same lopdf load/save
 losses and 4 where pdf.js antialiases a shading edge differently once the page

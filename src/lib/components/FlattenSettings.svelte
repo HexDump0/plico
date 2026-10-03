@@ -1,13 +1,9 @@
 <script lang="ts">
 	let {
 		formsOnly = $bindable<boolean>(),
-		found,
 		disabled = false
 	}: {
 		formsOnly: boolean;
-		/// How many items the chosen scope flattens, while it is counted, or
-		/// unknown when the preview could not read the annotations.
-		found: number | 'checking' | 'unknown';
 		disabled?: boolean;
 	} = $props();
 
@@ -18,18 +14,7 @@
 </script>
 
 <div>
-	<div class="mb-3 flex items-center justify-between">
-		<h2 class="text-sm font-semibold">Flatten</h2>
-		<span class="text-xs text-muted tabular-nums" role="status"
-			>{found === 'checking'
-				? 'Checking...'
-				: found === 'unknown'
-					? ''
-					: found === 0
-						? 'Nothing found'
-						: `${found} ${found === 1 ? 'item' : 'items'}`}</span
-		>
-	</div>
+	<h2 class="mb-3 text-sm font-semibold">Flatten</h2>
 	<div
 		class="relative grid grid-cols-2 gap-2 rounded-xl bg-canvas p-1"
 		role="group"

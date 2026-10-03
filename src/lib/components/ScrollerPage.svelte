@@ -7,7 +7,8 @@
 		number,
 		scale,
 		near,
-		label
+		label,
+		forms
 	}: {
 		pdf: PDFDocumentProxy;
 		number: number;
@@ -16,6 +17,10 @@
 		/// Whether the page is on screen or close to it; only those keep pixels.
 		near: boolean;
 		label: string;
+		/// Renders form fields apart from the page, as pdf.js leaves them for
+		/// HTML, and hands over the canvases it draws some of them on, by
+		/// annotation id: check boxes and radio buttons get one per state.
+		forms?: (canvases: Map<string, HTMLCanvasElement | HTMLCanvasElement[]>) => void;
 	} = $props();
 
 	// The largest canvas drawn, in pixels, so a page zoomed far in stays
@@ -48,10 +53,19 @@
 					const bitmap = document.createElement('canvas');
 					bitmap.width = Math.max(1, Math.floor(viewport.width * ratio));
 					bitmap.height = Math.max(1, Math.floor(viewport.height * ratio));
+					// pdf.js puts an array of canvases, one per state, under a
+					// check box or radio button, whatever its types say.
+					const canvases = forms ? new Map<string, HTMLCanvasElement>() : undefined;
+					const { AnnotationMode } = await import('pdfjs-dist');
+					if (cancelled) return;
 					task = proxy.render({
 						canvas: bitmap,
 						viewport,
-						transform: [ratio, 0, 0, ratio, 0, 0]
+						transform: [ratio, 0, 0, ratio, 0, 0],
+						...(canvases && {
+							annotationMode: AnnotationMode.ENABLE_FORMS,
+							annotationCanvasMap: canvases
+						})
 					});
 					await task.promise;
 					if (cancelled) return;
@@ -59,6 +73,7 @@
 					target.height = bitmap.height;
 					target.getContext('2d')?.drawImage(bitmap, 0, 0);
 					drawn = true;
+					if (canvases) forms?.(canvases as Map<string, HTMLCanvasElement | HTMLCanvasElement[]>);
 				} catch {
 					// A cancelled render is replaced by the next one.
 				}

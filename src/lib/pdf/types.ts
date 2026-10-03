@@ -119,6 +119,13 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			operation: 'fill-form';
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: FillFormOptions;
+	  }
+	| {
+			id: number;
 			operation: 'sign';
 			// The PDF, then the signature image.
 			files: ArrayBuffer[];
@@ -275,6 +282,17 @@ export type AnnotateOptions = {
 	remove: number[];
 	flatten: boolean;
 };
+
+/// A field's new value, sent for each of its widgets by object number as
+/// pdf.js reports it in `id` ("41R" is 41): text, chosen export values, or
+/// whether that check box or radio button widget is on.
+export type FormFill =
+	| { widget: number; kind: 'text'; text: string }
+	| { widget: number; kind: 'choices'; choices: string[] }
+	| { widget: number; kind: 'button'; on: boolean };
+
+/// `flatten` draws the filled fields into the pages.
+export type FillFormOptions = { fills: FormFill[]; flatten: boolean };
 
 /// One redaction box: left, top, right and bottom as fractions of the page as
 /// displayed, from its top left.
