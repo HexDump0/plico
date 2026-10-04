@@ -48,20 +48,20 @@ export function spilledGlyphs(page: PageGlyphs, areas: CropArea[]): CropArea[] {
 	return spilled;
 }
 
-function sameLine(a: CropArea, b: CropArea) {
+export function sameLine(a: CropArea, b: CropArea) {
 	const height = Math.max(a[3] - a[1], b[3] - b[1]);
 	return Math.abs((a[1] + a[3]) / 2 - (b[1] + b[3]) / 2) < height / 2;
 }
 
 /// Whether a reader would see a word break between two glyphs on one line:
 /// a gap wider than a third of the wider glyph.
-function apart(a: CropArea, b: CropArea) {
+export function apart(a: CropArea, b: CropArea) {
 	return b[0] - a[2] > Math.max(a[2] - a[0], b[2] - b[0]) / 3;
 }
 
 export const isBlank = (text: string) => !text.trim();
 
-function union(boxes: CropArea[]): CropArea {
+export function union(boxes: CropArea[]): CropArea {
 	return [
 		Math.min(...boxes.map((box) => box[0])),
 		Math.min(...boxes.map((box) => box[1])),

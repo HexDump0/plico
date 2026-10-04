@@ -447,7 +447,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty tools exist, the catalogue advertises about forty
+### Thirty-one tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -503,6 +503,18 @@ wins. JBIG2 matters especially for scanned text. Anything render-dependent
 needs a rasteriser. If you reach for one, note that mupdf is AGPL, which is a
 licensing decision to make on purpose rather than discover. pdfium and qpdf
 are permissive and both build to wasm.
+
+### Compare reads text in content order
+
+Compare diffs the engine's glyphs in the order pages draw them, which is
+usually reading order but not always: a two-column page drawn column by
+column compares fine, one drawn line across both columns does not, and the
+scroll sync drops anchors that run backwards up a page. Changes in font,
+size or colour alone are not text changes; Visual shows them. The diff runs
+on the main thread: about 0.4 s for 60,000 words with 300 edits, measured on
+generated pages. Past 2,000 edits in one stretch of unmatched lines, that
+stretch is reported as one change. Removing the original moves the changed
+PDF into the Original side, since sides are positions in the file list.
 
 ### Error strings are product copy inside the engine
 

@@ -55,6 +55,8 @@ src/lib/pdf/annotate.ts                                     annotation geometry 
 src/lib/pdf/annotate-editor.svelte.ts                       Annotate's marks, selection, undo and style
 src/lib/pdf/form-fields.ts                                  form fields read with pdf.js, and the fills sent for them
 src/lib/pdf/edit-text.ts                                    lines Edit can replace, their look, and colours sampled from the page
+src/lib/pdf/compare-text.ts                                 Compare's word diff, the changes it finds, and their markup
+src/lib/pdf/opened-pdf.svelte.ts                            a PDF opened with pdf.js and its page sizes, for Compare's two views
 testing/                                                    local corpus, gitignored
 ```
 
