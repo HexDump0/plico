@@ -18,6 +18,9 @@ export class Workspace {
 	// Memory only, like the files themselves: nothing here survives a reload.
 	private passwords = new SvelteMap<File, string>();
 	private locks = new SvelteMap<File, LockState>();
+	// Not reactive on purpose: the tool being left must not redraw with it
+	// before the route transition captures it.
+	private carried: File | undefined;
 	get files() {
 		return this.activeType === 'image'
 			? this.imageFiles
@@ -66,6 +69,17 @@ export class Workspace {
 					)
 			)
 		];
+	}
+	/// A result taken on to the next tool, which picks it up as it opens.
+	carry(file: File) {
+		this.carried = file;
+	}
+	receive() {
+		if (!this.carried) return;
+		this.pdfFiles = [this.carried];
+		this.pdfError = '';
+		this.carried = undefined;
+		this.forgetRemoved();
 	}
 	clear() {
 		this.files = [];

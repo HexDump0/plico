@@ -19,6 +19,7 @@ export class DownloadJob {
 	format = $state<PdfOutput['format']>('pdf');
 	size = $state(0);
 	inputSize = $state(0);
+	blob: Blob | undefined;
 	private controller: AbortController | undefined;
 
 	clear() {
@@ -28,6 +29,7 @@ export class DownloadJob {
 		this.error = '';
 		if (this.result) URL.revokeObjectURL(this.result);
 		this.result = '';
+		this.blob = undefined;
 		this.format = 'pdf';
 		this.size = 0;
 		this.inputSize = 0;
@@ -47,10 +49,10 @@ export class DownloadJob {
 		try {
 			const output = await process(controller.signal);
 			if (controller.signal.aborted) return;
-			const url = URL.createObjectURL(
-				new Blob([output.bytes.slice().buffer], { type: mimeTypes[output.format] })
-			);
+			const blob = new Blob([output.bytes.slice().buffer], { type: mimeTypes[output.format] });
+			const url = URL.createObjectURL(blob);
 			this.processing = false;
+			this.blob = blob;
 			this.format = output.format;
 			this.size = output.bytes.byteLength;
 			this.inputSize = inputSize;

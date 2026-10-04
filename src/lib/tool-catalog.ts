@@ -195,3 +195,37 @@ export const toolColumns = [
 		}
 	]
 ];
+
+// What people usually do next with a tool's PDF. Protect and PDF/A are left
+// out: anything done to their output undoes what they were for.
+const nextToolIds: Record<string, string[]> = {
+	merge: ['compress', 'organize', 'page-numbers'],
+	split: ['compress', 'page-numbers', 'sign'],
+	compress: ['sign', 'protect', 'merge'],
+	organize: ['compress', 'page-numbers', 'sign'],
+	extract: ['compress', 'merge', 'page-numbers'],
+	remove: ['compress', 'merge', 'page-numbers'],
+	rotate: ['compress', 'merge', 'organize'],
+	edit: ['sign', 'flatten', 'compress'],
+	sign: ['protect', 'flatten', 'compress'],
+	annotate: ['flatten', 'compress', 'protect'],
+	forms: ['sign', 'flatten', 'protect'],
+	crop: ['compress', 'page-numbers', 'merge'],
+	'page-numbers': ['watermark', 'compress', 'protect'],
+	watermark: ['protect', 'compress', 'page-numbers'],
+	flatten: ['compress', 'protect', 'sign'],
+	redact: ['compress', 'protect', 'sign'],
+	unlock: ['edit', 'organize', 'compress'],
+	ocr: ['compress', 'redact', 'edit'],
+	'scan-to-pdf': ['ocr', 'compress', 'sign'],
+	'jpg-to-pdf': ['ocr', 'compress', 'merge'],
+	'png-to-pdf': ['ocr', 'compress', 'merge'],
+	'word-to-pdf': ['compress', 'merge', 'sign'],
+	'powerpoint-to-pdf': ['compress', 'merge', 'sign'],
+	'excel-to-pdf': ['compress', 'merge', 'sign'],
+	compare: ['annotate', 'compress', 'protect']
+};
+
+export function nextTools(id: string) {
+	return (nextToolIds[id] ?? []).map((next) => findTool(next)!);
+}

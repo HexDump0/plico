@@ -11,7 +11,12 @@
 		IconFilePlus,
 		IconLoader2
 	} from '@tabler/icons-svelte-runes';
-	import { isToolSupported, toolCategoryColor, type CatalogTool } from '$lib/tool-catalog';
+	import {
+		isToolSupported,
+		nextTools,
+		toolCategoryColor,
+		type CatalogTool
+	} from '$lib/tool-catalog';
 	import type { SplitRange } from '$lib/split-ranges';
 	import type { OrganizePage, SplitOptions } from '$lib/pdf/types';
 	import { pageKey } from '$lib/pdf/sources';
@@ -76,6 +81,7 @@
 	import PdfToImageAdvanced from './PdfToImageAdvanced.svelte';
 	import PageRangeField from './PageRangeField.svelte';
 	import CopyButton from './CopyButton.svelte';
+	import ContinueWith from './ContinueWith.svelte';
 	import PdfASettings from './PdfASettings.svelte';
 	import PasswordInput from './PasswordInput.svelte';
 	import StampPreview from './StampPreview.svelte';
@@ -181,6 +187,7 @@
 		officeTool ? officeTools[officeTool].input : isImageToPdf || isScan ? 'image' : 'pdf'
 	);
 	workspace.use(untrack(() => inputType));
+	workspace.receive();
 	const accent = $derived(toolCategoryColor(tool.id));
 	const buttonColor = $derived(
 		(
@@ -1381,6 +1388,7 @@
 	const downloadName = $derived(
 		`${filename.trim().replace(new RegExp(`\\.${outputExtension}$`, 'i'), '') || autoName}.${outputExtension}`
 	);
+	const continuable = $derived(!!result && resultFormat === 'pdf' && nextTools(tool.id).length > 0);
 	const savedPercent = $derived(
 		isCompress && result && resultInputSize > 0
 			? Math.round((1 - resultSize / resultInputSize) * 100)
@@ -2079,10 +2087,11 @@
 		</div>
 	{:else}
 		<div
-			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem] {workspace
-				.files.length
-				? 'max-lg:pb-24'
-				: ''}"
+			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem] {continuable
+				? 'max-lg:pb-64'
+				: workspace.files.length
+					? 'max-lg:pb-24'
+					: ''}"
 		>
 			<section
 				aria-label="Documents"
@@ -2945,6 +2954,16 @@
 							as
 							{flattenKept === 1 ? 'it was' : 'they were'}
 						</p>{/if}
+					{#if continuable}<div
+							in:rangeReveal={{ reducedMotion, preview: true }}
+							out:rangeCollapse={{ reducedMotion }}
+						>
+							<ContinueWith
+								{tool}
+								result={() =>
+									job.blob && new File([job.blob], downloadName, { type: 'application/pdf' })}
+							/>
+						</div>{/if}
 				</div>
 			</aside>
 		</div>
