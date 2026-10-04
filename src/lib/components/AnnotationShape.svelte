@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fontStack } from '$lib/pdf/font-faces.svelte';
+	import { needsEmbedding } from '$lib/pdf/unicode-fonts';
 	import {
 		arrowHead,
 		extent,
@@ -142,7 +144,9 @@ annotation, and highlights multiply, as in the output. -->
 						x={line.x}
 						y={line.y}
 						fill={color}
-						font-family={families[mark.family]}
+						font-family={needsEmbedding(mark.text)
+							? fontStack(mark.text, mark.family)
+							: families[mark.family]}
 						font-weight={mark.bold ? 700 : 400}
 						font-size={mark.size}
 						textLength={line.width > 0 ? line.width : undefined}

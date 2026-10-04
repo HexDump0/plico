@@ -22,9 +22,10 @@ use crate::documents::{load_document, parse_version, text_string};
 use crate::flatten::{prune_fields, remove_orphaned_popups, set_annotations};
 use crate::images::{image_matrix, prepare_image};
 use crate::stamps::{
-    FontFamily, LEADING, Stamper, base_font, cap_height, finish, matrix, number, page_frame,
-    resolve, selected_pages, text_width, win_ansi,
+    FontFamily, LEADING, Stamper, base_font, finish, matrix, number, page_frame, resolve,
+    selected_pages, undrawable,
 };
+use crate::text::{Setting, SuppliedFont, Typesetter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Markup {
@@ -111,6 +112,7 @@ pub fn annotate_pdf_bytes(
     annotations: &[Annotation<'_>],
     remove: &[ObjectId],
     flatten: bool,
+    fonts: &[SuppliedFont<'_>],
 ) -> Result<Vec<u8>, String> {
     if annotations.is_empty() && remove.is_empty() {
         return Err("Add at least one annotation.".into());
@@ -123,17 +125,20 @@ pub fn annotate_pdf_bytes(
     if !remove.is_empty() {
         remove_annotations(&mut document, remove)?;
     }
-    draw_annotations(&mut document, annotations, flatten)?;
+    draw_annotations(&mut document, annotations, flatten, fonts)?;
     finish(document, 1.0)
 }
 
 /// Adds `annotations` to a loaded document, or draws them into its pages
-/// with `flatten`. Each has passed [`check`].
+/// with `flatten`. Each has passed [`check`]. Text the standard fonts
+/// cannot draw is drawn in `fonts`.
 pub(crate) fn draw_annotations(
     document: &mut Document,
     annotations: &[Annotation<'_>],
     flatten: bool,
+    fonts: &[SuppliedFont<'_>],
 ) -> Result<(), String> {
+    let mut typesetter = Typesetter::new(fonts)?;
     let numbers = annotations
         .iter()
         .map(|annotation| annotation.page)
@@ -155,7 +160,13 @@ pub(crate) fn draw_annotations(
             state.set("CA", Object::Real(annotation.opacity));
             transparent = true;
         }
-        let mut entries = sketch.draw(document, annotation, &mut resources, &mut state)?;
+        let mut entries = sketch.draw(
+            document,
+            annotation,
+            &mut resources,
+            &mut state,
+            &mut typesetter,
+        )?;
         if state.len() > 1 {
             transparent = true;
             let state = document.add_object(state);
@@ -255,6 +266,7 @@ pub(crate) fn draw_annotations(
         ));
         stamper.place(document, page_id, form, false)?;
     }
+    typesetter.write(document)?;
     // Constant opacity and blend modes arrived in PDF 1.4.
     if transparent && parse_version(&document.version) < (1, 4) {
         document.version = "1.4".into();
@@ -359,13 +371,6 @@ pub(crate) fn check(annotation: &Annotation<'_>, flatten: bool) -> Result<(), St
             if text.trim().is_empty() {
                 return Err(format!("A text box on page {page} is empty."));
             }
-            if let Some(character) = text.chars().find(|&character| {
-                !matches!(character, '\n' | '\r') && win_ansi(character).is_none()
-            }) {
-                return Err(format!(
-                    "“{character}” cannot be drawn with the built-in PDF fonts."
-                ));
-            }
             (1.0..=1_000.0).contains(size) && area(*found)
         }
         AnnotationKind::Note { at } => {
@@ -460,6 +465,7 @@ impl Sketch {
         annotation: &Annotation<'_>,
         resources: &mut Dictionary,
         state: &mut Dictionary,
+        typesetter: &mut Typesetter,
     ) -> Result<Dictionary, String> {
         let color = annotation.color;
         let mut entries = dictionary! { "C" => reals(&color) };
@@ -662,13 +668,9 @@ impl Sketch {
                     "DA",
                     Object::string_literal(format!("/F0 {} Tf {} rg", number(*size), rgb(color))),
                 );
-                let font = document.add_object(dictionary! {
-                    "Type" => "Font",
-                    "Subtype" => "Type1",
-                    "BaseFont" => base_font(*family, *bold),
-                    "Encoding" => "WinAnsiEncoding",
-                });
-                resources.set("Font", dictionary! { "F0" => font });
+                let setting = typesetter
+                    .setting(text, *family, *bold)
+                    .map_err(undrawable)?;
                 let [x0, y0, x1, y1] = self.area(*area);
                 self.include(x0, y0, 0.0);
                 self.include(x1, y1, 0.0);
@@ -682,29 +684,41 @@ impl Sketch {
                         number(y1 - y0)
                     ));
                 }
-                let lines = wrap(text, *family, *bold, *size, x1 - x0 - 2.0 * TEXT_PADDING);
+                let lines = wrap(text, x1 - x0 - 2.0 * TEXT_PADDING, |line| {
+                    typesetter.line(line, &setting).width(*size)
+                });
                 self.push(&format!(
-                    "{} {} {} {} re\nW\nn\n{} rg\nBT\n/F0 {} Tf\n",
+                    "{} {} {} {} re\nW\nn\n{} rg\nBT\n",
                     number(x0),
                     number(y0),
                     number(x1 - x0),
                     number(y1 - y0),
                     rgb(color),
-                    number(*size)
                 ));
-                let first = y1 - TEXT_PADDING - cap_height(*family, *bold) * size;
+                let mut fonts = Dictionary::new();
+                if let Setting::Standard { .. } = setting {
+                    self.push(&format!("/F0 {} Tf\n", number(*size)));
+                    let font = document.add_object(dictionary! {
+                        "Type" => "Font",
+                        "Subtype" => "Type1",
+                        "BaseFont" => base_font(*family, *bold),
+                        "Encoding" => "WinAnsiEncoding",
+                    });
+                    fonts.set("F0", font);
+                }
+                let first = y1 - TEXT_PADDING - setting.cap_height() * size;
                 for (index, line) in lines.iter().enumerate() {
                     let y = first - index as f32 * LEADING * size;
                     if y < y0 - size {
                         break;
                     }
-                    self.push(&format!(
-                        "1 0 0 1 {} {} Tm\n<{}> Tj\n",
-                        number(x0 + TEXT_PADDING),
-                        number(y),
-                        hex(line)
-                    ));
+                    let line = typesetter.line(line, &setting);
+                    typesetter.name_fonts(document, &line, &mut fonts);
+                    let shown =
+                        typesetter.show(&line, *size, [1.0, 0.0, 0.0, 1.0, x0 + TEXT_PADDING, y]);
+                    self.push(&shown);
                 }
+                resources.set("Font", fonts);
                 self.push("ET\n");
             }
             AnnotationKind::Note { at } => {
@@ -845,27 +859,19 @@ pub(crate) fn ellipse(x0: f32, y0: f32, x1: f32, y1: f32) -> String {
     )
 }
 
-/// Lines of WinAnsi codes no wider than `width` points, broken at spaces where
+/// Lines no wider than `width` points by `measure`, broken at spaces where
 /// possible and inside a word only when the word alone is too wide. Line
 /// breaks in the text are kept; the spaces a break replaces are not drawn.
-pub(crate) fn wrap(
-    text: &str,
-    family: FontFamily,
-    bold: bool,
-    size: f32,
-    width: f32,
-) -> Vec<Vec<u8>> {
-    let measure = |codes: &[u8]| text_width(family, bold, codes) as f32 / 1000.0 * size;
+pub(crate) fn wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
-        let mut line: Vec<u8> = Vec::new();
+        let mut line = String::new();
         for word in paragraph.trim_end_matches('\r').split(' ') {
-            let codes = word.chars().filter_map(win_ansi).collect::<Vec<_>>();
             let mut candidate = line.clone();
             if !candidate.is_empty() {
-                candidate.push(b' ');
+                candidate.push(' ');
             }
-            candidate.extend(&codes);
+            candidate.push_str(word);
             if measure(&candidate) <= width {
                 line = candidate;
                 continue;
@@ -873,11 +879,11 @@ pub(crate) fn wrap(
             if !line.is_empty() {
                 lines.push(std::mem::take(&mut line));
             }
-            for code in codes {
-                line.push(code);
-                if measure(&line) > width && line.len() > 1 {
+            for character in word.chars() {
+                line.push(character);
+                if measure(&line) > width && line.chars().count() > 1 {
                     line.pop();
-                    lines.push(std::mem::replace(&mut line, vec![code]));
+                    lines.push(std::mem::replace(&mut line, character.to_string()));
                 }
             }
         }
@@ -909,8 +915,4 @@ fn reals(values: &[f32]) -> Vec<Object> {
 
 fn rgb([red, green, blue]: [f32; 3]) -> String {
     format!("{} {} {}", number(red), number(green), number(blue))
-}
-
-fn hex(codes: &[u8]) -> String {
-    codes.iter().map(|code| format!("{code:02X}")).collect()
 }

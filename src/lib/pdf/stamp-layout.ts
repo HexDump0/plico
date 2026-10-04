@@ -4,6 +4,7 @@
 // the bottom left, y up.
 
 import { capHeight, textWidth, type FontFamily } from './standard-fonts';
+import { needsEmbedding } from './unicode-fonts';
 
 /// Row by row from the top left: 0 top left, 4 centre, 8 bottom right. The
 /// same indices the wasm bindings take.
@@ -58,11 +59,12 @@ export function stampLayout(
 ): StampLayout {
 	const texts =
 		mark.kind === 'text' ? mark.text.split('\n').map((line) => line.replace(/\r$/, '')) : [];
+	const embedded = mark.kind === 'text' && needsEmbedding(mark.text);
 	const widths =
 		mark.kind === 'text'
-			? texts.map((line) => textWidth(line, mark.family, mark.bold, mark.size))
+			? texts.map((line) => textWidth(line, mark.family, mark.bold, mark.size, embedded))
 			: [];
-	const cap = mark.kind === 'text' ? capHeight(mark.family, mark.bold) * mark.size : 0;
+	const cap = mark.kind === 'text' ? capHeight(mark.family, mark.bold, embedded) * mark.size : 0;
 	const [width, height] =
 		mark.kind === 'text'
 			? [Math.max(0, ...widths), cap + LEADING * mark.size * (texts.length - 1)]

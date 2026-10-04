@@ -5,7 +5,8 @@
 //! glyph by glyph with the rest of the line left where it was, but every
 //! path and image under it stays, so the page behind the text is untouched.
 //! Its replacement is drawn into the page in the standard font nearest the
-//! old one. Erasing takes everything under an area out and paints it, by
+//! old one, or a supplied font of that family when the standard one cannot
+//! draw it. Erasing takes everything under an area out and paints it, by
 //! default in the colour around it, so it disappears into the page.
 //! Additions are annotations drawn into the page, as Annotate draws them.
 //!
@@ -23,6 +24,7 @@ use crate::redact::{
     Unremovable, cover_on_page, redraw_image, remove_on_page, strip_descriptions, take_images,
 };
 use crate::stamps::{Stamper, finish, selected_pages};
+use crate::text::SuppliedFont;
 
 /// Text to take out: whatever glyphs `area` covers, as redaction decides
 /// it. When they cannot be taken out, `shown`, where they reach, is painted
@@ -70,6 +72,8 @@ pub struct EditOptions<'a> {
     /// Drawn into the pages after the removals, so they can sit where the
     /// old content was. Notes and text markup are not drawn content.
     pub additions: &'a [Annotation<'a>],
+    /// For text the standard fonts cannot draw.
+    pub fonts: &'a [SuppliedFont<'a>],
 }
 
 pub struct Edited {
@@ -231,7 +235,7 @@ pub fn edit_pdf_bytes(
         strip_descriptions(&mut document, catalog_id, &touched);
     }
     if !options.additions.is_empty() {
-        draw_annotations(&mut document, options.additions, true)?;
+        draw_annotations(&mut document, options.additions, true, options.fonts)?;
     }
     Ok(Edited {
         bytes: finish(document, 1.0)?,

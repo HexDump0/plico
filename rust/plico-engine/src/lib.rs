@@ -15,6 +15,7 @@ mod security;
 mod stamps;
 #[cfg(test)]
 mod tests;
+mod text;
 
 pub use annotate::{
     Annotation, AnnotationKind, Markup, NOTE_SIZE, Shape, TEXT_PADDING, annotate_pdf_bytes,
@@ -54,3 +55,4 @@ pub use stamps::{
     FontFamily, PageNumberOptions, Position, SignaturePlacement, TextStyle, WatermarkContent,
     WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
 };
+pub use text::SuppliedFont;

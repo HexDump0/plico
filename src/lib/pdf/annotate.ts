@@ -4,7 +4,8 @@
 // displayed, from its top left; drawing is in points on that page, y down.
 
 import { glyphBox, glyphText, isBlank, lineBoxes } from './redact-text';
-import { capHeight, textWidth, winAnsi, type FontFamily } from './standard-fonts';
+import { capHeight, textWidth, type FontFamily } from './standard-fonts';
+import { needsEmbedding } from './unicode-fonts';
 import type { PreviewPage } from './stamp-layout';
 import type { AnnotationMark, CropArea, PageAnnotation, PageGlyphs, PagePoint } from './types';
 
@@ -253,13 +254,13 @@ export function wrapText(
 	size: number,
 	width: number
 ): string[] {
-	const measure = (line: string) => textWidth(line, family, bold, size);
+	const embedded = needsEmbedding(text);
+	const measure = (line: string) => textWidth(line, family, bold, size, embedded);
 	const lines: string[] = [];
 	for (const paragraph of text.split('\n')) {
 		let line = '';
 		for (const word of paragraph.replace(/\r$/, '').split(' ')) {
-			const codes = [...word].filter((character) => winAnsi(character) !== undefined).join('');
-			const candidate = line ? `${line} ${codes}` : codes;
+			const candidate = line ? `${line} ${word}` : word;
 			if (measure(candidate) <= width) {
 				line = candidate;
 				continue;
@@ -268,12 +269,12 @@ export function wrapText(
 				lines.push(line);
 				line = '';
 			}
-			for (const code of codes) {
-				line += code;
-				if (measure(line) > width && line.length > 1) {
-					lines.push(line.slice(0, -1));
-					line = code;
-				}
+			for (const character of word) {
+				const longer = line + character;
+				if (measure(longer) > width && line) {
+					lines.push(line);
+					line = character;
+				} else line = longer;
 			}
 		}
 		lines.push(line);
@@ -297,7 +298,8 @@ export function textLines(mark: Extract<AnnotationMark, { kind: 'text' }>, page:
 		mark.size,
 		right - left - 2 * TEXT_PADDING
 	);
-	const first = top + TEXT_PADDING + capHeight(mark.family, mark.bold) * mark.size;
+	const embedded = needsEmbedding(mark.text);
+	const first = top + TEXT_PADDING + capHeight(mark.family, mark.bold, embedded) * mark.size;
 	const placed: { text: string; x: number; y: number; width: number }[] = [];
 	for (const [index, text] of lines.entries()) {
 		const y = first + index * LEADING * mark.size;
@@ -306,7 +308,7 @@ export function textLines(mark: Extract<AnnotationMark, { kind: 'text' }>, page:
 			text,
 			x: left + TEXT_PADDING,
 			y,
-			width: textWidth(text, mark.family, mark.bold, mark.size)
+			width: textWidth(text, mark.family, mark.bold, mark.size, embedded)
 		});
 	}
 	return placed;
@@ -321,9 +323,8 @@ export function textHeight(
 	width: number
 ) {
 	const count = wrapText(text, family, bold, size, width - 2 * TEXT_PADDING).length;
-	return (
-		2 * TEXT_PADDING + capHeight(family, bold) * size + (count - 1) * LEADING * size + 0.25 * size
-	);
+	const cap = capHeight(family, bold, needsEmbedding(text));
+	return 2 * TEXT_PADDING + cap * size + (count - 1) * LEADING * size + 0.25 * size;
 }
 
 /// Where capital letters reach above the baseline, in ems.
@@ -331,9 +332,12 @@ export const capHeightOf = (family: FontFamily, bold: boolean) => capHeight(fami
 
 /// The width in points a text box needs to keep each of its lines whole.
 export function textFitWidth(text: string, family: FontFamily, bold: boolean, size: number) {
+	const embedded = needsEmbedding(text);
 	const widest = Math.max(
 		0,
-		...text.split('\n').map((line) => textWidth(line.replace(/\r$/, ''), family, bold, size))
+		...text
+			.split('\n')
+			.map((line) => textWidth(line.replace(/\r$/, ''), family, bold, size, embedded))
 	);
 	// A little over, so rounding never wraps the last word.
 	return widest + 2 * TEXT_PADDING + 0.5;

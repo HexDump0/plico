@@ -616,7 +616,7 @@
 				transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
 				class="pt-2 text-xs text-convert"
 			>
-				“{editor.undrawable}” can't be drawn with the built-in PDF fonts
+				“{editor.undrawable}” can't be drawn with Plico's fonts
 			</p>{/if}
 	</div>
 </div>

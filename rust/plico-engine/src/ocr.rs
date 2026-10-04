@@ -118,7 +118,13 @@ pub fn add_text_layer_bytes(
             ));
         }
         content.push_str("ET\nQ\n");
-        let form = stamper.form(&mut document, &frame, content, Some(font), None);
+        let form = stamper.form(
+            &mut document,
+            &frame,
+            content,
+            Some(dictionary! { "F0" => font }),
+            None,
+        );
         stamper.place(&mut document, page_id, form, false)?;
     }
     finish(document, 1.0)

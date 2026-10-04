@@ -3,6 +3,9 @@
 // does. Widths are thousandths of the font size, indexed by WinAnsiEncoding
 // code minus 32, from Adobe's Core 14 AFM files.
 
+import { embeddedWidth } from './font-faces.svelte';
+import { needsEmbedding, uncovered } from './unicode-fonts';
+
 export type FontFamily = 'helvetica' | 'times' | 'courier';
 
 const highCodes: Record<string, number> = {
@@ -43,17 +46,29 @@ export function winAnsi(character: string): number | undefined {
 	return highCodes[character];
 }
 
-/// The first character in `text` the standard fonts cannot draw.
-export function undrawable(text: string): string | undefined {
-	return [...text.replace(/\r?\n/g, '')].find((character) => winAnsi(character) === undefined);
+/// The first character in `text` neither the standard fonts nor the
+/// embedded ones can draw.
+export function undrawable(text: string, family: FontFamily = 'helvetica'): string | undefined {
+	return uncovered(text, family);
 }
 
-export function capHeight(family: FontFamily, bold: boolean) {
+/// The engine decides for a whole piece of text, so its lines pass the
+/// decision for all of it as `embedded`. Every embedded family's own font
+/// has capitals 0.714 high.
+export function capHeight(family: FontFamily, bold: boolean, embedded = false) {
+	if (embedded) return 0.714;
 	return family === 'helvetica' ? 0.718 : family === 'times' ? (bold ? 0.676 : 0.662) : 0.562;
 }
 
 /// Width in points at `size`.
-export function textWidth(text: string, family: FontFamily, bold: boolean, size: number) {
+export function textWidth(
+	text: string,
+	family: FontFamily,
+	bold: boolean,
+	size: number,
+	embedded = needsEmbedding(text)
+) {
+	if (embedded) return embeddedWidth(text, family, bold, size);
 	const widths =
 		family === 'helvetica'
 			? bold

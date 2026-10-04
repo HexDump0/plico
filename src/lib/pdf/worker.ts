@@ -30,6 +30,7 @@ import init, {
 	scans_to_pdf
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
+import { fontRequests, type TextItem } from './unicode-fonts';
 import type {
 	AnnotateOptions,
 	CoveredPage,
@@ -49,6 +50,46 @@ import type {
 const ready = init();
 
 const fontIndex = { helvetica: 0, times: 1, courier: 2 } as const;
+
+const fontFiles = new Map<string, Promise<Uint8Array>>();
+
+/// The fonts `items` need, back to back as the engine takes them. Each file
+/// is fetched once per worker.
+async function suppliedFonts(items: TextItem[]) {
+	const requests = fontRequests(items);
+	const programs = await Promise.all(
+		requests.map(({ file }) => {
+			let program = fontFiles.get(file);
+			if (!program) {
+				program = fetch(new URL(`/fonts/${file}`, location.href)).then(async (response) => {
+					if (!response.ok) throw new Error('The fonts for this text could not be loaded.');
+					return new Uint8Array(await response.arrayBuffer());
+				});
+				program.catch(() => fontFiles.delete(file));
+				fontFiles.set(file, program);
+			}
+			return program;
+		})
+	);
+	const lengths = Uint32Array.from(programs, (program) => program.byteLength);
+	const bytes = new Uint8Array(lengths.reduce((total, length) => total + length, 0));
+	let offset = 0;
+	for (const program of programs) {
+		bytes.set(program, offset);
+		offset += program.byteLength;
+	}
+	return { bytes, lengths, roles: requests.map((request) => request.role) };
+}
+
+type SuppliedFonts = Awaited<ReturnType<typeof suppliedFonts>>;
+
+function annotationTexts(annotations: PageAnnotation[]): TextItem[] {
+	return annotations.flatMap((annotation) =>
+		annotation.kind === 'text'
+			? [{ text: annotation.text, family: annotation.family, bold: annotation.bold }]
+			: []
+	);
+}
 
 type PackedOutput = PdfOutput;
 
@@ -125,7 +166,12 @@ function packAnnotations(files: ArrayBuffer[], annotations: PageAnnotation[]) {
 	};
 }
 
-function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptions) {
+function annotate(
+	files: ArrayBuffer[],
+	password: string,
+	options: AnnotateOptions,
+	fonts: SuppliedFonts
+) {
 	const packed = packAnnotations(files, options.annotations);
 	return annotate_pdf(
 		new Uint8Array(files[0]),
@@ -144,11 +190,14 @@ function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptio
 		packed.imageBytes,
 		packed.imageLengths,
 		Uint32Array.from(options.remove),
-		options.flatten
+		options.flatten,
+		fonts.bytes,
+		fonts.lengths,
+		fonts.roles
 	);
 }
 
-function edit(files: ArrayBuffer[], password: string, options: EditOptions) {
+function edit(files: ArrayBuffer[], password: string, options: EditOptions, fonts: SuppliedFonts) {
 	const packed = packAnnotations(files, options.additions);
 	const [bytes, pages, reasons] = edit_pdf(
 		new Uint8Array(files[0]),
@@ -175,7 +224,10 @@ function edit(files: ArrayBuffer[], password: string, options: EditOptions) {
 		packed.points,
 		packed.texts,
 		packed.imageBytes,
-		packed.imageLengths
+		packed.imageLengths,
+		fonts.bytes,
+		fonts.lengths,
+		fonts.roles
 	) as [Uint8Array, Uint32Array, Uint8Array];
 	const covered: CoveredPage[] = Array.from(pages, (page, index) => ({
 		page,
@@ -706,6 +758,9 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 		}
 		if (request.operation === 'page-numbers') {
 			const { options } = request;
+			const fonts = await suppliedFonts([
+				{ text: options.template, family: options.family, bold: options.bold }
+			]);
 			postOutput(id, {
 				format: 'pdf',
 				bytes: add_page_numbers(
@@ -720,13 +775,19 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.bold,
 					options.size,
 					options.color,
-					options.opacity
+					options.opacity,
+					fonts.bytes,
+					fonts.lengths,
+					fonts.roles
 				)
 			});
 			return;
 		}
 		if (request.operation === 'watermark') {
 			const { options } = request;
+			const fonts = await suppliedFonts(
+				request.files[1] ? [] : [{ text: options.text, family: options.family, bold: options.bold }]
+			);
 			postOutput(id, {
 				format: 'pdf',
 				bytes: add_watermark(
@@ -745,7 +806,10 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					options.rotation,
 					options.opacity,
 					options.behind,
-					options.tile
+					options.tile,
+					fonts.bytes,
+					fonts.lengths,
+					fonts.roles
 				)
 			});
 			return;
@@ -760,7 +824,8 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			return;
 		}
 		if (request.operation === 'fill-form') {
-			const { fills, flatten } = request.options;
+			const { fills, texts, flatten } = request.options;
+			const fonts = await suppliedFonts(texts);
 			const [bytes, kept] = fill_form(
 				new Uint8Array(request.files[0]),
 				request.passwords[0] ?? '',
@@ -774,7 +839,10 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				fills.flatMap((fill) =>
 					fill.kind === 'text' ? [fill.text] : fill.kind === 'choices' ? fill.choices : []
 				),
-				flatten
+				flatten,
+				fonts.bytes,
+				fonts.lengths,
+				fonts.roles
 			) as [Uint8Array, number];
 			postOutput(id, { format: 'pdf', bytes }, kept);
 			return;
@@ -782,12 +850,22 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 		if (request.operation === 'annotate') {
 			postOutput(id, {
 				format: 'pdf',
-				bytes: annotate(request.files, request.passwords[0] ?? '', request.options)
+				bytes: annotate(
+					request.files,
+					request.passwords[0] ?? '',
+					request.options,
+					await suppliedFonts(annotationTexts(request.options.annotations))
+				)
 			});
 			return;
 		}
 		if (request.operation === 'edit') {
-			const { bytes, covered } = edit(request.files, request.passwords[0] ?? '', request.options);
+			const { bytes, covered } = edit(
+				request.files,
+				request.passwords[0] ?? '',
+				request.options,
+				await suppliedFonts(annotationTexts(request.options.additions))
+			);
 			const output = bytes.slice().buffer;
 			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf', covered };
 			self.postMessage(response, { transfer: [output] });

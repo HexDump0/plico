@@ -6,7 +6,7 @@ use crate::{
     FieldValue, FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord,
     OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
     ProtectOptions, Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape,
-    SignaturePlacement, SplitMode, StandardFont, TextRemoval, TextStyle, Unremovable,
+    SignaturePlacement, SplitMode, StandardFont, SuppliedFont, TextRemoval, TextStyle, Unremovable,
     WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
     add_text_layer_bytes, add_watermark_bytes, annotate_pdf_bytes,
     compress_pdf_bytes_with_password, condition_of, convert_to_pdfa_bytes, crop_pdf_bytes,
@@ -410,6 +410,49 @@ pub fn protect_pdf(
 }
 
 /// 0 Helvetica, 1 Times, 2 Courier. `color` is 0xRRGGBB.
+/// Fonts for text the standard ones cannot draw: their programs back to
+/// back, each one's length, and its role, a group name with `-bold` for the
+/// bold weight. The groups `helvetica`, `times` and `courier` serve only text
+/// in that family; any other serves every family.
+fn supplied_fonts<'a>(
+    programs: &'a [u8],
+    lengths: &[u32],
+    roles: &'a [String],
+) -> Result<Vec<SuppliedFont<'a>>, JsValue> {
+    let total = lengths
+        .iter()
+        .try_fold(0usize, |total, length| total.checked_add(*length as usize));
+    if total != Some(programs.len()) || lengths.len() != roles.len() {
+        return Err(JsValue::from_str("The fonts were incomplete."));
+    }
+    let mut offset = 0;
+    Ok(roles
+        .iter()
+        .zip(lengths)
+        .map(|(role, &length)| {
+            let end = offset + length as usize;
+            let bytes = &programs[offset..end];
+            offset = end;
+            let (group, bold) = match role.strip_suffix("-bold") {
+                Some(group) => (group, true),
+                None => (role.as_str(), false),
+            };
+            let family = match group {
+                "helvetica" => Some(FontFamily::Helvetica),
+                "times" => Some(FontFamily::Times),
+                "courier" => Some(FontFamily::Courier),
+                _ => None,
+            };
+            SuppliedFont {
+                group,
+                family,
+                bold,
+                bytes,
+            }
+        })
+        .collect())
+}
+
 fn text_style(font: u8, bold: bool, size: f32, color: u32) -> TextStyle {
     TextStyle {
         family: match font {
@@ -454,7 +497,11 @@ pub fn add_page_numbers(
     size: f32,
     color: u32,
     opacity: f32,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
 ) -> Result<Vec<u8>, JsValue> {
+    let fonts = supplied_fonts(font_programs, font_lengths, &font_roles)?;
     add_page_numbers_bytes(
         input,
         password,
@@ -466,6 +513,7 @@ pub fn add_page_numbers(
             margin,
             style: text_style(font, bold, size, color),
             opacity,
+            fonts: &fonts,
         },
     )
     .map_err(|error| JsValue::from_str(&error))
@@ -492,7 +540,11 @@ pub fn add_watermark(
     opacity: f32,
     behind: bool,
     tile: bool,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
 ) -> Result<Vec<u8>, JsValue> {
+    let fonts = supplied_fonts(font_programs, font_lengths, &font_roles)?;
     let content = if image.is_empty() {
         WatermarkContent::Text {
             text,
@@ -516,6 +568,7 @@ pub fn add_watermark(
             opacity,
             behind,
             tile,
+            fonts: &fonts,
         },
     )
     .map_err(|error| JsValue::from_str(&error))
@@ -612,6 +665,7 @@ pub fn flatten_pdf(input: &[u8], password: &str, forms_only: bool) -> Result<Arr
 /// 3 turn it off), and `counts` how many of `values` it takes, in order: one
 /// text, any number of export values, or none for a button. Returns the PDF
 /// and, when flattened, how many fields were left as they were.
+#[allow(clippy::too_many_arguments)]
 pub fn fill_form(
     input: &[u8],
     password: &str,
@@ -620,7 +674,11 @@ pub fn fill_form(
     counts: &[u32],
     values: Vec<String>,
     flatten: bool,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
 ) -> Result<Array, JsValue> {
+    let fonts = supplied_fonts(font_programs, font_lengths, &font_roles)?;
     let incomplete = || JsValue::from_str("A field to fill is incomplete.");
     if kinds.len() != widgets.len()
         || counts.len() != widgets.len()
@@ -646,7 +704,7 @@ pub fn fill_form(
             value,
         });
     }
-    let filled = fill_form_bytes(input, password, &fills, flatten)
+    let filled = fill_form_bytes(input, password, &fills, flatten, &fonts)
         .map_err(|error| JsValue::from_str(&error))?;
     let result = Array::new();
     result.push(&Uint8Array::from(filled.bytes.as_slice()));
@@ -837,7 +895,11 @@ pub fn annotate_pdf(
     image_lengths: &[u32],
     remove: &[u32],
     flatten: bool,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
 ) -> Result<Vec<u8>, JsValue> {
+    let supplied = supplied_fonts(font_programs, font_lengths, &font_roles)?;
     let annotations = annotations(
         kinds,
         pages,
@@ -854,7 +916,7 @@ pub fn annotate_pdf(
         image_lengths,
     )?;
     let remove = remove.iter().map(|&number| (number, 0)).collect::<Vec<_>>();
-    annotate_pdf_bytes(input, password, &annotations, &remove, flatten)
+    annotate_pdf_bytes(input, password, &annotations, &remove, flatten, &supplied)
         .map_err(|error| JsValue::from_str(&error))
 }
 
@@ -899,7 +961,11 @@ pub fn edit_pdf(
     texts: Vec<String>,
     images: &[u8],
     image_lengths: &[u32],
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
 ) -> Result<Array, JsValue> {
+    let supplied = supplied_fonts(font_programs, font_lengths, &font_roles)?;
     let incomplete = || JsValue::from_str("An edit is incomplete.");
     let (replace_areas, remainder) = replace_areas.as_chunks::<4>();
     let (replace_shown, rest) = replace_shown.as_chunks::<4>();
@@ -986,6 +1052,7 @@ pub fn edit_pdf(
             replace: &replace,
             erase: &erase,
             additions: &additions,
+            fonts: &supplied,
         },
     )
     .map_err(|error| JsValue::from_str(&error))?;

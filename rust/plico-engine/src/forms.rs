@@ -3,7 +3,8 @@
 //! A field's value is only half of it. Readers draw a widget's stored
 //! appearance, not the value, unless the form asks them to redraw its fields,
 //! so each widget of a changed text or choice field gets a new appearance,
-//! drawn in the standard font closest to the one the field asks for. Check
+//! drawn in the standard font closest to the one the field asks for, or in a
+//! supplied font of that family for text the standard one cannot draw. Check
 //! boxes and radio buttons carry a look for each state already; only the state
 //! shown changes, and one is drawn only for a widget that has none.
 //!
@@ -22,9 +23,9 @@ use crate::flatten::{
     FlattenScope, Flattened, field_type, flatten_pdf_bytes, name_of, resolve_dict,
 };
 use crate::stamps::{
-    FontFamily, LEADING, base_font, cap_height, finish, number, rectangle, resolve,
-    standard_family, text_width, win_ansi,
+    FontFamily, LEADING, base_font, finish, number, rectangle, resolve, standard_family,
 };
+use crate::text::{SetLine, Setting, SuppliedFont, Typesetter};
 
 pub enum FieldValue<'a> {
     /// A text field's text, or what is typed into a combo box that allows it.
@@ -78,6 +79,7 @@ pub fn fill_form_bytes(
     password: &str,
     fills: &[FieldFill<'_>],
     flatten: bool,
+    fonts: &[SuppliedFont<'_>],
 ) -> Result<Flattened, String> {
     if fills.is_empty() {
         return Err("Fill in at least one field.".into());
@@ -118,13 +120,14 @@ pub fn fill_form_bytes(
         }
     }
 
+    let mut typesetter = Typesetter::new(fonts)?;
     let mut fonts = Fonts::default();
     let mut drawn = BTreeSet::new();
     for (&field, &(widget, value)) in &values {
         let redraw = set_value(&mut document, &defaults, &mut fonts, field, widget, value)?;
         clear_kid_values(&mut document, field);
         if redraw {
-            draw_field(&mut document, &defaults, &mut fonts, field)?;
+            draw_field(&mut document, &defaults, &mut fonts, &mut typesetter, field)?;
             drawn.insert(field);
         }
     }
@@ -139,7 +142,7 @@ pub fn fill_form_bytes(
             if drawn.contains(&field) || !needs_drawing(&document, &defaults, field) {
                 continue;
             }
-            if draw_field(&mut document, &defaults, &mut fonts, field).is_err() {
+            if draw_field(&mut document, &defaults, &mut fonts, &mut typesetter, field).is_err() {
                 complete = false;
             }
         }
@@ -168,6 +171,7 @@ pub fn fill_form_bytes(
         }
     }
 
+    typesetter.write(&mut document)?;
     let bytes = finish(document, 1.0)?;
     if flatten {
         flatten_pdf_bytes(&bytes, "", FlattenScope::FormFields)
@@ -208,7 +212,6 @@ fn set_value(
                     "“{name}” is a password field, which is never saved in a PDF."
                 ));
             }
-            encode(text, &name)?;
             if let Some(limit) = max_length(document, &node)
                 && text.chars().count() > limit
             {
@@ -222,7 +225,6 @@ fn set_value(
             Ok(true)
         }
         (Some(b"Ch"), FieldValue::Text(text)) if flags & COMBO != 0 && flags & EDIT != 0 => {
-            encode(text, &name)?;
             set(document, &|node| {
                 node.set("V", text_string(text));
                 node.remove(b"I");
@@ -241,9 +243,7 @@ fn set_value(
             for choice in chosen {
                 match options.iter().position(|(export, _)| export == choice) {
                     Some(index) => indices.push(index),
-                    None if typed => {
-                        encode(choice, &name)?;
-                    }
+                    None if typed => {}
                     None => return Err(format!("“{name}” has no option “{choice}”.")),
                 }
             }
@@ -353,6 +353,7 @@ fn draw_field(
     document: &mut Document,
     defaults: &Defaults,
     fonts: &mut Fonts,
+    typesetter: &mut Typesetter,
     field: ObjectId,
 ) -> Result<(), String> {
     let node = document
@@ -428,12 +429,20 @@ fn draw_field(
             .and_then(|value| value.as_i64().ok())
             .unwrap_or(defaults.alignment);
         let mut content = frame.decorations(false);
-        content.push_str(&shown.draw(&frame, &look, alignment, &name)?);
-        let font = fonts.text(document, look.family, look.bold);
-        let appearance = frame.stream(
-            content,
-            dictionary! { "Font" => dictionary! { "F0" => font } },
-        );
+        let (drawn, setting, lines) = shown.draw(&frame, &look, alignment, &name, typesetter)?;
+        content.push_str(&drawn);
+        let mut resources = Dictionary::new();
+        match setting {
+            Setting::Standard { family, bold } => {
+                resources.set("F0", fonts.text(document, family, bold));
+            }
+            Setting::Embedded { .. } => {
+                for line in &lines {
+                    typesetter.name_fonts(document, line, &mut resources);
+                }
+            }
+        }
+        let appearance = frame.stream(content, dictionary! { "Font" => resources });
         let appearance = document.add_object(appearance);
         if let Ok(widget) = document.get_dictionary_mut(widget) {
             widget.set("AP", dictionary! { "N" => appearance });
@@ -486,27 +495,36 @@ impl Shown {
         look: &Look,
         alignment: i64,
         name: &str,
-    ) -> Result<String, String> {
+        typesetter: &mut Typesetter,
+    ) -> Result<(String, Setting, Vec<SetLine>), String> {
         let (width, height) = (frame.width, frame.height);
         let edge = frame.border.as_ref().map_or(0.0, |border| border.width);
         let inset = edge + PADDING;
         let room = (width - 2.0 * inset).max(0.0);
-        let (family, bold) = (look.family, look.bold);
-        let measure =
-            |codes: &[u8], size: f32| text_width(family, bold, codes) as f32 / 1000.0 * size;
-        let cap = cap_height(family, bold);
+        let everything = match self {
+            Shown::Line(text) | Shown::Block(text) | Shown::Comb(text, _) => text.clone(),
+            Shown::List { options, .. } => options.join("\n"),
+        };
+        let setting = typesetter
+            .setting(&everything, look.family, look.bold)
+            .map_err(|character| {
+                format!("“{character}” in “{name}” cannot be drawn with the fonts Plico has.")
+            })?;
+        let set = |text: &str| typesetter.line(text, &setting);
+        let measure = |line: &SetLine, size: f32| line.width(size);
+        let cap = setting.cap_height();
         let across = |line_width: f32| match alignment {
             1 => (width - line_width) / 2.0,
             2 => width - inset - line_width,
             _ => inset,
         };
-        // Lines of codes, each at its x and baseline.
-        let mut runs = Vec::<(f32, f32, Vec<u8>)>::new();
+        // Lines, each at its x and baseline.
+        let mut runs = Vec::<(f32, f32, SetLine)>::new();
         let mut highlights = Vec::<[f32; 4]>::new();
         let fit_height = ((height - 2.0 * edge - 2.0) / LINE_FIT).max(SMALLEST);
         let size = match self {
             Shown::Line(text) => {
-                let codes = encode(&text.replace(['\r', '\n'], " "), name)?;
+                let codes = set(&text.replace(['\r', '\n'], " "));
                 let size = if look.size > 0.0 {
                     look.size
                 } else {
@@ -523,14 +541,18 @@ impl Shown {
                 size
             }
             Shown::Comb(text, cells) => {
-                let codes = encode(text, name)?;
+                let codes = text
+                    .chars()
+                    .filter(|character| !matches!(character, '\n' | '\r'))
+                    .map(|character| set(&character.to_string()))
+                    .collect::<Vec<_>>();
                 let cell = width / *cells as f32;
                 let size = if look.size > 0.0 {
                     look.size
                 } else {
                     let widest = codes
                         .iter()
-                        .map(|&code| measure(&[code], 1.0))
+                        .map(|code| measure(code, 1.0))
                         .fold(0.0, f32::max);
                     let fit_width = if widest > 0.0 {
                         cell / widest
@@ -540,16 +562,18 @@ impl Shown {
                     fit_height.min(fit_width).max(SMALLEST)
                 };
                 let y = (height - cap * size) / 2.0;
-                for (index, &code) in codes.iter().take(*cells).enumerate() {
-                    let x = index as f32 * cell + (cell - measure(&[code], size)) / 2.0;
-                    runs.push((x, y, vec![code]));
+                for (index, code) in codes.into_iter().take(*cells).enumerate() {
+                    let x = index as f32 * cell + (cell - measure(&code, size)) / 2.0;
+                    runs.push((x, y, code));
                 }
                 size
             }
             Shown::Block(text) => {
-                encode(text, name)?;
                 let top = height - edge - PADDING;
-                let lines_at = |size: f32| wrap(text, family, bold, size, room);
+                let lines_at = |size: f32| {
+                    let text = text.replace('\r', "");
+                    wrap(&text, room, |line| set(line).width(size))
+                };
                 let size = if look.size > 0.0 {
                     look.size
                 } else {
@@ -569,6 +593,7 @@ impl Shown {
                     if y < edge - size {
                         break;
                     }
+                    let line = set(&line);
                     runs.push((across(measure(&line, size)), y, line));
                 }
                 size
@@ -598,7 +623,7 @@ impl Shown {
                     if selected.contains(&index) {
                         highlights.push([edge, row_top - row, width - 2.0 * edge, row]);
                     }
-                    let codes = encode(&options[index], name)?;
+                    let codes = set(&options[index]);
                     let y = row_top - row + (row - cap * size) / 2.0;
                     runs.push((across(measure(&codes, size)), y, codes));
                 }
@@ -623,20 +648,18 @@ impl Shown {
                 number(h)
             ));
         }
-        content.push_str(&format!("BT\n/F0 {} Tf\n{}\n", number(size), look.colour));
-        for (x, y, codes) in runs {
-            content.push_str(&format!(
-                "1 0 0 1 {} {} Tm\n<{}> Tj\n",
-                number(x),
-                number(y),
-                codes
-                    .iter()
-                    .map(|code| format!("{code:02X}"))
-                    .collect::<String>()
-            ));
+        content.push_str("BT\n");
+        if let Setting::Standard { .. } = setting {
+            content.push_str(&format!("/F0 {} Tf\n", number(size)));
+        }
+        content.push_str(&format!("{}\n", look.colour));
+        let mut lines = Vec::new();
+        for (x, y, line) in runs {
+            content.push_str(&typesetter.show(&line, size, [1.0, 0.0, 0.0, 1.0, x, y]));
+            lines.push(line);
         }
         content.push_str("ET\nQ\nEMC\n");
-        Ok(content)
+        Ok((content, setting, lines))
     }
 }
 
@@ -1037,18 +1060,6 @@ impl Fonts {
             })
         })
     }
-}
-
-/// WinAnsi codes for `text`, line breaks left out.
-fn encode(text: &str, name: &str) -> Result<Vec<u8>, String> {
-    text.chars()
-        .filter(|character| !matches!(character, '\n' | '\r'))
-        .map(|character| {
-            win_ansi(character).ok_or_else(|| {
-                format!("“{character}” in “{name}” cannot be drawn with the built-in PDF fonts.")
-            })
-        })
-        .collect()
 }
 
 /// An attribute from the node or the nearest parent field that has it

@@ -1541,6 +1541,7 @@ fn number_options(template: &str) -> PageNumberOptions<'_> {
         margin: 20.0,
         style: helvetica(10.0),
         opacity: 1.0,
+        fonts: &[],
     }
 }
 
@@ -1557,6 +1558,7 @@ fn watermark_options(text: &str) -> WatermarkOptions<'_> {
         opacity: 1.0,
         behind: false,
         tile: false,
+        fonts: &[],
     }
 }
 
@@ -4568,6 +4570,7 @@ fn annotates_with_appearances_placed_where_the_reader_points() {
         ],
         &[],
         false,
+        &[],
     )
     .unwrap();
     let annotations = page_annotations(&output, 1);
@@ -4638,6 +4641,7 @@ fn annotates_the_spot_the_reader_sees_on_a_turned_page() {
         )],
         &[],
         false,
+        &[],
     )
     .unwrap();
     let (line, content) = &page_annotations(&output, 1)[0];
@@ -4670,6 +4674,7 @@ fn text_boxes_wrap_in_the_box_and_keep_their_font() {
         }],
         &[],
         false,
+        &[],
     )
     .unwrap();
     let (text, content) = &page_annotations(&output, 1)[0];
@@ -4699,23 +4704,18 @@ fn text_boxes_wrap_in_the_box_and_keep_their_font() {
         )],
         &[],
         false,
+        &[],
     );
     assert!(refused.unwrap_err().contains("“日”"));
 }
 
 #[test]
 fn wraps_long_words_inside_and_keeps_line_breaks() {
-    use crate::FontFamily;
-    let lines = crate::annotate::wrap("ab\n\nabcdefgh", FontFamily::Courier, false, 10.0, 30.0);
-    assert_eq!(
-        lines,
-        [
-            b"ab".to_vec(),
-            Vec::new(),
-            b"abcde".to_vec(),
-            b"fgh".to_vec()
-        ]
-    );
+    // Courier at 10 points: every character 6 points wide.
+    let lines = crate::annotate::wrap("ab\n\nabcdefgh", 30.0, |line| {
+        line.chars().count() as f32 * 6.0
+    });
+    assert_eq!(lines, ["ab", "", "abcde", "fgh"]);
 }
 
 #[test]
@@ -4733,7 +4733,8 @@ fn flattened_annotations_are_drawn_into_the_page() {
             },
         )
     };
-    let output = crate::annotate_pdf_bytes(&input, "", &[ellipse(), ellipse()], &[], true).unwrap();
+    let output =
+        crate::annotate_pdf_bytes(&input, "", &[ellipse(), ellipse()], &[], true, &[]).unwrap();
     assert!(page_annotations(&output, 1).is_empty());
     let (_, drawing, _) = flattened_page(&output);
     assert_eq!(drawing.matches("Do").count(), 2, "{drawing}");
@@ -4743,7 +4744,7 @@ fn flattened_annotations_are_drawn_into_the_page() {
         comment: "Look",
         ..annotation(1, AnnotationKind::Note { at: [0.5, 0.5] })
     };
-    assert!(crate::annotate_pdf_bytes(&input, "", &[note], &[], true).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[note], &[], true, &[]).is_err());
 }
 
 #[test]
@@ -4769,6 +4770,7 @@ fn notes_images_and_translucent_marks_are_annotations_readers_open() {
         ],
         &[],
         false,
+        &[],
     )
     .unwrap();
     let annotations = page_annotations(&output, 1);
@@ -4802,10 +4804,10 @@ fn annotate_rejects_what_is_off_the_page() {
             boxes: vec![[0.5, 0.5, 1.5, 0.6]],
         },
     );
-    assert!(crate::annotate_pdf_bytes(&input, "", &[off], &[], false).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[off], &[], false, &[]).is_err());
     let missing_page = annotation(2, AnnotationKind::Note { at: [0.0, 0.0] });
-    assert!(crate::annotate_pdf_bytes(&input, "", &[missing_page], &[], false).is_err());
-    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[], false).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[missing_page], &[], false, &[]).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[], false, &[]).is_err());
 }
 
 #[test]
@@ -4869,6 +4871,7 @@ fn objects_added_in_place_never_answer_a_reference_to_a_missing_one() {
         }],
         &[],
         false,
+        &[],
     )
     .unwrap();
     let document = Document::load_mem(&output).unwrap();
@@ -4902,11 +4905,11 @@ fn annotate_deletes_existing_annotations_with_their_popups_and_fields() {
         .unwrap()[0]
         .as_reference()
         .unwrap();
-    let output = crate::annotate_pdf_bytes(&input, "", &[], &[existing], false).unwrap();
+    let output = crate::annotate_pdf_bytes(&input, "", &[], &[existing], false, &[]).unwrap();
     assert!(page_annotations(&output, 1).is_empty());
     assert!(page_contents(&output)[0].contains("0 0 m"));
     // An id that is not an annotation on any page.
-    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[(9_999, 0)], false).is_err());
+    assert!(crate::annotate_pdf_bytes(&input, "", &[], &[(9_999, 0)], false, &[]).is_err());
 }
 
 #[test]
@@ -5196,7 +5199,8 @@ fn filling_a_text_field_sets_its_value_and_draws_it() {
         dictionary! { "BG" => vec![1.into()], "BC" => vec![0.into()] },
     );
     let (input, ids) = simple_form(dictionary! {}, vec![name]);
-    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "Ada Lovelace")], false).unwrap();
+    let output =
+        fill_form_bytes(&input, "", &[text_fill(ids[0], "Ada Lovelace")], false, &[]).unwrap();
     assert_eq!(output.kept, 0);
     let (document, widgets) = filled_widgets(&output.bytes);
     let field = &widgets[0];
@@ -5245,7 +5249,7 @@ fn filling_fits_automatic_text_to_the_field_and_honours_alignment() {
     right.set("Q", 2);
     let (input, ids) = simple_form(dictionary! {}, vec![right]);
     let long = "a much longer text than fits at the usual size";
-    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], long)], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], long)], false, &[]).unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
     let (_, content) = shown(&document, &widgets[0], None);
     let size = content
@@ -5289,6 +5293,7 @@ fn filling_wraps_multiline_fields_and_spreads_combs() {
             text_fill(ids[1], "AB12"),
         ],
         false,
+        &[],
     )
     .unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
@@ -5333,7 +5338,7 @@ fn filling_turns_a_check_box_on_and_off() {
         widget: ids[0],
         value: FieldValue::Button(true),
     };
-    let output = fill_form_bytes(&input, "", &[on], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[on], false, &[]).unwrap();
     let (_, widgets) = filled_widgets(&output.bytes);
     assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Yes");
     assert_eq!(widgets[0].get(b"V").unwrap().as_name().unwrap(), b"Yes");
@@ -5342,7 +5347,7 @@ fn filling_turns_a_check_box_on_and_off() {
         widget: ids[0],
         value: FieldValue::Button(false),
     };
-    let output = fill_form_bytes(&output.bytes, "", &[off], false).unwrap();
+    let output = fill_form_bytes(&output.bytes, "", &[off], false, &[]).unwrap();
     let (_, widgets) = filled_widgets(&output.bytes);
     assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Off");
     assert_eq!(widgets[0].get(b"V").unwrap().as_name().unwrap(), b"Off");
@@ -5383,7 +5388,7 @@ fn filling_a_radio_group_turns_on_one_kid() {
         widget: kids[1],
         value: FieldValue::Button(true),
     };
-    let output = fill_form_bytes(&input, "", &[blue], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[blue], false, &[]).unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
     let states = widgets
         .iter()
@@ -5418,7 +5423,7 @@ fn filling_a_list_sets_its_value_and_indices_and_draws_the_choice() {
         widget: ids[0],
         value: FieldValue::Choices(choices),
     };
-    let output = fill_form_bytes(&input, "", &[choose(vec!["l"])], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[choose(vec!["l"])], false, &[]).unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
     assert_eq!(text_value(&widgets[0]), "l");
     assert_eq!(
@@ -5429,11 +5434,11 @@ fn filling_a_list_sets_its_value_and_indices_and_draws_the_choice() {
     assert!(content.contains(&hex_of("Large")) && content.contains(&hex_of("Small")));
     assert!(content.contains("0.6 0.75 0.85 rg"), "{content}");
 
-    let error = fill_form_bytes(&input, "", &[choose(vec!["m"])], false)
+    let error = fill_form_bytes(&input, "", &[choose(vec!["m"])], false, &[])
         .err()
         .unwrap();
     assert!(error.contains("no option “m”"), "{error}");
-    let error = fill_form_bytes(&input, "", &[choose(vec!["s", "l"])], false)
+    let error = fill_form_bytes(&input, "", &[choose(vec!["s", "l"])], false, &[])
         .err()
         .unwrap();
     assert!(error.contains("Choose one option"), "{error}");
@@ -5452,14 +5457,18 @@ fn filling_refuses_what_it_cannot_save_faithfully() {
     let mut note = square([10, 10, 60, 40]);
     note.remove(b"AP");
     let (input, ids) = simple_form(dictionary! {}, vec![locked, secret, short, plain, note]);
-    let error = |fill: FieldFill<'_>| fill_form_bytes(&input, "", &[fill], false).err().unwrap();
+    let error = |fill: FieldFill<'_>| {
+        fill_form_bytes(&input, "", &[fill], false, &[])
+            .err()
+            .unwrap()
+    };
     assert!(error(text_fill(ids[0], "x")).contains("read-only"));
     assert!(error(text_fill(ids[1], "x")).contains("password"));
     assert!(error(text_fill(ids[2], "ABCD")).contains("“Initials” takes at most 3"));
     let undrawable = error(text_fill(ids[3], "Жанна"));
     assert!(undrawable.contains("“Ж” in “plain”"), "{undrawable}");
     assert!(error(text_fill(ids[4], "x")).contains("no longer in this PDF"));
-    assert!(fill_form_bytes(&input, "", &[], false).is_err());
+    assert!(fill_form_bytes(&input, "", &[], false, &[]).is_err());
 }
 
 #[test]
@@ -5467,7 +5476,7 @@ fn filling_draws_a_turned_widget_upright_in_its_own_box() {
     let mut turned = widget(Some("turned"), Some("Tx"), [20, 20, 40, 120]);
     turned.set("MK", dictionary! { "R" => 90 });
     let (input, ids) = simple_form(dictionary! {}, vec![turned]);
-    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "up")], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "up")], false, &[]).unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
     let (stream, _) = shown(&document, &widgets[0], None);
     let reals = |key: &[u8]| {
@@ -5495,7 +5504,7 @@ fn filling_draws_a_check_box_that_has_no_look_of_its_own() {
         widget: ids[0],
         value: FieldValue::Button(true),
     };
-    let output = fill_form_bytes(&input, "", &[on], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[on], false, &[]).unwrap();
     let (document, widgets) = filled_widgets(&output.bytes);
     assert_eq!(widgets[0].get(b"AS").unwrap().as_name().unwrap(), b"Yes");
     let (stream, content) = shown(&document, &widgets[0], Some(b"Yes"));
@@ -5540,7 +5549,7 @@ fn filling_and_flattening_draws_every_value_even_in_a_form_that_asks_for_redrawi
         },
         vec![untouched, filled],
     );
-    let output = fill_form_bytes(&input, "", &[text_fill(ids[1], "new")], true).unwrap();
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[1], "new")], true, &[]).unwrap();
     assert_eq!(output.kept, 0);
     let (subtypes, drawing, document) = flattened_page(&output.bytes);
     assert!(subtypes.is_empty(), "{subtypes:?}");
@@ -5568,7 +5577,7 @@ fn filling_without_flattening_keeps_the_form_but_drops_xfa() {
         dictionary! { "NeedAppearances" => true, "XFA" => Object::string_literal("<xdp/>") },
         vec![widget(Some("name"), Some("Tx"), [20, 20, 120, 40])],
     );
-    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "x")], false).unwrap();
+    let output = fill_form_bytes(&input, "", &[text_fill(ids[0], "x")], false, &[]).unwrap();
     let document = Document::load_mem(&output.bytes).unwrap();
     let form = document
         .catalog()
@@ -5599,6 +5608,7 @@ fn edit(
             replace,
             erase: &erase,
             additions,
+            fonts: &[],
         },
     )
     .unwrap()
@@ -5731,6 +5741,7 @@ fn editing_refuses_to_do_nothing_and_areas_off_the_page() {
             replace: &[],
             erase,
             additions: &[],
+            fonts: &[],
         }
     }
     assert!(crate::edit_pdf_bytes(&input, "", options(&[])).is_err());
@@ -6036,6 +6047,7 @@ fn editing_moves_resizes_and_takes_away_images_the_page_draws() {
             replace: &[],
             erase: &[],
             additions: &[],
+            fonts: &[],
         },
     )
     .unwrap();
@@ -6062,6 +6074,7 @@ fn editing_refuses_to_move_an_image_that_is_not_there() {
         replace: &[],
         erase: &[],
         additions: &[],
+        fonts: &[],
     };
     assert!(crate::edit_pdf_bytes(&input, "", options).is_err());
 }
@@ -6312,4 +6325,94 @@ fn scan_finds_a_sheet_and_writes_it_one_bit_deep() {
 fn scan_finds_nothing_on_a_plain_photo() {
     let rgba = vec![120; 320 * 240 * 4];
     assert!(crate::find_page(&rgba, 320, 240).is_none());
+}
+
+fn noto(
+    group: &'static str,
+    family: Option<crate::FontFamily>,
+    file: &str,
+) -> crate::SuppliedFont<'static> {
+    let path = format!("{}/../../static/fonts/{file}", env!("CARGO_MANIFEST_DIR"));
+    crate::SuppliedFont {
+        group,
+        family,
+        bold: false,
+        bytes: Box::leak(std::fs::read(path).unwrap().into_boxed_slice()),
+    }
+}
+
+#[test]
+fn text_outside_winansi_is_drawn_in_embedded_subsets() {
+    let fonts = [
+        noto(
+            "helvetica",
+            Some(crate::FontFamily::Helvetica),
+            "NotoSans-Regular.ttf",
+        ),
+        noto("hebrew", None, "NotoSansHebrew-Regular.ttf"),
+        noto("cjk", None, "NotoSansJP-Regular.otf"),
+    ];
+    let input = pdf_with_pages(&[("", square_page(400))], dictionary! {});
+    let output = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            fonts: &fonts,
+            ..watermark_options("Привет 日本\nשלום")
+        },
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let mut files = Vec::new();
+    let mut maps = String::new();
+    for object in document.objects.values() {
+        let Ok(font) = object.as_dict() else { continue };
+        if font.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Type0") {
+            continue;
+        }
+        let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
+            .as_reference()
+            .unwrap();
+        let descriptor = document
+            .get_dictionary(descendant)
+            .unwrap()
+            .get(b"FontDescriptor")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let descriptor = document.get_dictionary(descriptor).unwrap();
+        files.extend(
+            [b"FontFile2".as_slice(), b"FontFile3"]
+                .into_iter()
+                .filter(|key| descriptor.has(key)),
+        );
+        let map = font
+            .get(b"ToUnicode")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let mut stream = document
+            .get_object(map)
+            .unwrap()
+            .as_stream()
+            .unwrap()
+            .clone();
+        stream.decompress().unwrap();
+        maps.push_str(&String::from_utf8(stream.content).unwrap());
+    }
+    // One TrueType font each for Cyrillic and Hebrew, CFF for the kanji.
+    files.sort();
+    assert_eq!(files, [b"FontFile2".as_slice(), b"FontFile2", b"FontFile3"]);
+    for units in ["<041F>", "<65E5>", "<05E9>"] {
+        assert!(maps.contains(units), "{units} missing from {maps}");
+    }
+    assert!(!page_contents(&output).concat().contains("/F0"));
+
+    let refused = add_watermark_bytes(
+        &input,
+        "",
+        WatermarkOptions {
+            fonts: &fonts,
+            ..watermark_options("ok 😀")
+        },
+    );
+    assert!(refused.unwrap_err().contains("😀"));
 }

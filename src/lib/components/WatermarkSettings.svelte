@@ -162,7 +162,7 @@
 							transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
 							class="pt-2 text-xs text-convert"
 						>
-							“{undrawable}” isn't available in the built-in PDF fonts
+							“{undrawable}” can't be drawn with Plico's fonts
 						</p>{/if}
 				</div>
 				<StampTextSettings

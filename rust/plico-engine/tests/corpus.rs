@@ -643,6 +643,7 @@ fn stamps_every_loadable_document() {
                 margin: 24.0,
                 style,
                 opacity: 1.0,
+                fonts: &[],
             },
         )
         .and_then(|numbered| {
@@ -664,6 +665,7 @@ fn stamps_every_loadable_document() {
                     opacity: 0.3,
                     behind: false,
                     tile: false,
+                    fonts: &[],
                 },
             )
         });

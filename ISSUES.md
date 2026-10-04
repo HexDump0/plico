@@ -198,25 +198,46 @@ size. The second decoder costs 20.6 KB of brotli wasm.
 
 ## Open, engine correctness
 
-### Page numbers and watermarks only draw Western European text
+### Text outside Western European letters is drawn in bundled Noto fonts
 
-Stamps use the standard 14 fonts (Helvetica, Times, Courier, regular and bold),
-which every reader has, so nothing is embedded. They only cover
-WinAnsiEncoding. Text outside it is refused by name ("“日” cannot be drawn with
-the built-in PDF fonts."), never drawn as the wrong glyphs. Widths come from
-Adobe's Core 14 AFM files, so placement is exact for what is supported. Other
-scripts need an embedded, subset font, which is a size and licensing decision.
+Page numbers, watermarks, annotation text boxes, form values and Edit's text
+use the standard 14 fonts when WinAnsiEncoding covers the whole piece of text,
+so that output is unchanged and embeds nothing. Anything else is set in Noto
+fonts from `static/fonts/` (`text.rs`): shaped with rustybuzz, reordered for
+right-to-left scripts with unicode-bidi, and embedded as Type0 subsets with a
+ToUnicode map. Checked by one unit test (Cyrillic, Hebrew and kanji: two
+TrueType subsets, one CFF, ToUnicode for each) and a poppler render and text
+extraction of Cyrillic, kanji, Arabic and Devanagari on `tracemonkey.pdf`. No
+corpus harness has been run with embedded fonts.
 
-Standard 14 fonts without embedding are also not allowed in PDF/A, which does
-not matter until PDF/A output exists.
+Limits, each deliberate for now:
 
-### Filled form fields are drawn in the standard fonts
+- Scripts: Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Bengali, Tamil,
+  Thai and Chinese, Japanese and Korean. Other characters (emoji, Ethiopic,
+  Georgian, the other Indic scripts) are refused by name ("“😀” cannot be drawn
+  with the fonts Plico has."). Adding a script is a font file plus a row in
+  `src/lib/pdf/unicode-fonts.ts`.
+- The CJK fonts come in one weight, so bold CJK text is drawn regular. Nothing
+  fakes bold. Italic is drawn upright, as with the standard fonts.
+- Han characters take the Japanese font beside kana, the Korean one beside
+  hangul, and otherwise follow the browser's language (Simplified Chinese
+  unless it asks for Traditional, Japanese or Korean).
+- Text extraction follows glyph order, so a Devanagari vowel sign drawn before
+  its consonant copies before it (poppler: "दुिनया"); every character is still
+  there once. ActualText would fix it.
+- The engine's wasm grew from 1.78 MB to 2.47 MB raw (705 KB brotli), mostly
+  rustybuzz. The CJK fonts are 4.5 to 8.3 MB each, fetched only for text that
+  needs them; `static/fonts/` is 26 MB in all.
+
+Standard 14 fonts without embedding are still not allowed in PDF/A; PDF/A
+embeds its own substitutes.
+
+### Filled form fields are drawn in the standard fonts or Noto
 
 `fill_form_bytes` draws each changed text or choice field in the standard 14
-font nearest the one its `/DA` names, so the same WinAnsi limit applies: text
-outside it is refused by field ("“Ж” in “Name” cannot be drawn with the
-built-in PDF fonts."), and a form whose own font is embedded (a Cyrillic or CJK
-form) cannot be filled with its own script. Using the field's font needs
+font nearest the one its `/DA` names, or in Noto when that cannot draw it (see
+above), never in the form's own embedded font, so a Cyrillic or CJK form's
+values do not match its look. Using the field's font needs
 reverse-mapping Unicode through its encoding and checking a subset has the
 glyphs, which `redact/fonts.rs` half does already. Readers that redraw fields
 themselves (Acrobat, and anything when NeedAppearances is set) still show the
@@ -234,10 +255,9 @@ the UI, which reads fields from page annotations.
 Edit takes text out with redaction's rewrite (`text_only`) and draws the new
 text into the page, so the limits of both apply, plus some of its own:
 
-- The new text is drawn in the standard 14 font nearest the old one, not in
-  the document's own embedded font, so it is WinAnsi only (the sidebar says
-  which character cannot be drawn) and its shapes differ from the text
-  beside it. Italic is detected but drawn upright: the stamp fonts have no
+- The new text is drawn in the standard 14 font nearest the old one, or Noto
+  for text it cannot draw, not in the document's own embedded font, so its
+  shapes differ from the text beside it. Italic is detected but drawn upright: the stamp fonts have no
   italic or oblique faces yet. Drawing in the run's own font needs the same
   reverse mapping as "Filled form fields are drawn in the standard fonts".
 - Text is edited one run at a time: a line, or the part of it between gaps

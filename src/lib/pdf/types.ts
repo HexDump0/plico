@@ -356,8 +356,13 @@ export type FormFill =
 	| { widget: number; kind: 'choices'; choices: string[] }
 	| { widget: number; kind: 'button'; on: boolean };
 
-/// `flatten` draws the filled fields into the pages.
-export type FillFormOptions = { fills: FormFill[]; flatten: boolean };
+/// `flatten` draws the filled fields into the pages. `texts` is what the
+/// changed fields draw, for choosing the fonts to embed.
+export type FillFormOptions = {
+	fills: FormFill[];
+	texts: { text: string; family: FontFamily; bold: boolean }[];
+	flatten: boolean;
+};
 
 /// One redaction box: left, top, right and bottom as fractions of the page as
 /// displayed, from its top left.

@@ -130,6 +130,7 @@
 		formFills,
 		readFormFields,
 		undrawableField,
+		formTexts,
 		type FormFields,
 		type FormValue
 	} from '$lib/pdf/form-fields';
@@ -1707,7 +1708,11 @@
 	async function fillForm() {
 		if (processing || !formsValid || !currentFile || typeof formFields === 'string') return;
 		const file = currentFile;
-		const options = { fills: formFills(formFields, formValues), flatten: formFlatten };
+		const options = {
+			fills: formFills(formFields, formValues),
+			texts: formTexts(formFields, formValues),
+			flatten: formFlatten
+		};
 		await job.run(
 			async (signal) => {
 				const output = await processFillForm(file, workspace.passwordFor(file), options, signal);

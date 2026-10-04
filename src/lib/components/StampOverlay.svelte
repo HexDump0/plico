@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fontStack } from '$lib/pdf/font-faces.svelte';
+	import { needsEmbedding } from '$lib/pdf/unicode-fonts';
 	import { untrack } from 'svelte';
 	import { cubicInOut, cubicOut } from 'svelte/easing';
 	import {
@@ -100,7 +102,9 @@
 						<text
 							x={line.x}
 							y={-line.y}
-							font-family={families[mark.family]}
+							font-family={needsEmbedding(mark.text)
+								? fontStack(mark.text, mark.family)
+								: families[mark.family]}
 							font-weight={mark.bold ? 700 : 400}
 							font-size={mark.size}
 							fill={color}

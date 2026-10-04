@@ -22,9 +22,11 @@ use crate::documents::{
     parse_version,
 };
 use crate::images::{image_matrix, prepare_image};
+use crate::text::{SetLine, Setting, SuppliedFont, Typesetter};
 
 /// The standard fonts every reader has, so nothing is embedded. They cover
-/// WinAnsiEncoding only: Western European letters and common punctuation.
+/// WinAnsiEncoding only: Western European letters and common punctuation;
+/// other text is drawn in the supplied fonts nearest the family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontFamily {
     Helvetica,
@@ -117,6 +119,8 @@ pub struct PageNumberOptions<'a> {
     pub margin: f32,
     pub style: TextStyle,
     pub opacity: f32,
+    /// For text the standard fonts cannot draw.
+    pub fonts: &'a [SuppliedFont<'a>],
 }
 
 pub enum WatermarkContent<'a> {
@@ -142,6 +146,8 @@ pub struct WatermarkOptions<'a> {
     pub behind: bool,
     /// Repeats the mark across the whole page, ignoring `position`.
     pub tile: bool,
+    /// For text the standard fonts cannot draw.
+    pub fonts: &'a [SuppliedFont<'a>],
 }
 
 /// Keeps a tiled mark from turning into an enormous content stream.
@@ -174,11 +180,15 @@ pub fn add_page_numbers_bytes(
         .template
         .replace("{total}", &last_number.to_string());
 
+    let mut typesetter = Typesetter::new(options.fonts)?;
+    let setting = typesetter
+        .setting(&template, options.style.family, options.style.bold)
+        .map_err(undrawable)?;
     let mut stamper = Stamper::new(&mut document, options.opacity);
-    let font = stamper.font(&mut document, options.style);
     for (page, page_id) in pages {
         let number = options.first_number + (page - first_page);
-        let mark = Mark::text(&template.replace("{n}", &number.to_string()), options.style)?;
+        let text = template.replace("{n}", &number.to_string());
+        let mark = Mark::text(&text, options.style, &setting, &typesetter);
         let frame = page_frame(&document, page_id)?;
         let content = stamper.draw(
             &mark,
@@ -189,10 +199,13 @@ pub fn add_page_numbers_bytes(
                 rotation: 0.0,
                 tile: false,
             },
+            &mut typesetter,
         )?;
-        let form = stamper.form(&mut document, &frame, content, Some(font), None);
+        let fonts = stamper.fonts(&mut document, &mark, &mut typesetter);
+        let form = stamper.form(&mut document, &frame, content, fonts, None);
         stamper.place(&mut document, page_id, form, false)?;
     }
+    typesetter.write(&mut document)?;
     finish(document, options.opacity)
 }
 
@@ -205,13 +218,17 @@ pub fn add_watermark_bytes(
     if !options.rotation.is_finite() {
         return Err("Choose a valid rotation.".into());
     }
+    let mut typesetter = Typesetter::new(options.fonts)?;
     let (mark, image) = match options.content {
         WatermarkContent::Text { text, style } => {
             check_style(&style)?;
             if text.trim().is_empty() {
                 return Err("Enter the watermark text.".into());
             }
-            (Mark::text(text, style)?, None)
+            let setting = typesetter
+                .setting(text, style.family, style.bold)
+                .map_err(undrawable)?;
+            (Mark::text(text, style, &setting, &typesetter), None)
         }
         WatermarkContent::Image { bytes, width } => {
             if !(width > 0.0 && width <= 1.0) {
@@ -236,10 +253,7 @@ pub fn add_watermark_bytes(
     let mut document = load_document(input, 1, password)?;
     let pages = selected_pages(&document, options.pages)?;
     let mut stamper = Stamper::new(&mut document, options.opacity);
-    let font = match &mark {
-        Mark::Text { style, .. } => Some(stamper.font(&mut document, *style)),
-        Mark::Image { .. } => None,
-    };
+    let fonts = stamper.fonts(&mut document, &mark, &mut typesetter);
     let image = image.map(|mut image| {
         if let Some(mask) = image.mask.take() {
             let mask_id = document.add_object(mask);
@@ -262,14 +276,15 @@ pub fn add_watermark_bytes(
         let form = match forms.get(&frame.key()) {
             Some(&form) => form,
             None => {
-                let content = stamper.draw(&mark, &frame, placement)?;
-                let form = stamper.form(&mut document, &frame, content, font, image);
+                let content = stamper.draw(&mark, &frame, placement, &mut typesetter)?;
+                let form = stamper.form(&mut document, &frame, content, fonts.clone(), image);
                 forms.insert(frame.key(), form);
                 form
             }
         };
         stamper.place(&mut document, page_id, form, options.behind)?;
     }
+    typesetter.write(&mut document)?;
     finish(document, options.opacity)
 }
 
@@ -364,6 +379,11 @@ pub(crate) fn check_style(style: &TextStyle) -> Result<(), String> {
         return Err("Choose a valid text color.".into());
     }
     Ok(())
+}
+
+/// The message for a character no font can draw.
+pub(crate) fn undrawable(character: char) -> String {
+    format!("“{character}” cannot be drawn with the fonts Plico has.")
 }
 
 fn check_placement(margin: f32, opacity: f32) -> Result<(), String> {
@@ -576,9 +596,9 @@ pub(crate) fn rectangle(document: &Document, value: &Object) -> Option<[f32; 4]>
 
 enum Mark {
     Text {
-        /// Encoded lines with their widths in points.
-        lines: Vec<(Vec<u8>, f32)>,
+        lines: Vec<SetLine>,
         style: TextStyle,
+        setting: Setting,
     },
     Image {
         orientation: u8,
@@ -589,26 +609,16 @@ enum Mark {
 }
 
 impl Mark {
-    fn text(text: &str, style: TextStyle) -> Result<Mark, String> {
+    fn text(text: &str, style: TextStyle, setting: &Setting, typesetter: &Typesetter) -> Mark {
         let lines = text
             .split('\n')
-            .map(|line| {
-                let encoded = line
-                    .trim_end_matches('\r')
-                    .chars()
-                    .map(|character| {
-                        standard_fonts::win_ansi(character).ok_or_else(|| {
-                            format!("“{character}” cannot be drawn with the built-in PDF fonts.")
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let width = standard_fonts::text_width(style.family, style.bold, &encoded) as f32
-                    / 1000.0
-                    * style.size;
-                Ok((encoded, width))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(Mark::Text { lines, style })
+            .map(|line| typesetter.line(line.trim_end_matches('\r'), setting))
+            .collect();
+        Mark::Text {
+            lines,
+            style,
+            setting: setting.clone(),
+        }
     }
 
     /// Width and height in points on a page of this width. Text is measured
@@ -616,11 +626,16 @@ impl Mark {
     /// what the eye reads as its extent.
     fn size(&self, page_width: f32) -> (f32, f32) {
         match self {
-            Mark::Text { lines, style } => (
-                lines.iter().map(|(_, width)| *width).fold(0.0, f32::max),
-                style.size
-                    * (standard_fonts::cap_height(style.family, style.bold)
-                        + LEADING * (lines.len() - 1) as f32),
+            Mark::Text {
+                lines,
+                style,
+                setting,
+            } => (
+                lines
+                    .iter()
+                    .map(|line| line.width(style.size))
+                    .fold(0.0, f32::max),
+                style.size * (setting.cap_height() + LEADING * (lines.len() - 1) as f32),
             ),
             Mark::Image { aspect, width, .. } => (page_width * width, page_width * width * aspect),
         }
@@ -637,7 +652,7 @@ struct Placement {
 
 /// Objects shared by every stamped page, plus what has been written so far.
 pub(crate) struct Stamper {
-    font: Option<ObjectId>,
+    standard: Option<ObjectId>,
     graphics_state: Option<ObjectId>,
     streams: HashMap<Vec<u8>, ObjectId>,
     promoted: BTreeSet<ObjectId>,
@@ -653,26 +668,50 @@ impl Stamper {
             })
         });
         Stamper {
-            font: None,
+            standard: None,
             graphics_state,
             streams: HashMap::new(),
             promoted: BTreeSet::new(),
         }
     }
 
-    fn font(&mut self, document: &mut Document, style: TextStyle) -> ObjectId {
-        *self.font.get_or_insert_with(|| {
-            document.add_object(dictionary! {
-                "Type" => "Font",
-                "Subtype" => "Type1",
-                "BaseFont" => standard_fonts::base_font(style.family, style.bold),
-                "Encoding" => "WinAnsiEncoding",
-            })
-        })
+    /// The /Font resources `mark` needs: the standard font as `/F0`, or
+    /// the supplied fonts its lines use.
+    fn fonts(
+        &mut self,
+        document: &mut Document,
+        mark: &Mark,
+        typesetter: &mut Typesetter,
+    ) -> Option<Dictionary> {
+        let Mark::Text { lines, setting, .. } = mark else {
+            return None;
+        };
+        if let Setting::Standard { family, bold } = setting {
+            let font = *self.standard.get_or_insert_with(|| {
+                document.add_object(dictionary! {
+                    "Type" => "Font",
+                    "Subtype" => "Type1",
+                    "BaseFont" => standard_fonts::base_font(*family, *bold),
+                    "Encoding" => "WinAnsiEncoding",
+                })
+            });
+            return Some(dictionary! { "F0" => font });
+        }
+        let mut fonts = Dictionary::new();
+        for line in lines {
+            typesetter.name_fonts(document, line, &mut fonts);
+        }
+        Some(fonts)
     }
 
     /// The form's content stream, in the frame's reading orientation.
-    fn draw(&self, mark: &Mark, frame: &Frame, placement: Placement) -> Result<String, String> {
+    fn draw(
+        &self,
+        mark: &Mark,
+        frame: &Frame,
+        placement: Placement,
+        typesetter: &mut Typesetter,
+    ) -> Result<String, String> {
         let (width, height) = mark.size(frame.width);
         let (sin, cos) = placement.rotation.to_radians().sin_cos();
         // Half the extent of the turned mark, which is what has to stay
@@ -702,19 +741,26 @@ impl Stamper {
         }
         content.push_str(&format!("{} cm\n", matrix(frame.matrix)));
         match mark {
-            Mark::Text { lines, style } => {
+            Mark::Text {
+                lines,
+                style,
+                setting,
+            } => {
                 let [red, green, blue] = style.color;
                 content.push_str(&format!(
-                    "{} {} {} rg\nBT\n/F0 {} Tf\n",
+                    "{} {} {} rg\nBT\n",
                     number(red),
                     number(green),
                     number(blue),
-                    number(style.size)
                 ));
+                if let Setting::Standard { .. } = setting {
+                    content.push_str(&format!("/F0 {} Tf\n", number(style.size)));
+                }
                 let align = if placement.tile { 0 } else { across };
-                let cap = standard_fonts::cap_height(style.family, style.bold) * style.size;
+                let cap = setting.cap_height() * style.size;
                 for &center in &centers {
-                    for (index, (encoded, line_width)) in lines.iter().enumerate() {
+                    for (index, line) in lines.iter().enumerate() {
+                        let line_width = line.width(style.size);
                         let x = match align {
                             -1 => -width / 2.0,
                             1 => width / 2.0 - line_width,
@@ -722,13 +768,10 @@ impl Stamper {
                         };
                         let y = height / 2.0 - cap - index as f32 * LEADING * style.size;
                         let (x, y) = turn(x, y, center);
-                        content.push_str(&format!(
-                            "{} Tm\n<{}> Tj\n",
-                            matrix([cos, sin, -sin, cos, x, y]),
-                            encoded
-                                .iter()
-                                .map(|byte| format!("{byte:02X}"))
-                                .collect::<String>()
+                        content.push_str(&typesetter.show(
+                            line,
+                            style.size,
+                            [cos, sin, -sin, cos, x, y],
                         ));
                     }
                 }
@@ -754,12 +797,12 @@ impl Stamper {
         document: &mut Document,
         frame: &Frame,
         content: String,
-        font: Option<ObjectId>,
+        fonts: Option<Dictionary>,
         image: Option<ObjectId>,
     ) -> ObjectId {
         let mut resources = Dictionary::new();
-        if let Some(font) = font {
-            resources.set("Font", dictionary! { "F0" => font });
+        if let Some(fonts) = fonts {
+            resources.set("Font", fonts);
         }
         if let Some(image) = image {
             resources.set("XObject", dictionary! { "I0" => image });

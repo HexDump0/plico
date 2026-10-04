@@ -17,6 +17,7 @@ rust/plico-engine/src/compression/image_transcode.rs        image recompression
 rust/plico-engine/src/images.rs                             image-to-PDF input
 rust/plico-engine/src/security.rs                           protect, unlock, and protection detection
 rust/plico-engine/src/stamps.rs                             page numbers, watermarks and signatures drawn onto existing pages
+rust/plico-engine/src/text.rs                               text the standard fonts cannot draw: shaping, bidi, embedded subsets
 rust/plico-engine/src/crop.rs                               crop boxes set on existing pages
 rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
 rust/plico-engine/src/annotate.rs                           annotations with stored appearances, or drawn into pages
@@ -51,6 +52,8 @@ scripts/raster-redact.mjs                                   poppler text and ren
 scripts/forms-check.mjs                                     pdf.js, poppler and rendered check of form filling
 scripts/edit-check.mjs                                      poppler and rendered check of replacing text
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
+src/lib/pdf/unicode-fonts.ts                                which Noto fonts in static/fonts a text needs, shared with the worker
+src/lib/pdf/font-faces.svelte.ts                            those fonts loaded into the page, so previews measure what the engine draws
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
 src/lib/pdf/redact-text.ts                                  finding text, picking words, and what a box removes
@@ -212,6 +215,11 @@ renumbering. Lay a stamp or a crop out in the page's visible frame, which is
 `/UserUnit`, never raw `/MediaBox` coordinates. Wrap existing content in `q`/`Q` and close any states
 the page left open, or the stamp is drawn through the page's last transform.
 Never add to `/Resources` other pages share; give the page its own shallow copy.
+
+Text the standard 14 fonts can draw is drawn in them and embeds nothing. The
+choice is made for a whole piece of text, never per line, and the previews
+(`stamp-layout.ts`, `annotate.ts`) pass that same choice down to each line's
+width, or they measure lines in a different font from the one written.
 
 Annotating edits pages in place too. Each appearance's `/BBox` is its
 annotation's `/Rect` in page space, with the content turned into the frame

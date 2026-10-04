@@ -41,6 +41,6 @@
 			transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
 			class="pt-3 text-xs text-convert"
 		>
-			“{undrawable.character}” in {undrawable.label} can't be drawn with the built-in PDF fonts
+			“{undrawable.character}” in {undrawable.label} can't be drawn with Plico's fonts
 		</p>{/if}
 </div>

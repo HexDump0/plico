@@ -20,3 +20,7 @@ png = "0.18"
 wasm-bindgen = "0.2"
 zune-core = "0.5"
 zune-jpeg = "0.5"
+rustybuzz = "0.20.1"
+unicode-bidi = "0.3.18"
+subsetter = { version = "0.2.6", default-features = false }
+unicode-script = "0.5"

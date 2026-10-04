@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fontStack } from '$lib/pdf/font-faces.svelte';
+	import { needsEmbedding } from '$lib/pdf/unicode-fonts';
 	import { cubicOut } from 'svelte/easing';
 	import { fade, scale } from 'svelte/transition';
 	import { IconX } from '@tabler/icons-svelte-runes';
@@ -775,7 +777,7 @@ picked, moved and resized where the tool lets them be. -->
 		{@const family = families[editingMark.family]}
 		{@const [left, top, right, bottom] = editingMark.area}
 		{@const shift =
-			(capHeight(editingMark.family, editingMark.bold) -
+			(capHeight(editingMark.family, editingMark.bold, needsEmbedding(editingMark.text)) -
 				family.ascent -
 				(LEADING - family.ascent - family.descent) / 2) *
 			editingMark.size *
@@ -803,7 +805,9 @@ picked, moved and resized where the tool lets them be. -->
 			style:width={percent(right - left)}
 			style:height="calc({percent(bottom - top)} - {shift}px)"
 			style:padding="{TEXT_PADDING * zoom}px"
-			style:font-family={family.css}
+			style:font-family={needsEmbedding(editingMark.text)
+				? fontStack(editingMark.text, editingMark.family)
+				: family.css}
 			style:font-weight={editingMark.bold ? 700 : 400}
 			style:font-size="{editingMark.size * zoom}px"
 			style:line-height={LEADING}

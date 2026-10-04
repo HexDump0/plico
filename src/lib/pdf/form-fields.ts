@@ -283,27 +283,46 @@ export function formFills(fields: FormFields, values: Record<string, FormValue>)
 	return fills;
 }
 
-/// The first changed field that would draw a character the standard fonts
-/// cannot, and that character: its text, the option a combo box shows, or
-/// any of a list's options, since a list shows them all.
+/// What each changed text or choice field draws, in its font: its text, the
+/// option a combo box shows, or every option of a list, since a list shows
+/// them all.
+export function formTexts(
+	fields: FormFields,
+	values: Record<string, FormValue>
+): { name: string; label: string; text: string; family: FontFamily; bold: boolean }[] {
+	const changed = new Set(changedFields(fields, values));
+	return fields.pages
+		.flatMap((page) => page.widgets)
+		.filter((widget) => changed.has(widget.name))
+		.flatMap((widget) => {
+			const value = values[widget.name];
+			const shown =
+				widget.kind === 'text'
+					? [value as string]
+					: widget.kind === 'combo'
+						? [widget.options.find((option) => option.value === value)?.label ?? (value as string)]
+						: widget.kind === 'list'
+							? widget.options.map((option) => option.label)
+							: [];
+			return shown.map((text) => ({
+				name: widget.name,
+				label: widget.label,
+				text,
+				family: widget.font,
+				bold: widget.bold
+			}));
+		});
+}
+
+/// The first changed field that would draw a character no font can, and that
+/// character.
 export function undrawableField(
 	fields: FormFields,
 	values: Record<string, FormValue>
 ): { name: string; label: string; character: string } | undefined {
-	const changed = new Set(changedFields(fields, values));
-	for (const widget of fields.pages.flatMap((page) => page.widgets)) {
-		if (!changed.has(widget.name)) continue;
-		const value = values[widget.name];
-		const shown =
-			widget.kind === 'text'
-				? [value as string]
-				: widget.kind === 'combo'
-					? [widget.options.find((option) => option.value === value)?.label ?? (value as string)]
-					: widget.kind === 'list'
-						? widget.options.map((option) => option.label)
-						: [];
-		const character = shown.map((text) => undrawable(text)).find(Boolean);
-		if (character) return { name: widget.name, label: widget.label, character };
+	for (const { name, label, text, family } of formTexts(fields, values)) {
+		const character = undrawable(text, family);
+		if (character) return { name, label, character };
 	}
 	return undefined;
 }
