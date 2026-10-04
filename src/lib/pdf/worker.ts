@@ -12,6 +12,7 @@ import init, {
 	convert_to_pdfa,
 	pdfa_standard_fonts,
 	pdf_protection,
+	pdf_condition,
 	protect_pdf,
 	add_page_numbers,
 	add_text_layer,
@@ -674,6 +675,15 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				id,
 				ok: true,
 				value: pdf_protection(new Uint8Array(request.files[0]))
+			};
+			self.postMessage(response);
+			return;
+		}
+		if (request.operation === 'condition') {
+			const response: PdfWorkerResponse = {
+				id,
+				ok: true,
+				value: pdf_condition(new Uint8Array(request.files[0]), request.passwords[0] ?? '')
 			};
 			self.postMessage(response);
 			return;

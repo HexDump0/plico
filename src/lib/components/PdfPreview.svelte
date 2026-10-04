@@ -19,8 +19,11 @@
 	let canvas = $state<HTMLCanvasElement>();
 	let status = $state('Loading preview...');
 	let imageUrl = $state('');
+	// A repaired copy is drawn in place of an original pdf.js could not open.
+	const shown = $derived(workspace.repairedCopy(file) ?? file);
 	$effect(() => {
-		const source = file;
+		const original = file;
+		const source = shown;
 		const number = pageNumber;
 		const secret = password;
 		let cancelled = false;
@@ -55,13 +58,13 @@
 				task.onPassword = () => {
 					if (!cancelled) {
 						status = '';
-						workspace.setLock(source, secret ? 'incorrect' : 'locked');
+						workspace.setLock(original, secret ? 'incorrect' : 'locked');
 					}
 					void task?.destroy();
 				};
 				const pdf = await task.promise;
 				if (cancelled) return;
-				workspace.opened(source);
+				workspace.opened(original);
 				onload(pdf.numPages);
 				const page = await pdf.getPage(Math.min(number, pdf.numPages));
 				if (cancelled || !canvas) return;
@@ -80,7 +83,7 @@
 				}).promise;
 				if (!cancelled) status = '';
 			} catch {
-				if (!cancelled && !workspace.lockState(source)) status = 'Preview unavailable';
+				if (!cancelled && !workspace.lockState(original)) status = 'Preview unavailable';
 			}
 		}
 		void render();

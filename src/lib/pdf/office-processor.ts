@@ -1,5 +1,5 @@
 import { officeTools, type MarkdownOptions, type OfficeOperation } from './office-conversion';
-import { unlockPdf } from './processor';
+import { read, unlockPdf } from './processor';
 import type { PdfOutput } from './types';
 
 type WorkerResponse =
@@ -22,7 +22,7 @@ export async function processOfficeFile(
 	// documents, so the Rust engine unlocks them first.
 	const input = password
 		? ((await unlockPdf(file, password, signal)).slice().buffer as ArrayBuffer)
-		: await file.arrayBuffer();
+		: await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const worker = new Worker(new URL('./office-worker.ts', import.meta.url), { type: 'module' });
 	return new Promise((resolve, reject) => {

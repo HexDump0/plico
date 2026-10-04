@@ -81,6 +81,34 @@ function send(request: PdfWorkerRequest, signal?: AbortSignal) {
 	});
 }
 
+// Copies the repair step made of files the engine could not read. Tools are
+// handed the original File and read through this, so a repaired copy stands in
+// without anyone holding on to it or to the original's password and lock.
+const repairedCopies = new WeakMap<File, File>();
+
+export function useRepairedCopy(original: File, copy: File) {
+	repairedCopies.set(original, copy);
+}
+
+export function read(file: File) {
+	return (repairedCopies.get(file) ?? file).arrayBuffer();
+}
+
+/// The page count when the engine can open the file as it was chosen, -1 when
+/// it needs a password it was not given, 0 when it is damaged.
+export async function pdfCondition(
+	file: File | ArrayBuffer,
+	password: string,
+	signal?: AbortSignal
+): Promise<number> {
+	const buffer = file instanceof File ? await file.arrayBuffer() : file;
+	const response = await send(
+		{ id: ++requestId, operation: 'condition', files: [buffer], passwords: [password] },
+		signal
+	);
+	return 'value' in response ? (response.value ?? 0) : 0;
+}
+
 function pdfOrZip(output: PdfOutput): PdfOutput & { format: 'pdf' | 'zip' } {
 	if (output.format !== 'pdf' && output.format !== 'zip') {
 		throw new Error('The PDF engine returned an unexpected file format.');
@@ -99,7 +127,7 @@ export async function processPdfs(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	const buffers = await Promise.all(files.map(read));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const output = await submit(
 		{ id: ++requestId, operation, files: buffers, passwords, bookmarks },
@@ -109,7 +137,7 @@ export async function processPdfs(
 }
 
 export async function pdfProtection(file: File, signal?: AbortSignal): Promise<Protection> {
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	const response = await send(
 		{ id: ++requestId, operation: 'protection', files: [buffer] },
 		signal
@@ -125,7 +153,7 @@ export async function processProtectPdf(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'protect', files: [buffer], passwords: [password], options },
@@ -140,7 +168,7 @@ export async function processPageNumbers(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'page-numbers', files: [buffer], passwords: [password], options },
@@ -156,9 +184,7 @@ export async function processWatermark(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(
-		[file, ...(image ? [image] : [])].map((item) => item.arrayBuffer())
-	);
+	const buffers = await Promise.all([file, ...(image ? [image] : [])].map((item) => read(item)));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'watermark', files: buffers, passwords: [password], options },
@@ -175,7 +201,7 @@ export async function processFlatten(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'flatten', files: [buffer], passwords: [password], formsOnly },
@@ -198,7 +224,7 @@ export async function processFillForm(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'fill-form', files: [buffer], passwords: [password], options },
@@ -220,7 +246,7 @@ export async function processSign(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all([file.arrayBuffer(), signature.arrayBuffer()]);
+	const buffers = await Promise.all([read(file), signature.arrayBuffer()]);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'sign', files: buffers, passwords: [password], options },
@@ -237,7 +263,7 @@ export async function processAnnotate(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all([file, ...images].map((source) => source.arrayBuffer()));
+	const buffers = await Promise.all([file, ...images].map((source) => read(source)));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'annotate', files: buffers, passwords: [password], options },
@@ -252,7 +278,7 @@ export async function processCrop(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'crop', files: [buffer], passwords: [password], options },
@@ -268,7 +294,7 @@ export async function processRedact(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'redact', files: [buffer], passwords: [password], options },
@@ -290,7 +316,7 @@ export async function processEdit(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all([file, ...images].map((source) => source.arrayBuffer()));
+	const buffers = await Promise.all([file, ...images].map((source) => read(source)));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'edit', files: buffers, passwords: [password], options },
@@ -313,7 +339,7 @@ export async function ocrPageImage(
 	page: number,
 	signal?: AbortSignal
 ) {
-	const files = file ? [await file.arrayBuffer()] : [];
+	const files = file ? [await read(file)] : [];
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'ocr-render', files, passwords: [password], document, page },
@@ -342,7 +368,7 @@ export async function processOcr(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{ id: ++requestId, operation: 'ocr', files: [buffer], passwords: [password], words },
@@ -356,7 +382,7 @@ export async function openScanPhoto(file: File) {
 	const response = await send({
 		id: ++requestId,
 		operation: 'scan-open',
-		files: [await file.arrayBuffer()]
+		files: [await read(file)]
 	});
 	if (!('proxy' in response)) throw new Error('This photo could not be read.');
 	return {
@@ -411,7 +437,7 @@ export async function redactionText(
 	password: string,
 	signal?: AbortSignal
 ): Promise<PageGlyphs[]> {
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const response = await send(
 		{ id: ++requestId, operation: 'redact-text', files: [buffer], passwords: [password] },
@@ -425,7 +451,7 @@ export async function redactionText(
 // cannot be trusted to decrypt it themselves.
 export async function unlockPdf(file: File, password: string, signal?: AbortSignal) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const output = await submit(
 		{ id: ++requestId, operation: 'unlock', files: [buffer], passwords: [password] },
@@ -441,7 +467,7 @@ export async function convertToPdfA(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const output = await submit(
 		{
@@ -465,7 +491,7 @@ export async function processSplitPdf(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return pdfOrZip(
 		await submit(
@@ -482,7 +508,7 @@ export async function processOrganizePdf(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	const buffers = await Promise.all(files.map(read));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	const sources = new Map(files.map((file, index) => [sourceKey(file), index]));
 	// The engine marks a blank page with the largest u32 as its source and
@@ -519,7 +545,7 @@ export async function processCompressPdf(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	const buffers = await Promise.all(files.map(read));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return pdfOrZip(
 		await submit(
@@ -547,7 +573,7 @@ export async function processImagesToPdf(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffers = await Promise.all(files.map((file) => file.arrayBuffer()));
+	const buffers = await Promise.all(files.map(read));
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit({ id: ++requestId, operation: 'images-to-pdf', files: buffers, options }, signal);
 }
@@ -559,7 +585,7 @@ export async function processPdfToImages(
 	signal?: AbortSignal
 ) {
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
-	const buffer = await file.arrayBuffer();
+	const buffer = await read(file);
 	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
 	return submit(
 		{

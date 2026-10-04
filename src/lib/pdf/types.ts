@@ -59,6 +59,7 @@ export type PdfWorkerRequest =
 			fontBase: string;
 	  }
 	| { id: number; operation: 'protection'; files: ArrayBuffer[] }
+	| { id: number; operation: 'condition'; files: ArrayBuffer[]; passwords: string[] }
 	| {
 			id: number;
 			operation: 'protect';

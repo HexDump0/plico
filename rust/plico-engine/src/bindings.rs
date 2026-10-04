@@ -2,17 +2,18 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    Annotation, AnnotationKind, CompressOptions, EditOptions, Erasure, FieldFill, FieldValue,
-    FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord, OrganizeItem,
-    PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions,
-    Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape, SignaturePlacement,
-    SplitMode, StandardFont, TextRemoval, TextStyle, Unremovable, WatermarkContent,
-    WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_text_layer_bytes,
-    add_watermark_bytes, annotate_pdf_bytes, compress_pdf_bytes_with_password,
-    convert_to_pdfa_bytes, crop_pdf_bytes, edit_pdf_bytes, fill_form_bytes, find_page,
-    flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items,
-    page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes, scan_image_bytes,
-    scans_to_pdf_bytes, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
+    Annotation, AnnotationKind, CompressOptions, Condition, EditOptions, Erasure, FieldFill,
+    FieldValue, FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord,
+    OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
+    ProtectOptions, Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape,
+    SignaturePlacement, SplitMode, StandardFont, TextRemoval, TextStyle, Unremovable,
+    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
+    add_text_layer_bytes, add_watermark_bytes, annotate_pdf_bytes,
+    compress_pdf_bytes_with_password, condition_of, convert_to_pdfa_bytes, crop_pdf_bytes,
+    edit_pdf_bytes, fill_form_bytes, find_page, flatten_pdf_bytes, images_to_pdf_bytes,
+    merge_pdf_bytes_with_options, organize_pdf_items, page_texts, protect_pdf_bytes, protection_of,
+    redact_pdf_bytes, scan_image_bytes, scans_to_pdf_bytes, split_pdf_bytes_with_password,
+    standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -358,6 +359,17 @@ pub fn compress_pdf(
         },
     )
     .map_err(|error| JsValue::from_str(&error))
+}
+
+/// The page count when the engine can open the file, -1 when it needs a
+/// password it was not given, 0 when it is damaged.
+#[wasm_bindgen]
+pub fn pdf_condition(input: &[u8], password: &str) -> i32 {
+    match condition_of(input, password) {
+        Condition::Readable { pages } => pages as i32,
+        Condition::Locked => -1,
+        Condition::Damaged => 0,
+    }
 }
 
 /// 0 unprotected, 1 restricted but opens without a password, 2 needs a password.

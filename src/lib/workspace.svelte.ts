@@ -1,6 +1,7 @@
 import { createContext } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { acceptsFile, type OfficeInput } from './pdf/office-conversion';
+import { useRepairedCopy } from './pdf/processor';
 
 export type AcceptedFileType = 'pdf' | 'image' | OfficeInput;
 /// `checking` keeps the unlock form in place while pdf.js tries a password;
@@ -18,6 +19,8 @@ export class Workspace {
 	// Memory only, like the files themselves: nothing here survives a reload.
 	private passwords = new SvelteMap<File, string>();
 	private locks = new SvelteMap<File, LockState>();
+	// Repaired copies of files the engine could not open, shown in their place.
+	private repairs = new SvelteMap<File, File>();
 	// Not reactive on purpose: the tool being left must not redraw with it
 	// before the route transition captures it.
 	private carried: File | undefined;
@@ -120,6 +123,13 @@ export class Workspace {
 			if (this.locks.get(file) === 'unlocked') this.locks.delete(file);
 		}, 200);
 	}
+	repaired(file: File, copy: File) {
+		this.repairs.set(file, copy);
+		useRepairedCopy(file, copy);
+	}
+	repairedCopy(file: File) {
+		return this.repairs.get(file);
+	}
 	get hasLockedFiles() {
 		return this.files.some((file) => {
 			const lock = this.locks.get(file);
@@ -130,6 +140,7 @@ export class Workspace {
 		const kept = [...this.pdfFiles, ...this.imageFiles, ...Object.values(this.officeFiles).flat()];
 		for (const file of this.passwords.keys()) if (!kept.includes(file)) this.passwords.delete(file);
 		for (const file of this.locks.keys()) if (!kept.includes(file)) this.locks.delete(file);
+		for (const file of this.repairs.keys()) if (!kept.includes(file)) this.repairs.delete(file);
 	}
 	remove(file: File) {
 		if (this.pdfFiles.includes(file)) this.pdfFiles = this.pdfFiles.filter((item) => item !== file);

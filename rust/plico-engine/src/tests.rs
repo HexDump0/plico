@@ -18,10 +18,11 @@ use crate::compression::{deflate_best, filter_matches, image_transcode::is_jpeg_
 use crate::documents::parse_version;
 use crate::images::jpeg_orientation;
 use crate::{
-    FlattenScope, FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position, ProtectOptions,
-    Protection, SignaturePlacement, StandardFont, TextStyle, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, convert_to_pdfa_bytes,
-    crop_pdf_bytes, flatten_pdf_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
+    Condition, FlattenScope, FontFamily, PageCrop, PageNumberOptions, PdfALevel, Position,
+    ProtectOptions, Protection, SignaturePlacement, StandardFont, TextStyle, WatermarkContent,
+    WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
+    condition_of, convert_to_pdfa_bytes, crop_pdf_bytes, flatten_pdf_bytes, protect_pdf_bytes,
+    protection_of, standard_fonts_for_pdfa,
 };
 use crate::{OcrPage, OcrWord, add_text_layer_bytes, page_texts as glyph_texts};
 
@@ -1461,6 +1462,24 @@ fn unlocking_round_trips_and_refuses_unprotected_files() {
     let restricted = protect(&source, "", "", false, true, true);
     let freed = unlock_pdf_bytes(&restricted, "").unwrap();
     assert_eq!(protection_of(&freed).unwrap(), Protection::None);
+}
+
+#[test]
+fn tells_damaged_files_from_locked_ones() {
+    let source = numbered_pdf(3);
+    assert_eq!(condition_of(&source, ""), Condition::Readable { pages: 3 });
+
+    let locked = protect(&source, "open", "", true, true, true);
+    assert_eq!(condition_of(&locked, ""), Condition::Locked);
+    assert_eq!(condition_of(&locked, "wrong"), Condition::Locked);
+    assert_eq!(
+        condition_of(&locked, "open"),
+        Condition::Readable { pages: 3 }
+    );
+
+    let truncated = &source[..source.len() / 2];
+    assert_eq!(condition_of(truncated, ""), Condition::Damaged);
+    assert_eq!(condition_of(b"not a pdf", ""), Condition::Damaged);
 }
 
 #[test]

@@ -456,7 +456,9 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-three tools exist, the catalogue advertises about forty
+### Thirty-four tools exist, the catalogue advertises thirty-seven
+
+HTML to PDF, Summarize and Translate are the three left.
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -764,11 +766,30 @@ wasm32 a panic is an unrecoverable trap, so "does not panic" is a safety
 requirement rather than a nicety. Much of the panic surface is in lopdf and
 wants its own target.
 
-### 49 corpus files will not load at all
+### 49 corpus files will not load at all, 33 of them do after repair
 
-lopdf rejects them outright, so the harness skips them. Some are deliberately
-broken. Others may be files that qpdf and pdfium read fine, which would point at
-lopdf's parser. Nobody has checked which is which.
+lopdf rejects them outright (24 on an invalid trailer, 12 on an xref start, 9
+with no pages found, 4 others), so the corpus harnesses skip them. lopdf 0.44
+has no recovery of its own.
+
+The app repairs them with MuPDF instead (`src/lib/pdf/repair.ts`, decision
+0002): Repair PDF does it on request, and every other tool does it when a run
+fails with one of `load_document`'s "could not be read" or "has no pages"
+errors. Measured 2026-10-04 in Node with mupdf.js 1.28.1, each file opened,
+saved and loaded again with lopdf: 33 load, and 32 of them have poppler's
+page count (poppler cannot read the other, `bug1980958.pdf`). Of the 16 that
+do not, 11 poppler cannot read either, `encrypted-attachment.pdf` loads but
+asks for a password, and 4 fail (`issue21436.pdf`, `PDFBOX-4352-0.pdf`,
+`poppler-742-0-fuzzed.pdf`, `poppler-937-0-fuzzed.pdf`). qpdf 12.4.1 (native)
+recovers 30, none that MuPDF does not. Only page counts were compared, not
+rendered pages.
+
+The prebuilt qpdf wasm packages on npm were tried first and recover none of
+them: `@neslinesli93/qpdf-wasm` (qpdf 12.2.0) fails with "expected n n obj"
+where native qpdf reconstructs the xref, and `qpdf-wasm` is built with
+pthreads, which needs cross-origin isolation. There is no corpus harness for
+repair yet; one would run MuPDF and the engine in Node over the 49 and render
+the results.
 
 ---
 

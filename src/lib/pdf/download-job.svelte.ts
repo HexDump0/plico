@@ -1,4 +1,5 @@
 import { tick } from 'svelte';
+import { isDamagedPdfError } from './repair';
 import type { PdfOutput } from './types';
 
 const mimeTypes: Record<PdfOutput['format'], string> = {
@@ -20,12 +21,18 @@ export class DownloadJob {
 	size = $state(0);
 	inputSize = $state(0);
 	blob: Blob | undefined;
+	// Set while the files a run could not open are being repaired before it
+	// runs again.
+	repairing = $state(false);
+	/// Repairs the files a run could not open and says whether any changed.
+	recover: ((signal: AbortSignal) => Promise<boolean>) | undefined;
 	private controller: AbortController | undefined;
 
 	clear() {
 		this.controller?.abort();
 		this.controller = undefined;
 		this.processing = false;
+		this.repairing = false;
 		this.error = '';
 		if (this.result) URL.revokeObjectURL(this.result);
 		this.result = '';
@@ -47,7 +54,14 @@ export class DownloadJob {
 		this.controller = controller;
 		this.processing = true;
 		try {
-			const output = await process(controller.signal);
+			const output = await process(controller.signal).catch(async (cause) => {
+				if (!this.recover || !isDamagedPdfError(cause) || controller.signal.aborted) throw cause;
+				this.repairing = true;
+				const repaired = await this.recover(controller.signal);
+				this.repairing = false;
+				if (!repaired) throw cause;
+				return process(controller.signal);
+			});
 			if (controller.signal.aborted) return;
 			const blob = new Blob([output.bytes.slice().buffer], { type: mimeTypes[output.format] });
 			const url = URL.createObjectURL(blob);
@@ -65,6 +79,7 @@ export class DownloadJob {
 		} finally {
 			if (this.controller === controller) {
 				this.processing = false;
+				this.repairing = false;
 				this.controller = undefined;
 			}
 		}

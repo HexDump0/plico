@@ -35,6 +35,28 @@ pub fn protection_of(input: &[u8]) -> Result<Protection, String> {
     })
 }
 
+/// Whether the engine can open a PDF, which is what decides that a file needs
+/// repairing. A file that parses but wants a password it was not given is
+/// `Locked`, not damaged: repairing it would change nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Condition {
+    Readable { pages: u32 },
+    Locked,
+    Damaged,
+}
+
+pub fn condition_of(input: &[u8], password: &str) -> Condition {
+    match load_document(input, 1, password) {
+        Ok(document) => Condition::Readable {
+            pages: document.get_pages().len() as u32,
+        },
+        Err(_) => match protection_of(input) {
+            Ok(Protection::Password) => Condition::Locked,
+            _ => Condition::Damaged,
+        },
+    }
+}
+
 /// Writes `input` back without its encryption and otherwise as it was: no page
 /// tree rebuild and no renumbering, so references stay exactly where they
 /// point. Only the object stream containers the load already unpacked, and

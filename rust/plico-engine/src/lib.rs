@@ -47,7 +47,8 @@ pub use scan::{
     scans_to_pdf_bytes,
 };
 pub use security::{
-    ProtectOptions, Protection, protect_pdf_bytes, protection_of, unlock_pdf_bytes,
+    Condition, ProtectOptions, Protection, condition_of, protect_pdf_bytes, protection_of,
+    unlock_pdf_bytes,
 };
 pub use stamps::{
     FontFamily, PageNumberOptions, Position, SignaturePlacement, TextStyle, WatermarkContent,

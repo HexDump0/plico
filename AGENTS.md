@@ -63,6 +63,8 @@ src/lib/pdf/ocr.svelte.ts                                   OCR language models,
 src/lib/pdf/scan.svelte.ts                                  Scan's photos: corners, turns, and previews kept up to date
 scripts/ocr-check.mjs                                       Tesseract and poppler check of OCR on scans made from the corpus
 src/lib/pdf/opened-pdf.svelte.ts                            a PDF opened with pdf.js and its page sizes, for Compare's two views
+src/lib/pdf/repair.ts                                       MuPDF repair of files the engine cannot open, and what it fixed
+src/lib/pdf/repair-worker.ts                                MuPDF (mupdf.js, AGPL) in its own worker, loaded only to repair
 testing/                                                    local corpus, gitignored
 ```
 

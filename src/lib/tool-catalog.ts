@@ -74,7 +74,8 @@ const supportedToolIds = new Set([
 	'pdf-to-markdown',
 	'compare',
 	'ocr',
-	'scan-to-pdf'
+	'scan-to-pdf',
+	'repair'
 ]);
 
 export function isToolSupported(id: string): boolean {
@@ -223,7 +224,8 @@ const nextToolIds: Record<string, string[]> = {
 	'word-to-pdf': ['compress', 'merge', 'sign'],
 	'powerpoint-to-pdf': ['compress', 'merge', 'sign'],
 	'excel-to-pdf': ['compress', 'merge', 'sign'],
-	compare: ['annotate', 'compress', 'protect']
+	compare: ['annotate', 'compress', 'protect'],
+	repair: ['compress', 'merge', 'organize']
 };
 
 export function nextTools(id: string) {
