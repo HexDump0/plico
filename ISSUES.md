@@ -185,6 +185,15 @@ page set alone and became actively wrong once other pages were appended, rather
 than merely incomplete. Stale XMP claiming PDF/A conformance is the clearest
 case.
 
+Compress left very large JPEGs untouched. A 9000 × 12000 phone photo decodes
+to 324 MB, past the 256 MiB per-image cap, so a 26.3 MB PDF of two such pages
+came out 0.1 MB smaller. JPEGs that are being scaled down now decode at 1/2,
+1/4 or 1/8 size inside the inverse DCT (`jpeg-decoder`'s `scale`; zune-jpeg has
+no reduced decode), then box-filter to the target: the same file is 1.0 MB at
+Balanced and 0.3 MB at Strong. Progressive files still need their full-size
+coefficients, so the cap still applies to those, and to images kept at full
+size. The second decoder costs 20.6 KB of brotli wasm.
+
 ---
 
 ## Open, engine correctness

@@ -780,6 +780,53 @@ fn compress_downscales_oversized_images() {
 }
 
 #[test]
+fn compress_downscales_through_a_reduced_decode_keeping_colours() {
+    // Four flat quadrants; a reduced decode that mixed up channels or rows
+    // would show in their centres.
+    let (width, height) = (2400u16, 1600u16);
+    let quadrant = |x: u16, y: u16| match (x < width / 2, y < height / 2) {
+        (true, true) => [220, 40, 40],
+        (false, true) => [40, 200, 60],
+        (true, false) => [30, 60, 210],
+        (false, false) => [240, 230, 30],
+    };
+    let pixels: Vec<u8> = (0..height)
+        .flat_map(|y| (0..width).flat_map(move |x| quadrant(x, y)))
+        .collect();
+    for progressive in [false, true] {
+        let mut jpeg = Vec::new();
+        let mut encoder = jpeg_encoder::Encoder::new(&mut jpeg, 100);
+        encoder.set_progressive(progressive);
+        encoder
+            .encode(&pixels, width, height, jpeg_encoder::ColorType::Rgb)
+            .unwrap();
+        let input = jpeg_pdf(&jpeg, width.into(), height.into());
+        let output = compress_pdf_bytes(&input, compress_options(90, 500, false, false)).unwrap();
+        let document = Document::load_mem(&output).unwrap();
+        let (new_width, new_height, content) = image_stream(&document);
+        assert_eq!(
+            (new_width, new_height),
+            (500, 333),
+            "progressive: {progressive}"
+        );
+        let decoded = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(content))
+            .decode()
+            .unwrap();
+        for (x, y) in [(125u16, 83u16), (375, 83), (125, 250), (375, 250)] {
+            let at = (usize::from(y) * 500 + usize::from(x)) * 3;
+            let expected = quadrant(x * 24 / 5, y * 24 / 5);
+            for (got, want) in decoded[at..at + 3].iter().zip(expected) {
+                assert!(
+                    got.abs_diff(want) < 12,
+                    "progressive: {progressive}, at ({x}, {y}): {:?} for {expected:?}",
+                    &decoded[at..at + 3]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn compress_downscales_grayscale_jpeg_without_panicking() {
     let width = 1500u16;
     let height = 1000u16;

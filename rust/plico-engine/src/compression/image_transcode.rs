@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use jpeg_decoder::{CodingProcess, PixelFormat};
 use jpeg_encoder::{ChromaSubsamplingMethod, ColorType, Encoder as JpegEncoder};
 use lopdf::{Dictionary, Document, Object, ObjectId};
 use zune_core::bytestream::ZCursor;
@@ -287,15 +288,20 @@ fn transcode_jpeg(
         || usize::from(info.components) != colors.components()
         || i64::from(info.width) != pdf_width
         || i64::from(info.height) != pdf_height
-        || decoder.output_buffer_size()? > MAX_DECODED_JPEG
     {
         return None;
     }
-    let mut pixels = decoder.decode().ok()?;
 
-    let (width, height) = (info.width, info.height);
     let components = colors.components();
-    let (new_width, new_height) = downscale_dimensions(width, height, max_dimension);
+    let (new_width, new_height) = downscale_dimensions(info.width, info.height, max_dimension);
+    let (mut pixels, width, height) = if (new_width, new_height) == (info.width, info.height) {
+        if decoder.output_buffer_size()? > MAX_DECODED_JPEG {
+            return None;
+        }
+        (decoder.decode().ok()?, info.width, info.height)
+    } else {
+        decode_jpeg_reduced(source, components, new_width, new_height)?
+    };
     if (new_width, new_height) != (width, height) {
         pixels = box_downscale(
             &pixels,
@@ -312,6 +318,42 @@ fn transcode_jpeg(
         new_width,
         new_height,
     ))
+}
+
+/// Decodes at 1/2, 1/4 or 1/8 size inside the inverse DCT, so an image being
+/// scaled down never exists at full size. A 9000 × 12000 phone photo is 324 MB
+/// of pixels, past `MAX_DECODED_JPEG`, and was left untouched; at a quarter it
+/// is 20 MB. zune-jpeg has no reduced decode. Progressive files still hold
+/// every coefficient at full size, two bytes each, so those are bounded too.
+fn decode_jpeg_reduced(
+    source: &[u8],
+    components: usize,
+    width: u16,
+    height: u16,
+) -> Option<(Vec<u8>, u16, u16)> {
+    let mut decoder = jpeg_decoder::Decoder::new(source);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let expected = if components == 1 {
+        PixelFormat::L8
+    } else {
+        PixelFormat::RGB24
+    };
+    if info.pixel_format != expected
+        || info.coding_process == CodingProcess::Lossless
+        || (info.coding_process == CodingProcess::DctProgressive
+            && usize::from(info.width) * usize::from(info.height) * components * 2
+                > MAX_DECODED_JPEG)
+    {
+        return None;
+    }
+    let (scaled_width, scaled_height) = decoder.scale(width, height).ok()?;
+    let size = usize::from(scaled_width) * usize::from(scaled_height) * components;
+    if scaled_width < width || scaled_height < height || size > MAX_DECODED_JPEG {
+        return None;
+    }
+    let pixels = decoder.decode().ok()?;
+    (pixels.len() == size).then_some((pixels, scaled_width, scaled_height))
 }
 
 fn downscale_dimensions(width: u16, height: u16, max_dimension: u32) -> (u16, u16) {

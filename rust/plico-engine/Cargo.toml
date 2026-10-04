@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 flate2 = "1"
+jpeg-decoder = { version = "0.3", default-features = false }
 jpeg-encoder = "0.7"
 js-sys = "0.3"
 lopdf = { version = "0.44.0", default-features = false, features = ["wasm_js"] }
