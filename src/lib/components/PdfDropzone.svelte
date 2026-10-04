@@ -30,6 +30,7 @@
 	const workspace = getWorkspace();
 	const isImageTool = $derived(
 		selectedTool?.id === 'jpg-to-pdf' ||
+			selectedTool?.id === 'scan-to-pdf' ||
 			selectedTool?.id === 'png-to-pdf' ||
 			selectedTool?.id === 'image-to-pdf' ||
 			selectedTool?.id === 'images-to-pdf'

@@ -23,7 +23,10 @@ import init, {
 	flatten_pdf,
 	sign_pdf,
 	redact_pdf,
-	redaction_text
+	redaction_text,
+	find_scan_page,
+	scan_image,
+	scans_to_pdf
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
 import type {
@@ -38,7 +41,8 @@ import type {
 	PdfWorkerRequest,
 	PdfWorkerResponse,
 	PicturedPage,
-	RedactOptions
+	RedactOptions,
+	ScanLook
 } from './types';
 
 const ready = init();
@@ -451,6 +455,58 @@ async function ocrImage(request: Extract<PdfWorkerRequest, { operation: 'ocr-ren
 	return { image: image.buffer, width, height, dpi: Math.round(scale * 72) };
 }
 
+// Photos are read at most this large: about a 12 MP phone camera's full size.
+const SCAN_PIXELS = 12_500_000;
+// The copy a scan is shown and previewed from, and the one searched for the page.
+const SCAN_PROXY_SIDE = 1600;
+const SCAN_FIND_SIDE = 512;
+const scanLooks: Record<ScanLook, number> = { original: 0, document: 1, grayscale: 2, bw: 3 };
+
+/// A photo upright, as its EXIF orientation says, drawn at most `side`
+/// pixels on its long side and `SCAN_PIXELS` in all.
+async function readPhoto(buffer: ArrayBuffer, side = Infinity) {
+	if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+		throw new Error('This browser cannot read photos for scanning.');
+	}
+	let bitmap: ImageBitmap;
+	try {
+		bitmap = await createImageBitmap(new Blob([buffer]));
+	} catch {
+		throw new Error('This photo could not be read.');
+	}
+	const scale = Math.min(
+		1,
+		side / Math.max(bitmap.width, bitmap.height),
+		Math.sqrt(SCAN_PIXELS / (bitmap.width * bitmap.height))
+	);
+	const width = Math.max(1, Math.round(bitmap.width * scale));
+	const height = Math.max(1, Math.round(bitmap.height * scale));
+	const canvas = new OffscreenCanvas(width, height);
+	const context = canvas.getContext('2d', { willReadFrequently: true });
+	if (!context) throw new Error('This browser cannot read photos for scanning.');
+	context.imageSmoothingQuality = 'high';
+	context.drawImage(bitmap, 0, 0, width, height);
+	const natural = { width: bitmap.width, height: bitmap.height };
+	bitmap.close();
+	return { canvas, context, width, height, natural };
+}
+
+async function openScan(buffer: ArrayBuffer) {
+	const proxy = await readPhoto(buffer, SCAN_PROXY_SIDE);
+	const scale = Math.min(1, SCAN_FIND_SIDE / Math.max(proxy.width, proxy.height));
+	const width = Math.max(1, Math.round(proxy.width * scale));
+	const height = Math.max(1, Math.round(proxy.height * scale));
+	const small = new OffscreenCanvas(width, height);
+	const context = small.getContext('2d', { willReadFrequently: true });
+	if (!context) throw new Error('This browser cannot read photos for scanning.');
+	context.imageSmoothingQuality = 'high';
+	context.drawImage(proxy.canvas, 0, 0, width, height);
+	const pixels = context.getImageData(0, 0, width, height).data;
+	const corners = Array.from(find_scan_page(new Uint8Array(pixels.buffer), width, height));
+	const blob = await proxy.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
+	return { proxy: await blob.arrayBuffer(), ...proxy.natural, corners };
+}
+
 const unremovable = ['text', 'image', 'content'] as const;
 
 /// Redacts in place where it can, and draws from a picture each page the
@@ -793,6 +849,51 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			const { image, width, height, dpi } = await ocrImage(request);
 			const response: PdfWorkerResponse = { id, ok: true, image, width, height, dpi };
 			self.postMessage(response, { transfer: [image] });
+			return;
+		}
+		if (request.operation === 'scan-open') {
+			const { proxy, width, height, corners } = await openScan(request.files[0]);
+			const response: PdfWorkerResponse = { id, ok: true, proxy, width, height, corners };
+			self.postMessage(response, { transfer: [proxy] });
+			return;
+		}
+		if (request.operation === 'scan-find') {
+			const corners = Array.from(
+				find_scan_page(new Uint8Array(request.files[0]), request.width, request.height)
+			);
+			const response: PdfWorkerResponse = { id, ok: true, corners };
+			self.postMessage(response);
+			return;
+		}
+		if (request.operation === 'scan-page') {
+			const photo = await readPhoto(request.files[0]);
+			const pixels = photo.context.getImageData(0, 0, photo.width, photo.height).data;
+			photo.canvas.width = photo.canvas.height = 0;
+			const bytes = scan_image(
+				new Uint8Array(pixels.buffer),
+				photo.width,
+				photo.height,
+				Float32Array.from(request.page.corners),
+				request.page.turns,
+				scanLooks[request.look],
+				request.side
+			);
+			postOutput(id, { format: request.look === 'bw' ? 'png' : 'jpg', bytes });
+			return;
+		}
+		if (request.operation === 'scan') {
+			const { files } = request;
+			const lengths = Uint32Array.from(files, (file) => file.byteLength);
+			const input = new Uint8Array(lengths.reduce((total, length) => total + length, 0));
+			let offset = 0;
+			for (const file of files) {
+				input.set(new Uint8Array(file), offset);
+				offset += file.byteLength;
+			}
+			postOutput(id, {
+				format: 'pdf',
+				bytes: scans_to_pdf(input, lengths, request.paper.width, request.paper.height)
+			});
 			return;
 		}
 		if (request.operation === 'ocr-close') {

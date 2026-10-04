@@ -10,6 +10,7 @@ mod forms;
 mod images;
 mod ocr;
 mod redact;
+mod scan;
 mod security;
 mod stamps;
 #[cfg(test)]
@@ -21,9 +22,9 @@ pub use annotate::{
 pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{
     add_page_numbers, add_text_layer, add_watermark, annotate_pdf, compress_pdf, convert_to_pdfa,
-    crop_pdf, edit_pdf, fill_form, images_to_pdf, merge_pdfs, organize_pdfs, pdf_protection,
-    pdfa_standard_fonts, protect_pdf, redact_pdf, redaction_text, sign_pdf, split_pdf_every,
-    split_pdf_ranges, unlock_pdf,
+    crop_pdf, edit_pdf, fill_form, find_scan_page, images_to_pdf, merge_pdfs, organize_pdfs,
+    pdf_protection, pdfa_standard_fonts, protect_pdf, redact_pdf, redaction_text, scan_image,
+    scans_to_pdf, sign_pdf, split_pdf_every, split_pdf_ranges, unlock_pdf,
 };
 pub use compression::{CompressOptions, compress_pdf_bytes, compress_pdf_bytes_with_password};
 pub use crop::{PageCrop, crop_pdf_bytes};
@@ -40,6 +41,10 @@ pub use ocr::{OcrPage, OcrWord, add_text_layer_bytes};
 pub use redact::{
     GlyphStyle, PageImage, PageText, RedactOptions, Redacted, Redaction, Unremovable, page_texts,
     redact_pdf_bytes,
+};
+pub use scan::{
+    Corners, FULL_PHOTO, ScanLook, ScanPaper, find_page, scan_image as scan_image_bytes,
+    scans_to_pdf_bytes,
 };
 pub use security::{
     ProtectOptions, Protection, protect_pdf_bytes, protection_of, unlock_pdf_bytes,

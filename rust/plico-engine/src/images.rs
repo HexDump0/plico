@@ -205,6 +205,9 @@ fn prepare_jpeg(bytes: &[u8]) -> Result<PreparedImage, String> {
 }
 
 fn prepare_png(bytes: &[u8]) -> Result<PreparedImage, String> {
+    if let Some(prepared) = prepare_low_depth_gray(bytes)? {
+        return Ok(prepared);
+    }
     let mut decoder = png::Decoder::new_with_limits(
         Cursor::new(bytes),
         png::Limits {
@@ -251,6 +254,45 @@ fn prepare_png(bytes: &[u8]) -> Result<PreparedImage, String> {
         height: frame.height,
         orientation: 1,
     })
+}
+
+/// Grey PNGs under 8 bits a pixel, as scans in black and white are, go in at
+/// their own depth rather than eight times larger. `None` for anything else.
+fn prepare_low_depth_gray(bytes: &[u8]) -> Result<Option<PreparedImage>, String> {
+    let header = png::Decoder::new(Cursor::new(bytes))
+        .read_info()
+        .map_err(|_| "The PNG is invalid.")?;
+    let info = header.info();
+    let depth = info.bit_depth as u8;
+    if info.color_type != png::ColorType::Grayscale || depth >= 8 || info.trns.is_some() {
+        return Ok(None);
+    }
+    let mut decoder = png::Decoder::new_with_limits(
+        Cursor::new(bytes),
+        png::Limits {
+            bytes: MAX_DECODED_IMAGE,
+        },
+    );
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    let mut reader = decoder.read_info().map_err(|_| "The PNG is invalid.")?;
+    let size = reader
+        .output_buffer_size()
+        .filter(|size| *size <= MAX_DECODED_IMAGE)
+        .ok_or("The PNG is too large to decode safely.")?;
+    let mut pixels = vec![0; size];
+    let frame = reader
+        .next_frame(&mut pixels)
+        .map_err(|_| "The PNG could not be decoded.")?;
+    pixels.truncate(frame.buffer_size());
+    let mut stream = flate_image_stream(pixels, frame.width, frame.height, "DeviceGray", false)?;
+    stream.dict.set("BitsPerComponent", i64::from(depth));
+    Ok(Some(PreparedImage {
+        stream,
+        mask: None,
+        width: frame.width,
+        height: frame.height,
+        orientation: 1,
+    }))
 }
 
 fn flate_image_stream(

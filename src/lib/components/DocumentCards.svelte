@@ -1,11 +1,15 @@
 <script lang="ts">
 	import gsap from 'gsap';
-	import { flushSync } from 'svelte';
+	import { flushSync, type Snippet } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
 	import {
+		IconCamera,
+		IconPerspective,
+		IconPhotoPlus,
 		IconPlus,
+		IconRotateClockwise,
 		IconX,
 		IconSortAscendingLetters,
 		IconSortDescendingLetters
@@ -25,9 +29,13 @@
 		dragged = $bindable<File | null>(null),
 		keyboardPicked = $bindable<File | null>(null),
 		onadd,
-		onload
+		onload,
+		preview,
+		onopen,
+		onturn,
+		oncamera
 	}: {
-		mode: 'merge' | 'compress' | 'image' | 'single';
+		mode: 'merge' | 'compress' | 'image' | 'scan' | 'single';
 		accent?: string;
 		officeFormat?: 'docx' | 'pptx' | 'xlsx';
 		processing: boolean;
@@ -36,12 +44,20 @@
 		keyboardPicked: File | null;
 		onadd: () => void;
 		onload: (count: number) => void;
+		/// Draws a card's picture in place of the file's own preview.
+		preview?: Snippet<[File]>;
+		/// A click on the card, rather than a drag.
+		onopen?: (file: File) => void;
+		/// Turns the card's page a quarter turn clockwise.
+		onturn?: (file: File) => void;
+		/// Makes the add tile offer the camera beside photos.
+		oncamera?: () => void;
 	} = $props();
 	const workspace = getWorkspace();
 	const isMerge = $derived(mode === 'merge');
 	const isCompress = $derived(mode === 'compress');
 	const isPdfToImage = $derived(mode === 'single');
-	const isImageToPdf = $derived(mode === 'image');
+	const isImageToPdf = $derived(mode === 'image' || mode === 'scan');
 	let dragOrder = $state<File[] | null>(null);
 	const canOrder = $derived(isMerge || isCompress || isImageToPdf);
 	const visibleFiles = $derived(dragOrder ?? workspace.files);
@@ -283,6 +299,8 @@
 		}
 		function lift() {
 			active = true;
+			// The click that ends a drag does not open the card.
+			node.dataset.dragged = '';
 			startIndex = visibleFiles.indexOf(file);
 			flushSync(() => {
 				dragOrder = [...workspace.files];
@@ -311,6 +329,7 @@
 				return;
 			pointerId = event.pointerId;
 			activePointer = pointerId;
+			delete node.dataset.dragged;
 			downX = event.clientX;
 			downY = event.clientY;
 			node.setPointerCapture(pointerId);
@@ -479,6 +498,15 @@
 									{#if officeFormat === 'docx'}<IconFileTypeDocx size={72} stroke={1.25} />
 									{:else if officeFormat === 'pptx'}<IconFileTypePpt size={72} stroke={1.25} />
 									{:else}<IconFileTypeXls size={72} stroke={1.25} />{/if}
+								</div>{:else if preview}<div
+									role="presentation"
+									class={onopen ? 'cursor-pointer' : ''}
+									onclick={(event) => {
+										const card = event.currentTarget.closest('li');
+										if (onopen && card && !('dragged' in card.dataset)) onopen(file);
+									}}
+								>
+									{@render preview(file)}
 								</div>{:else}<PdfPreview
 									{file}
 									onload={(count) => {
@@ -504,14 +532,51 @@
 								aria-label={`Remove ${file.name}`}
 								onclick={() => workspace.remove(file)}><IconX size={18} stroke={2.5} /></button
 							>
-							<span
-								class="absolute right-2 bottom-2 rounded-md bg-canvas/80 px-1.5 py-1 text-[10px] font-semibold text-white backdrop-blur-sm"
-								>{formatSize(file.size)}</span
-							>
+							{#if onturn || onopen}
+								{#if onopen}<button
+										disabled={processing || !!dragged || !!keyboardPicked}
+										class="absolute bottom-2 left-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+										aria-label={`Adjust corners of ${file.name}`}
+										title="Adjust corners"
+										onclick={() => onopen(file)}><IconPerspective size={18} /></button
+									>{/if}
+								{#if onturn}<button
+										disabled={processing || !!dragged || !!keyboardPicked}
+										class="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+										aria-label={`Turn ${file.name} right`}
+										title="Turn right"
+										onclick={() => onturn(file)}><IconRotateClockwise size={18} /></button
+									>{/if}
+							{:else}
+								<span
+									class="absolute right-2 bottom-2 rounded-md bg-canvas/80 px-1.5 py-1 text-[10px] font-semibold text-white backdrop-blur-sm"
+									>{formatSize(file.size)}</span
+								>
+							{/if}
 						</div>
 						<p class="mt-2 truncate px-1 text-xs font-medium" title={file.name}>
 							{file.name}
 						</p>
+					</div>
+				{:else if oncamera}
+					<div
+						class="flex aspect-[3/4] w-full flex-col overflow-hidden rounded-xl border-2 border-dashed border-convert/25 bg-convert/[0.03] text-convert/75"
+					>
+						{#each [{ label: 'Photos', icon: IconPhotoPlus, action: onadd }, { label: 'Camera', icon: IconCamera, action: oncamera }] as option, at (option.label)}
+							<button
+								disabled={processing || !!dragged || !!keyboardPicked}
+								onclick={option.action}
+								class="group flex flex-1 flex-col items-center justify-center gap-2 transition-[background-color,color] hover:bg-convert/[0.07] hover:text-convert disabled:opacity-40 {at
+									? 'border-t-2 border-dashed border-convert/25'
+									: ''}"
+							>
+								<span
+									class="flex size-11 items-center justify-center rounded-full bg-convert/10 motion-safe:transition-transform motion-safe:group-hover:scale-110"
+									><option.icon size={22} stroke={1.5} /></span
+								>
+								<span class="text-xs font-semibold">{option.label}</span>
+							</button>
+						{/each}
 					</div>
 				{:else}
 					<button

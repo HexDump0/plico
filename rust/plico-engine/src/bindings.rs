@@ -5,13 +5,14 @@ use crate::{
     Annotation, AnnotationKind, CompressOptions, EditOptions, Erasure, FieldFill, FieldValue,
     FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord, OrganizeItem,
     PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions,
-    Protection, RedactOptions, Redacted, Redaction, Shape, SignaturePlacement, SplitMode,
-    StandardFont, TextRemoval, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_signature_bytes, add_text_layer_bytes, add_watermark_bytes,
-    annotate_pdf_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
-    edit_pdf_bytes, fill_form_bytes, flatten_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes_with_options, organize_pdf_items, page_texts, protect_pdf_bytes, protection_of,
-    redact_pdf_bytes, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
+    Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape, SignaturePlacement,
+    SplitMode, StandardFont, TextRemoval, TextStyle, Unremovable, WatermarkContent,
+    WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_text_layer_bytes,
+    add_watermark_bytes, annotate_pdf_bytes, compress_pdf_bytes_with_password,
+    convert_to_pdfa_bytes, crop_pdf_bytes, edit_pdf_bytes, fill_form_bytes, find_page,
+    flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options, organize_pdf_items,
+    page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes, scan_image_bytes,
+    scans_to_pdf_bytes, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -96,6 +97,71 @@ pub fn images_to_pdf(
         },
     )
     .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// The sheet of paper in an RGBA photo: its top left, top right, bottom right
+/// and bottom left corners as x and y fractions, or nothing when none is found.
+pub fn find_scan_page(rgba: &[u8], width: u32, height: u32) -> Vec<f32> {
+    find_page(rgba, width, height).map_or_else(Vec::new, |corners| corners.to_vec())
+}
+
+#[wasm_bindgen]
+/// Straightens the area inside `corners` (as `find_scan_page` gives them),
+/// turned `turns` quarter turns clockwise. `look` is 0 as taken, 1 document,
+/// 2 grayscale, 3 black and white. Returns a JPEG, or a one-bit PNG.
+pub fn scan_image(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    corners: &[f32],
+    turns: u8,
+    look: u8,
+    max_side: u32,
+) -> Result<Vec<u8>, JsValue> {
+    let corners = <[f32; 8]>::try_from(corners)
+        .map_err(|_| JsValue::from_str("Choose the corners of the page."))?;
+    let look = match look {
+        0 => ScanLook::Original,
+        1 => ScanLook::Document,
+        2 => ScanLook::Grayscale,
+        _ => ScanLook::BlackWhite,
+    };
+    scan_image_bytes(rgba, width, height, corners, turns, look, max_side)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// One page per scanned image. A `paper_height` of 0 shapes each page like
+/// its scan, `paper_width` points across its short side.
+pub fn scans_to_pdf(
+    input: &[u8],
+    lengths: &[u32],
+    paper_width: f32,
+    paper_height: f32,
+) -> Result<Vec<u8>, JsValue> {
+    let expected_length = lengths
+        .iter()
+        .try_fold(0usize, |total, length| total.checked_add(*length as usize));
+    if expected_length != Some(input.len()) {
+        return Err(JsValue::from_str("The scanned pages were incomplete."));
+    }
+    let mut offset = 0;
+    let images = lengths
+        .iter()
+        .map(|length| {
+            let end = offset + *length as usize;
+            let bytes = &input[offset..end];
+            offset = end;
+            bytes
+        })
+        .collect::<Vec<_>>();
+    let paper = if paper_height == 0.0 {
+        ScanPaper::Fit(paper_width)
+    } else {
+        ScanPaper::Sheet(paper_width, paper_height)
+    };
+    scans_to_pdf_bytes(&images, paper).map_err(|error| JsValue::from_str(&error))
 }
 
 fn split_outputs_to_js(outputs: Vec<Vec<u8>>) -> Array {

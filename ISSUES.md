@@ -447,7 +447,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-two tools exist, the catalogue advertises about forty
+### Thirty-three tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -528,6 +528,20 @@ kept rather than replaced. The tesseract.js language-object bug that the
 IndexedDB workaround avoids should be rechecked on any upgrade past 7.0.0.
 `npm run test:ocr` has no baseline yet; it runs Tesseract in Node and needs a
 lot of memory, so run it with little else open.
+
+### What Scan finds, and its limits
+
+Scan looks for four straight edges, so a curled page, a book spread or a
+receipt with torn edges is found poorly or not at all; the corners are then
+the whole photo and the editor is the fix. A sheet on a desk of nearly its
+own colour has little edge to find. On a generated steep view one side
+snapped to the photo's border, and a page running past the frame lost its top
+to a text line. Photos above 12.5 MP are read smaller. The straightened
+proportions assume a lens centred on an uncropped photo; a page within 10% of
+the chosen sheet's shape is stretched to fill it. B&W is a global threshold
+over evened light, so faint pencil can drop out, and it is Flate, not CCITT
+G4 or JBIG2, which would be several times smaller. Nothing is deskewed below
+the found edges, and HEIC photos read only where the browser decodes them.
 
 ### Error strings are product copy inside the engine
 

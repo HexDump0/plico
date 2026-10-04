@@ -73,7 +73,8 @@ const supportedToolIds = new Set([
 	'pdf-to-excel',
 	'pdf-to-markdown',
 	'compare',
-	'ocr'
+	'ocr',
+	'scan-to-pdf'
 ]);
 
 export function isToolSupported(id: string): boolean {

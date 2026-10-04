@@ -174,6 +174,21 @@ export type PdfWorkerRequest =
 			page: number;
 	  }
 	| { id: number; operation: 'ocr-close'; files: ArrayBuffer[]; document: number }
+	// A photo opened for scanning: a smaller copy to show and the page in it.
+	| { id: number; operation: 'scan-open'; files: ArrayBuffer[] }
+	// A camera frame as RGBA pixels, searched for a page.
+	| { id: number; operation: 'scan-find'; files: ArrayBuffer[]; width: number; height: number }
+	// One photo straightened and cleaned up, at most `side` pixels long.
+	| {
+			id: number;
+			operation: 'scan-page';
+			files: ArrayBuffer[];
+			page: ScanPage;
+			look: ScanLook;
+			side: number;
+	  }
+	// Pages `scan-page` made, one image each, written as a PDF.
+	| { id: number; operation: 'scan'; files: ArrayBuffer[]; paper: ScanPaper }
 	| {
 			id: number;
 			operation: 'ocr';
@@ -188,6 +203,13 @@ export type PdfWorkerRequest =
 			passwords: string[];
 			options: PdfImageOptions;
 	  };
+
+/// Top left, top right, bottom right and bottom left, as x and y fractions of
+/// the photo; `turns` quarter turns clockwise applied after straightening.
+export type ScanPage = { corners: number[]; turns: number };
+export type ScanLook = 'original' | 'document' | 'grayscale' | 'bw';
+/// A height of 0 shapes each page like its scan, `width` across its short side.
+export type ScanPaper = { width: number; height: number };
 
 export type PdfOutput = {
 	bytes: Uint8Array;
@@ -212,6 +234,17 @@ export type PdfWorkerResponse =
 	// A page as recognition reads it: a grey PGM, `width` by `height` pixels
 	// drawn at `dpi`.
 	| { id: number; ok: true; image: ArrayBuffer; width: number; height: number; dpi: number }
+	// `scan-open`: the copy to show, the photo's upright size, and the page
+	// found in it (empty when none was).
+	| {
+			id: number;
+			ok: true;
+			proxy: ArrayBuffer;
+			width: number;
+			height: number;
+			corners: number[];
+	  }
+	| { id: number; ok: true; corners: number[] }
 	| { id: number; ok: false; error: string };
 
 // An empty `userPassword` opens without asking; an empty `ownerPassword` is

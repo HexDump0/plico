@@ -23,6 +23,7 @@ rust/plico-engine/src/annotate.rs                           annotations with sto
 rust/plico-engine/src/forms.rs                              form field values and the appearances that show them
 rust/plico-engine/src/edit.rs                               replacing a page's text, erasing areas, drawing additions in
 rust/plico-engine/src/ocr.rs                                recognized words written under a page as invisible text
+rust/plico-engine/src/scan.rs                               finding a sheet in a photo, straightening and cleaning it, scans as pages
 rust/plico-engine/assets/glyphless.ttf                      the empty font OCR text is written in
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
@@ -59,6 +60,7 @@ src/lib/pdf/form-fields.ts                                  form fields read wit
 src/lib/pdf/edit-text.ts                                    lines Edit can replace, their look, and colours sampled from the page
 src/lib/pdf/compare-text.ts                                 Compare's word diff, the changes it finds, and their markup
 src/lib/pdf/ocr.svelte.ts                                   OCR language models, Tesseract workers, and reading pages
+src/lib/pdf/scan.svelte.ts                                  Scan's photos: corners, turns, and previews kept up to date
 scripts/ocr-check.mjs                                       Tesseract and poppler check of OCR on scans made from the corpus
 src/lib/pdf/opened-pdf.svelte.ts                            a PDF opened with pdf.js and its page sizes, for Compare's two views
 testing/                                                    local corpus, gitignored

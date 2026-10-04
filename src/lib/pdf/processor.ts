@@ -17,6 +17,9 @@ import type {
 	Protection,
 	ProtectOptions,
 	RedactOptions,
+	ScanLook,
+	ScanPage,
+	ScanPaper,
 	SignOptions,
 	SplitOptions,
 	WatermarkOptions
@@ -345,6 +348,61 @@ export async function processOcr(
 		{ id: ++requestId, operation: 'ocr', files: [buffer], passwords: [password], words },
 		signal
 	);
+}
+
+/// A photo opened for scanning: a smaller upright copy to show, the photo's
+/// upright size, and the page found in it, if any.
+export async function openScanPhoto(file: File) {
+	const response = await send({
+		id: ++requestId,
+		operation: 'scan-open',
+		files: [await file.arrayBuffer()]
+	});
+	if (!('proxy' in response)) throw new Error('This photo could not be read.');
+	return {
+		proxy: new Blob([response.proxy], { type: 'image/jpeg' }),
+		width: response.width,
+		height: response.height,
+		corners: response.corners.length === 8 ? response.corners : null
+	};
+}
+
+/// The page in a camera frame, or `null`.
+export async function findScanPage(frame: ImageData) {
+	const response = await send({
+		id: ++requestId,
+		operation: 'scan-find',
+		files: [frame.data.buffer as ArrayBuffer],
+		width: frame.width,
+		height: frame.height
+	});
+	return 'corners' in response && response.corners.length === 8 ? response.corners : null;
+}
+
+/// One photo straightened, cleaned up and encoded: a JPEG, or a PNG for
+/// black and white.
+export async function scanPhoto(
+	photo: Blob,
+	page: ScanPage,
+	look: ScanLook,
+	side: number,
+	signal?: AbortSignal
+) {
+	const buffer = await photo.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	// A plain copy: a reactive proxy cannot be posted to the worker.
+	const plain = { corners: [...page.corners], turns: page.turns };
+	return submit(
+		{ id: ++requestId, operation: 'scan-page', files: [buffer], page: plain, look, side },
+		signal
+	);
+}
+
+/// Scanned pages, in order, written as one PDF.
+export async function processScan(images: Uint8Array[], paper: ScanPaper, signal?: AbortSignal) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const files = images.map((image) => image.slice().buffer);
+	return submit({ id: ++requestId, operation: 'scan', files, paper: { ...paper } }, signal);
 }
 
 /// Where every glyph sits and what it reads, page by page.

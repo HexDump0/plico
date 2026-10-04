@@ -6155,3 +6155,95 @@ fn ocr_leaves_other_pages_alone_and_refuses_nothing_to_write() {
     ]);
     assert!(add_text_layer_bytes(&input, "", &blank).is_err());
 }
+
+/// A pale sheet with lines of "text" inside its margins, seen at an angle on
+/// a dark desk.
+fn photographed_sheet(width: usize, height: usize, corners: [(f32, f32); 4]) -> Vec<u8> {
+    let inside = |x: f32, y: f32| {
+        (0..4).all(|side| {
+            let (ax, ay) = corners[side];
+            let (bx, by) = corners[(side + 1) % 4];
+            (bx - ax) * (y - ay) - (by - ay) * (x - ax) >= 0.0
+        })
+    };
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let shade = if inside(fx, fy) {
+                if y % 24 < 4 && x % 40 > 14 && (260..580).contains(&x) && (150..460).contains(&y) {
+                    60
+                } else {
+                    228
+                }
+            } else {
+                45 + ((x * 7 + y * 13) % 11) as u8
+            };
+            rgba.extend_from_slice(&[shade, shade, shade.saturating_sub(8), 255]);
+        }
+    }
+    rgba
+}
+
+#[test]
+fn scan_finds_a_sheet_and_writes_it_one_bit_deep() {
+    let (width, height) = (800, 600);
+    let truth = [
+        (220.0, 90.0),
+        (610.0, 120.0),
+        (640.0, 540.0),
+        (170.0, 510.0),
+    ];
+    let rgba = photographed_sheet(width, height, truth);
+    let found = crate::find_page(&rgba, width as u32, height as u32).expect("a sheet is found");
+    for (corner, (x, y)) in truth.iter().enumerate() {
+        let error =
+            (found[corner * 2] * width as f32 - x).hypot(found[corner * 2 + 1] * height as f32 - y);
+        assert!(error < 4.0, "corner {corner} is {error} px off: {found:?}");
+    }
+
+    let image = crate::scan_image_bytes(
+        &rgba,
+        width as u32,
+        height as u32,
+        found,
+        1,
+        crate::ScanLook::BlackWhite,
+        1000,
+    )
+    .unwrap();
+    assert!(image.starts_with(b"\x89PNG"));
+    let pdf =
+        crate::scans_to_pdf_bytes(&[&image], crate::ScanPaper::Sheet(595.28, 841.89)).unwrap();
+    let document = Document::load_mem(&pdf).unwrap();
+    let pages = document.get_pages();
+    assert_eq!(pages.len(), 1);
+    let images: Vec<_> = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .filter(|stream| {
+            stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image")
+        })
+        .collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(
+        images[0]
+            .dict
+            .get(b"BitsPerComponent")
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        1
+    );
+    // A quarter turn puts the sheet's long side across: a landscape page.
+    let page = document.get_dictionary(pages[&1]).unwrap();
+    let media = page.get(b"MediaBox").unwrap().as_array().unwrap();
+    assert!(media[2].as_float().unwrap() > media[3].as_float().unwrap());
+}
+
+#[test]
+fn scan_finds_nothing_on_a_plain_photo() {
+    let rgba = vec![120; 320 * 240 * 4];
+    assert!(crate::find_page(&rgba, 320, 240).is_none());
+}
