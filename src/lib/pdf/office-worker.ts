@@ -32,8 +32,7 @@ function toMarkdown(document: WasmPdfDocument, { pages, images }: MarkdownOption
 		.join('\n\n---\n\n')
 		// pdf-oxide bolds word by word (`**and** **Subject**`); join adjacent runs.
 		.replace(/(?<!\*)\*\*([ \t]+)\*\*(?!\*)/g, '$1');
-	if (!text)
-		throw new Error("No text found in this PDF. Scanned pages need OCR, which Plico can't do yet.");
+	if (!text) throw new Error('No text found in this PDF. Scanned pages need OCR PDF first.');
 	return new TextEncoder().encode(`${text}\n`);
 }
 

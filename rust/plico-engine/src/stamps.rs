@@ -749,7 +749,7 @@ impl Stamper {
         Ok(content)
     }
 
-    fn form(
+    pub(crate) fn form(
         &self,
         document: &mut Document,
         frame: &Frame,

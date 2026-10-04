@@ -35,6 +35,7 @@
 		processAnnotate,
 		processEdit,
 		processFillForm,
+		processOcr,
 		redactionText
 	} from '$lib/pdf/processor';
 	import type {
@@ -95,6 +96,17 @@
 	import FormSettings from './FormSettings.svelte';
 	import CompareViewer from './CompareViewer.svelte';
 	import CompareSettings from './CompareSettings.svelte';
+	import OcrSettings from './OcrSettings.svelte';
+	import OcrOverlay from './OcrOverlay.svelte';
+	import {
+		OcrModels,
+		OcrReader,
+		languageName,
+		ocrText,
+		readPages,
+		type OcrPageState,
+		type OcrWord
+	} from '$lib/pdf/ocr.svelte';
 	import { compareText, hasText, markup, type CompareSide } from '$lib/pdf/compare-text';
 	import {
 		blankValues,
@@ -106,7 +118,7 @@
 		type FormValue
 	} from '$lib/pdf/form-fields';
 	import { AnnotateEditor } from '$lib/pdf/annotate-editor.svelte';
-	import { covered, findText } from '$lib/pdf/redact-text';
+	import { covered, findText, glyphBox, glyphText, isBlank } from '$lib/pdf/redact-text';
 	import { flattenMarks, redactRemovals, type AnnotationMark } from '$lib/pdf/annotations';
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import { FULL_PAGE, contentBounds, cropSize, isFullPage, padArea } from '$lib/pdf/crop-area';
@@ -138,9 +150,10 @@
 	const isForms = $derived(tool.id === 'forms');
 	const isEdit = $derived(tool.id === 'edit');
 	const isCompare = $derived(tool.id === 'compare');
+	const isOcr = $derived(tool.id === 'ocr');
 	// Tools that show the pages and draw their result over them.
 	const isPagePreview = $derived(
-		isStamp || isCrop || isSign || isFlatten || isRedact || isAnnotate || isForms || isEdit
+		isStamp || isCrop || isSign || isFlatten || isRedact || isAnnotate || isForms || isEdit || isOcr
 	);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
@@ -357,6 +370,219 @@
 	}
 	// What the engine reads on each page, for finding text and picking words.
 	let pageText = $state.raw<PageGlyphs[] | 'reading' | 'unknown'>('reading');
+	const ocrModels = new OcrModels();
+	const ocrReader = new OcrReader();
+	let ocrLanguages = $state(['eng']);
+	let ocrPages = $state('');
+	let ocrSkipText = $state(true);
+	// Words read so far, by languages and page, so a run picks up where a
+	// cancelled one stopped and changing the pages reads only new ones.
+	const ocrRead = new SvelteMap<string, OcrWord[]>();
+	// Pages the running job is reading.
+	let ocrReading = $state.raw<Record<number, OcrPageState>>({});
+	let ocrStage = $state<'models' | 'starting' | 'reading' | 'writing'>('models');
+	let ocrDone = $state(0);
+	let ocrTotal = $state(0);
+	// Pages of the last result left alone for having text, and read to nothing.
+	let ocrSkipped = $state.raw<number[]>([]);
+	let ocrEmpty = $state.raw<number[]>([]);
+	// The result's text as the engine reads it back, for Find text.
+	let ocrFound = $state.raw<PageGlyphs[] | null>(null);
+	let ocrQuery = $state('');
+	let ocrMatch = $state(-1);
+	let scroller = $state<{ reveal: (page: number, at?: number) => void }>();
+	// A page this many characters long has text of its own. Fewer is a stamp,
+	// a page number or a Bates number on a scan, which still wants reading;
+	// what it does say is not read twice, since words over text are dropped.
+	const OCR_TEXT_GLYPHS = 32;
+	const ocrKey = $derived(ocrLanguages.join('+'));
+	const ocrHasText = $derived.by(() => {
+		if (typeof pageText === 'string') return [];
+		return pageText.map((page) => {
+			let count = 0;
+			for (let index = 0; index < page.ends.length; index++)
+				if (!isBlank(glyphText(page, index)) && ++count >= OCR_TEXT_GLYPHS) return true;
+			return false;
+		});
+	});
+	const ocrScope = $derived(
+		ocrPages.trim()
+			? (parsePageRange(ocrPages, pageCount) ?? [])
+			: Array.from({ length: pageCount }, (_, index) => index + 1)
+	);
+	const ocrPagesInvalid = $derived(
+		ocrPages.trim() !== '' && pageCount > 0 && ocrScope.length === 0
+	);
+	const ocrTargets = $derived(ocrScope.filter((page) => !(ocrSkipText && ocrHasText[page - 1])));
+	const ocrValid = $derived(
+		!!currentFile &&
+			pageCount > 0 &&
+			pageText !== 'reading' &&
+			ocrLanguages.length > 0 &&
+			!ocrPagesInvalid &&
+			ocrTargets.length > 0
+	);
+	const ocrSignature = $derived(JSON.stringify([ocrLanguages, ocrPages, ocrSkipText]));
+	function ocrState(page: number): OcrPageState | 'skipped' | undefined {
+		const reading = ocrReading[page];
+		if (reading) return reading;
+		const words = ocrRead.get(`${ocrKey}|${page}`);
+		if (words) return { status: 'done', words };
+		return ocrSkipText && ocrHasText[page - 1] && ocrScope.includes(page) ? 'skipped' : undefined;
+	}
+	const ocrMatches = $derived(ocrFound ? findText(ocrFound, ocrQuery) : []);
+	const ocrCurrent = $derived(ocrMatches[ocrMatch]);
+	$effect(() => {
+		void ocrQuery;
+		void ocrFound;
+		ocrMatch = -1;
+	});
+	function stepOcrMatch(offset: number) {
+		const count = ocrMatches.length;
+		if (!count) return;
+		ocrMatch = ocrMatch < 0 ? (offset > 0 ? 0 : count - 1) : (ocrMatch + offset + count) % count;
+		const { page, boxes } = ocrMatches[ocrMatch];
+		scroller?.reveal(page, boxes[0][1]);
+	}
+	// The languages' models come down as soon as the tool opens or one is
+	// picked, and a reader starts warming up, so the first page reads at once.
+	$effect(() => {
+		if (!isOcr) return;
+		const languages = [...ocrLanguages];
+		let cancelled = false;
+		Promise.all(languages.map((code) => ocrModels.ensure(code)))
+			.then(() => {
+				if (!cancelled && !untrack(() => processing)) return ocrReader.prepare(languages, 1);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const ocrStatus = $derived.by(() => {
+		if (ocrStage === 'models') {
+			for (const code of ocrLanguages) {
+				const state = ocrModels.states.get(code);
+				if (state?.status === 'loading' && state.total)
+					return `Downloading ${languageName(code)} ${Math.min(99, Math.floor((state.received / state.total) * 100))}%`;
+			}
+			return 'Loading languages...';
+		}
+		if (ocrStage === 'starting') return 'Starting...';
+		if (ocrStage === 'writing') return 'Writing text...';
+		return `Reading ${ocrDone} of ${ocrTotal}...`;
+	});
+	function pageList(numbers: number[]) {
+		return numbers.length === 1
+			? `page ${numbers[0]}`
+			: `pages ${numbers.slice(0, -1).join(', ')} and ${numbers.at(-1)}`;
+	}
+	// Said once, after the result.
+	const ocrNotice = $derived(
+		[
+			ocrSkipped.length
+				? `${ocrSkipped.length === 1 ? 'Page' : 'Pages'} ${pageList(ocrSkipped).replace(/^pages? /, '')} already ${ocrSkipped.length === 1 ? 'has' : 'have'} text and ${ocrSkipped.length === 1 ? 'was' : 'were'} left as ${ocrSkipped.length === 1 ? 'it was' : 'they were'}.`
+				: '',
+			ocrEmpty.length ? `No text was found on ${pageList(ocrEmpty)}.` : ''
+		]
+			.filter(Boolean)
+			.join(' ')
+	);
+	/// Words over text the page already has are left out, so nothing reads twice.
+	function freshWords(words: OcrWord[], page: PageGlyphs | undefined) {
+		if (!page?.ends.length) return words;
+		const boxes: CropArea[] = [];
+		for (let index = 0; index < page.ends.length; index++)
+			if (!isBlank(glyphText(page, index))) boxes.push(glyphBox(page, index));
+		return words.filter((word) => !covered(word.box, boxes, 0.5));
+	}
+	async function readText() {
+		if (processing || !ocrValid || !currentFile || typeof pageText === 'string') return;
+		const file = currentFile;
+		const password = workspace.passwordFor(file);
+		const languages = [...ocrLanguages];
+		const key = languages.join('+');
+		const targets = [...ocrTargets];
+		const skipped = ocrScope.filter((page) => !targets.includes(page));
+		const glyphs = pageText;
+		ocrFound = null;
+		ocrQuery = '';
+		ocrSkipped = [];
+		ocrEmpty = [];
+		let written: Uint8Array | undefined;
+		await job.run(
+			async (signal) => {
+				const stop = () => ocrReader.destroy();
+				signal.addEventListener('abort', stop, { once: true });
+				try {
+					ocrStage = 'models';
+					await Promise.all(languages.map((code) => ocrModels.ensure(code)));
+					const missing = targets.filter((page) => !ocrRead.has(`${key}|${page}`));
+					ocrTotal = targets.length;
+					ocrDone = targets.length - missing.length;
+					if (missing.length) {
+						ocrStage = 'starting';
+						const cores = navigator.hardwareConcurrency || 2;
+						const lanes = Math.min(missing.length, cores >= 8 ? 3 : cores >= 4 ? 2 : 1);
+						await ocrReader.prepare(languages, lanes);
+						if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+						ocrStage = 'reading';
+						await readPages(
+							file,
+							password,
+							missing,
+							ocrReader,
+							(page, state) => {
+								if (signal.aborted) return;
+								const reading = { ...ocrReading };
+								if (state.status === 'done') {
+									ocrRead.set(`${key}|${page}`, state.words);
+									ocrDone++;
+									delete reading[page];
+								} else reading[page] = state;
+								ocrReading = reading;
+							},
+							signal
+						);
+					}
+					if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+					ocrStage = 'writing';
+					const kept = targets.map((page) =>
+						freshWords(ocrRead.get(`${key}|${page}`) ?? [], glyphs[page - 1])
+					);
+					const empty = targets.filter((_, index) => kept[index].length === 0);
+					const words = kept.flat().map(ocrText);
+					if (!words.length)
+						throw new Error(
+							targets.length === 1
+								? 'No text was found on this page.'
+								: 'No text was found on these pages.'
+						);
+					const output = await processOcr(file, password, words, signal);
+					ocrSkipped = skipped;
+					ocrEmpty = empty;
+					written = output.bytes;
+					return output;
+				} finally {
+					signal.removeEventListener('abort', stop);
+					ocrReading = {};
+				}
+			},
+			'Could not read text from this PDF.',
+			() => downloadLink?.click()
+		);
+		// Find text searches what the engine reads in the result, which is the
+		// text layer as any reader will find it.
+		if (written && job.result) {
+			const result = job.result;
+			try {
+				const pages = await redactionText(new File([written.slice().buffer], file.name), '');
+				if (job.result === result) ocrFound = pages;
+			} catch {
+				// Searching is a check on the result; the result stands without it.
+			}
+		}
+	}
 	// Annotations a box removes whole when it touches them, by page.
 	let redactWhole = $state.raw<CropArea[][]>([]);
 	// Pages the last result drew from a picture.
@@ -807,147 +1033,153 @@
 	const actionDisabled = $derived(
 		locked
 			? true
-			: isCompare
-				? !compareValid || processing
-				: isProtect
-					? !protectValid || processing
-					: isUnlock
-						? !unlockValid || processing
-						: isPdfA
-							? !currentFile || processing
-							: isFlatten
-								? !flattenValid || processing
-								: isForms
-									? !formsValid || processing
-									: isEdit
-										? !editValid || processing
-										: isAnnotate
-											? !annotateValid || processing
-											: isRedact
-												? !redactValid || processing
-												: isSign
-													? !signValid || processing
-													: isCrop
-														? !cropValid || processing
-														: isStamp
-															? !stampValid || processing
-															: officeTool
-																? !currentFile || processing
-																: isMerge
-																	? workspace.files.length < 2 ||
-																		processing ||
-																		!!dragged ||
-																		!!keyboardPicked
-																	: isSplit
-																		? !splitValid || processing
-																		: isPageTool
-																			? !pageToolValid || processing
-																			: isCompress
-																				? workspace.files.length === 0 ||
-																					processing ||
-																					!!dragged ||
-																					!!keyboardPicked
-																				: isPdfToImage
-																					? !pdfToImageValid || processing
-																					: isImageToPdf
-																						? !imagePdfValid ||
-																							processing ||
-																							!!dragged ||
-																							!!keyboardPicked
-																						: true
+			: isOcr
+				? !ocrValid || processing
+				: isCompare
+					? !compareValid || processing
+					: isProtect
+						? !protectValid || processing
+						: isUnlock
+							? !unlockValid || processing
+							: isPdfA
+								? !currentFile || processing
+								: isFlatten
+									? !flattenValid || processing
+									: isForms
+										? !formsValid || processing
+										: isEdit
+											? !editValid || processing
+											: isAnnotate
+												? !annotateValid || processing
+												: isRedact
+													? !redactValid || processing
+													: isSign
+														? !signValid || processing
+														: isCrop
+															? !cropValid || processing
+															: isStamp
+																? !stampValid || processing
+																: officeTool
+																	? !currentFile || processing
+																	: isMerge
+																		? workspace.files.length < 2 ||
+																			processing ||
+																			!!dragged ||
+																			!!keyboardPicked
+																		: isSplit
+																			? !splitValid || processing
+																			: isPageTool
+																				? !pageToolValid || processing
+																				: isCompress
+																					? workspace.files.length === 0 ||
+																						processing ||
+																						!!dragged ||
+																						!!keyboardPicked
+																					: isPdfToImage
+																						? !pdfToImageValid || processing
+																						: isImageToPdf
+																							? !imagePdfValid ||
+																								processing ||
+																								!!dragged ||
+																								!!keyboardPicked
+																							: true
 	);
 	const actionUnavailable = $derived(
 		locked
 			? true
-			: isCompare
-				? !compareValid
-				: isProtect
-					? !protectValid
-					: isUnlock
-						? !unlockValid
-						: isPdfA
-							? !currentFile
-							: isFlatten
-								? !flattenValid
-								: isForms
-									? !formsValid
-									: isEdit
-										? !editValid
-										: isAnnotate
-											? !annotateValid
-											: isRedact
-												? !redactValid
-												: isSign
-													? !signValid
-													: isCrop
-														? !cropValid
-														: isStamp
-															? !stampValid
-															: officeTool
-																? !currentFile
-																: isMerge
-																	? workspace.files.length < 2 || !!dragged || !!keyboardPicked
-																	: isSplit
-																		? !splitValid
-																		: isPageTool
-																			? !pageToolValid
-																			: isCompress
-																				? workspace.files.length === 0 ||
-																					!!dragged ||
-																					!!keyboardPicked
-																				: isPdfToImage
-																					? !pdfToImageValid
-																					: isImageToPdf
-																						? !imagePdfValid || !!dragged || !!keyboardPicked
-																						: true
+			: isOcr
+				? !ocrValid
+				: isCompare
+					? !compareValid
+					: isProtect
+						? !protectValid
+						: isUnlock
+							? !unlockValid
+							: isPdfA
+								? !currentFile
+								: isFlatten
+									? !flattenValid
+									: isForms
+										? !formsValid
+										: isEdit
+											? !editValid
+											: isAnnotate
+												? !annotateValid
+												: isRedact
+													? !redactValid
+													: isSign
+														? !signValid
+														: isCrop
+															? !cropValid
+															: isStamp
+																? !stampValid
+																: officeTool
+																	? !currentFile
+																	: isMerge
+																		? workspace.files.length < 2 || !!dragged || !!keyboardPicked
+																		: isSplit
+																			? !splitValid
+																			: isPageTool
+																				? !pageToolValid
+																				: isCompress
+																					? workspace.files.length === 0 ||
+																						!!dragged ||
+																						!!keyboardPicked
+																					: isPdfToImage
+																						? !pdfToImageValid
+																						: isImageToPdf
+																							? !imagePdfValid || !!dragged || !!keyboardPicked
+																							: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
-		isCompare
-			? `${compareChanged?.name.replace(/\.[^.]+$/, '') || 'document'}-compared`
-			: officeTool
-				? baseName
-				: isProtect
-					? `${baseName}-protected`
-					: isUnlock
-						? `${baseName}-unlocked`
-						: isPdfA
-							? `${baseName}-pdfa`
-							: isFlatten
-								? `${baseName}-flattened`
-								: isForms
-									? `${baseName}-filled`
-									: isEdit
-										? `${baseName}-edited`
-										: isAnnotate
-											? `${baseName}-annotated`
-											: isRedact
-												? `${baseName}-redacted`
-												: isSign
-													? `${baseName}-signed`
-													: isCrop
-														? `${baseName}-cropped`
-														: isPageNumbers
-															? `${baseName}-numbered`
-															: isWatermark
-																? `${baseName}-watermarked`
-																: isMerge
-																	? 'plico-merged'
-																	: isImageToPdf
-																		? 'plico-images'
-																		: isSplit
-																			? `${baseName}-split`
-																			: isOrganize
-																				? `${baseName}-organized`
-																				: isExtract
-																					? `${baseName}-extracted`
-																					: isRemove
-																						? `${baseName}-pages-removed`
-																						: isRotate
-																							? `${baseName}-rotated`
-																							: isCompress
-																								? `${baseName}-compressed`
-																								: `${baseName}-images`
+		isOcr
+			? `${baseName}-ocr`
+			: isCompare
+				? `${compareChanged?.name.replace(/\.[^.]+$/, '') || 'document'}-compared`
+				: officeTool
+					? baseName
+					: isProtect
+						? `${baseName}-protected`
+						: isUnlock
+							? `${baseName}-unlocked`
+							: isPdfA
+								? `${baseName}-pdfa`
+								: isFlatten
+									? `${baseName}-flattened`
+									: isForms
+										? `${baseName}-filled`
+										: isEdit
+											? `${baseName}-edited`
+											: isAnnotate
+												? `${baseName}-annotated`
+												: isRedact
+													? `${baseName}-redacted`
+													: isSign
+														? `${baseName}-signed`
+														: isCrop
+															? `${baseName}-cropped`
+															: isPageNumbers
+																? `${baseName}-numbered`
+																: isWatermark
+																	? `${baseName}-watermarked`
+																	: isMerge
+																		? 'plico-merged'
+																		: isImageToPdf
+																			? 'plico-images'
+																			: isSplit
+																				? `${baseName}-split`
+																				: isOrganize
+																					? `${baseName}-organized`
+																					: isExtract
+																						? `${baseName}-extracted`
+																						: isRemove
+																							? `${baseName}-pages-removed`
+																							: isRotate
+																								? `${baseName}-rotated`
+																								: isCompress
+																									? `${baseName}-compressed`
+																									: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
@@ -1014,7 +1246,11 @@
 		void edit.signature;
 		void markdownSignature;
 		void pdfaPart;
-		untrack(() => job.clear());
+		void ocrSignature;
+		untrack(() => {
+			job.clear();
+			ocrFound = null;
+		});
 	});
 	$effect(() => {
 		const files = workspace.files;
@@ -1059,6 +1295,11 @@
 		formFields = 'reading';
 		formValues = {};
 		formCanvases = {};
+		ocrRead.clear();
+		ocrReading = {};
+		ocrPages = '';
+		ocrFound = null;
+		ocrQuery = '';
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
@@ -1110,6 +1351,7 @@
 		if (watermarkImage) URL.revokeObjectURL(watermarkImage.url);
 		annotate.destroy();
 		edit.destroy();
+		ocrReader.destroy();
 	});
 	async function protect() {
 		if (processing || !protectValid || !currentFile) return;
@@ -1512,7 +1754,16 @@
 </script>
 
 {#snippet stampOverlay(page: PreviewPage)}
-	{#if isForms}
+	{#if isOcr}
+		<OcrOverlay
+			state={ocrState(page.number)}
+			matches={ocrMatches
+				.filter((match) => match.page === page.number && match !== ocrCurrent)
+				.flatMap((match) => match.boxes)}
+			current={ocrCurrent?.page === page.number ? ocrCurrent.boxes : []}
+			{reducedMotion}
+		/>
+	{:else if isForms}
 		{#if typeof formFields !== 'string'}
 			<FormOverlay
 				{page}
@@ -1755,9 +2006,10 @@
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}
 								</div>
-							{:else if (isAnnotate || isForms || isEdit) && currentFile}
+							{:else if (isAnnotate || isForms || isEdit || isOcr) && currentFile}
 								<div class="w-full py-6 lg:pb-0">
 									{#key currentFile}<PageScroller
+											bind:this={scroller}
 											file={currentFile}
 											bind:current={previewPage}
 											overlay={stampOverlay}
@@ -1905,6 +2157,22 @@
 										Incorrect password
 									</p>{/if}
 							</div>{/if}
+					{:else if isOcr}
+						<OcrSettings
+							bind:languages={ocrLanguages}
+							bind:pages={ocrPages}
+							bind:skipText={ocrSkipText}
+							bind:query={ocrQuery}
+							models={ocrModels}
+							{pageCount}
+							pagesInvalid={ocrPagesInvalid}
+							searchable={!!ocrFound}
+							matches={ocrMatches.length}
+							match={ocrMatch}
+							onstep={stepOcrMatch}
+							{reducedMotion}
+							disabled={processing}
+						/>
 					{:else if isCompare}
 						<CompareSettings
 							bind:mode={compareMode}
@@ -2219,89 +2487,93 @@
 							onclick={() =>
 								result
 									? downloadLink?.click()
-									: isCompare
-										? void markChanges()
-										: isProtect
-											? void protect()
-											: isUnlock
-												? void unlock()
-												: isPdfA
-													? void convertPdfA()
-													: isFlatten
-														? void flatten()
-														: isForms
-															? void fillForm()
-															: isEdit
-																? void applyEdits()
-																: isAnnotate
-																	? void addAnnotations()
-																	: isRedact
-																		? void redact()
-																		: isSign
-																			? void sign()
-																			: isCrop
-																				? void crop()
-																				: isPageNumbers
-																					? void addPageNumbers()
-																					: isWatermark
-																						? void addWatermark()
-																						: isSplit
-																							? void split()
-																							: isPageTool
-																								? void organize()
-																								: officeTool
-																									? void convertOffice()
-																									: isCompress
-																										? void compress()
-																										: isPdfToImage
-																											? void convertPdfToImage()
-																											: isImageToPdf
-																												? void convertImagesToPdf()
-																												: void merge()}
+									: isOcr
+										? void readText()
+										: isCompare
+											? void markChanges()
+											: isProtect
+												? void protect()
+												: isUnlock
+													? void unlock()
+													: isPdfA
+														? void convertPdfA()
+														: isFlatten
+															? void flatten()
+															: isForms
+																? void fillForm()
+																: isEdit
+																	? void applyEdits()
+																	: isAnnotate
+																		? void addAnnotations()
+																		: isRedact
+																			? void redact()
+																			: isSign
+																				? void sign()
+																				: isCrop
+																					? void crop()
+																					: isPageNumbers
+																						? void addPageNumbers()
+																						: isWatermark
+																							? void addWatermark()
+																							: isSplit
+																								? void split()
+																								: isPageTool
+																									? void organize()
+																									: officeTool
+																										? void convertOffice()
+																										: isCompress
+																											? void compress()
+																											: isPdfToImage
+																												? void convertPdfToImage()
+																												: isImageToPdf
+																													? void convertImagesToPdf()
+																													: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
-									? isCompare
-										? 'Marking up changes'
-										: isProtect
-											? 'Protecting PDF'
-											: isUnlock
-												? 'Unlocking PDF'
-												: isPdfA
-													? 'Converting to PDF/A'
-													: isFlatten
-														? 'Flattening PDF'
-														: isForms
-															? 'Filling form'
-															: isEdit
-																? 'Editing PDF'
-																: isAnnotate
-																	? 'Annotating PDF'
-																	: isRedact
-																		? 'Redacting PDF'
-																		: isSign
-																			? 'Signing PDF'
-																			: isCrop
-																				? 'Cropping PDF'
-																				: isPageNumbers
-																					? 'Adding page numbers'
-																					: isWatermark
-																						? 'Adding watermark'
-																						: isSplit
-																							? 'Splitting PDF'
-																							: isPageTool
-																								? `${tool.label} in progress`
-																								: officeTool
-																									? officeStage === 'loading'
-																										? 'Loading converter...'
-																										: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																									: isCompress
-																										? 'Compressing PDF'
-																										: isPdfToImage
-																											? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																											: isImageToPdf
-																												? 'Converting images to PDF...'
-																												: 'Merging PDF'
+									? isOcr
+										? ocrStatus
+										: isCompare
+											? 'Marking up changes'
+											: isProtect
+												? 'Protecting PDF'
+												: isUnlock
+													? 'Unlocking PDF'
+													: isPdfA
+														? 'Converting to PDF/A'
+														: isFlatten
+															? 'Flattening PDF'
+															: isForms
+																? 'Filling form'
+																: isEdit
+																	? 'Editing PDF'
+																	: isAnnotate
+																		? 'Annotating PDF'
+																		: isRedact
+																			? 'Redacting PDF'
+																			: isSign
+																				? 'Signing PDF'
+																				: isCrop
+																					? 'Cropping PDF'
+																					: isPageNumbers
+																						? 'Adding page numbers'
+																						: isWatermark
+																							? 'Adding watermark'
+																							: isSplit
+																								? 'Splitting PDF'
+																								: isPageTool
+																									? `${tool.label} in progress`
+																									: officeTool
+																										? officeStage === 'loading'
+																											? 'Loading converter...'
+																											: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																										: isCompress
+																											? 'Compressing PDF'
+																											: isPdfToImage
+																												? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																												: isImageToPdf
+																													? 'Converting images to PDF...'
+																													: 'Merging PDF'
 									: idleLabel}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -2319,47 +2591,49 @@
 									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
 										? '-translate-y-2 opacity-0'
 										: 'translate-y-0 opacity-100'}"
-									>{#if processing}<IconLoader2 class="animate-spin" size={20} />{officeTool
-											? officeStage === 'loading'
-												? 'Loading converter...'
-												: 'Converting...'
-											: isCompare
-												? 'Marking up...'
-												: isProtect
-													? 'Protecting...'
-													: isUnlock
-														? 'Unlocking...'
-														: isPdfA
-															? 'Converting...'
-															: isFlatten
-																? 'Flattening...'
-																: isForms
-																	? 'Filling...'
-																	: isEdit
-																		? 'Editing...'
-																		: isAnnotate
-																			? 'Annotating...'
-																			: isRedact
-																				? 'Redacting...'
-																				: isSign
-																					? 'Signing...'
-																					: isCrop
-																						? 'Cropping...'
-																						: isPageNumbers
-																							? 'Numbering...'
-																							: isWatermark
-																								? 'Watermarking...'
-																								: isSplit
-																									? 'Splitting...'
-																									: isPageTool
-																										? 'Processing...'
-																										: isCompress
-																											? 'Compressing...'
-																											: isPdfToImage
-																												? 'Converting...'
-																												: isImageToPdf
+									>{#if processing}<IconLoader2 class="animate-spin" size={20} />{isOcr
+											? ocrStatus
+											: officeTool
+												? officeStage === 'loading'
+													? 'Loading converter...'
+													: 'Converting...'
+												: isCompare
+													? 'Marking up...'
+													: isProtect
+														? 'Protecting...'
+														: isUnlock
+															? 'Unlocking...'
+															: isPdfA
+																? 'Converting...'
+																: isFlatten
+																	? 'Flattening...'
+																	: isForms
+																		? 'Filling...'
+																		: isEdit
+																			? 'Editing...'
+																			: isAnnotate
+																				? 'Annotating...'
+																				: isRedact
+																					? 'Redacting...'
+																					: isSign
+																						? 'Signing...'
+																						: isCrop
+																							? 'Cropping...'
+																							: isPageNumbers
+																								? 'Numbering...'
+																								: isWatermark
+																									? 'Watermarking...'
+																									: isSplit
+																										? 'Splitting...'
+																										: isPageTool
+																											? 'Processing...'
+																											: isCompress
+																												? 'Compressing...'
+																												: isPdfToImage
 																													? 'Converting...'
-																													: 'Merging...'}{:else}
+																													: isImageToPdf
+																														? 'Converting...'
+																														: 'Merging...'}{:else}
 										{idleLabel}<IconArrowRight size={20} />{/if}</span
 								>
 								<span
@@ -2388,6 +2662,13 @@
 							</div>{/if}
 					</div>
 					{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
+					{#if isOcr && result && ocrNotice}<p
+							role="status"
+							transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+							class="text-xs leading-relaxed text-muted"
+						>
+							{ocrNotice}
+						</p>{/if}
 					{#if isEdit && result && editNotice}<p
 							role="status"
 							transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}

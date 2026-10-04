@@ -447,7 +447,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-one tools exist, the catalogue advertises about forty
+### Thirty-two tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -515,6 +515,19 @@ on the main thread: about 0.4 s for 60,000 words with 300 edits, measured on
 generated pages. Past 2,000 edits in one stretch of unmatched lines, that
 stretch is reported as one change. Removing the original moves the changed
 PDF into the Original side, since sides are positions in the file list.
+
+### What OCR reads, and its limits
+
+OCR PDF writes Tesseract's words as invisible text; the page picture is left
+as it was. Right-to-left scripts are drawn in logical order, so selection in
+a reader can run backwards. Vertical CJK models are not offered. Pages are
+not deskewed or turned upright: a sideways scan reads as noise, and Tesseract's
+orientation detection needs a separate 10 MB model. A page counts as having
+text from 32 glyphs, which an already-OCR'd file meets, so its old layer is
+kept rather than replaced. The tesseract.js language-object bug that the
+IndexedDB workaround avoids should be rechecked on any upgrade past 7.0.0.
+`npm run test:ocr` has no baseline yet; it runs Tesseract in Node and needs a
+lot of memory, so run it with little else open.
 
 ### Error strings are product copy inside the engine
 

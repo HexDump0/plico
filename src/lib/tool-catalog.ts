@@ -72,7 +72,8 @@ const supportedToolIds = new Set([
 	'pdf-to-powerpoint',
 	'pdf-to-excel',
 	'pdf-to-markdown',
-	'compare'
+	'compare',
+	'ocr'
 ]);
 
 export function isToolSupported(id: string): boolean {

@@ -23,6 +23,7 @@ use crate::{
     add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, convert_to_pdfa_bytes,
     crop_pdf_bytes, flatten_pdf_bytes, protect_pdf_bytes, protection_of, standard_fonts_for_pdfa,
 };
+use crate::{OcrPage, OcrWord, add_text_layer_bytes, page_texts as glyph_texts};
 
 fn image_pdf_options() -> ImagePdfOptions {
     ImagePdfOptions {
@@ -5997,4 +5998,160 @@ fn editing_refuses_to_move_an_image_that_is_not_there() {
         additions: &[],
     };
     assert!(crate::edit_pdf_bytes(&input, "", options).is_err());
+}
+
+fn ocr_word(text: &str, left: f32, width: f32, space: bool) -> OcrWord<'_> {
+    OcrWord {
+        text,
+        left,
+        width,
+        baseline: 0.5,
+        size: 0.05,
+        angle: 0.0,
+        space,
+    }
+}
+
+fn ocr_page(words: Vec<OcrWord<'_>>) -> Vec<OcrPage<'_>> {
+    vec![OcrPage { page: 1, words }]
+}
+
+fn tall_page(entries: Dictionary) -> Vec<u8> {
+    let mut page = dictionary! { "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()] };
+    for (key, value) in entries.iter() {
+        page.set(key.clone(), value.clone());
+    }
+    pdf_with_pages(&[("0 0 m", page)], dictionary! {})
+}
+
+#[test]
+fn ocr_text_reads_back_where_it_was_found() {
+    let input = tall_page(dictionary! {});
+    let words = vec![
+        ocr_word("Hello", 0.1, 0.3, true),
+        ocr_word("world", 0.45, 0.25, false),
+    ];
+    let output = add_text_layer_bytes(&input, "", &ocr_page(words)).unwrap();
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    assert_eq!(page.text.concat(), "Hello world");
+    assert!(page.styles.iter().all(|style| style.invisible));
+    let [left, top, _, bottom] = page.boxes[0];
+    assert!((left - 0.1).abs() < 1e-3, "{left}");
+    // The word fills its width: its last letter ends where the word did.
+    assert!((page.boxes[4][2] - 0.4).abs() < 1e-3, "{:?}", page.boxes[4]);
+    assert!(
+        (page.boxes[6][0] - 0.45).abs() < 1e-3,
+        "{:?}",
+        page.boxes[6]
+    );
+    assert!(
+        (page.boxes[10][2] - 0.7).abs() < 1e-3,
+        "{:?}",
+        page.boxes[10]
+    );
+    // Ascenders to descenders, around the baseline.
+    assert!((page.styles[0].baseline - 0.5).abs() < 1e-3);
+    assert!((page.styles[0].size - 20.0).abs() < 0.01);
+    assert!(
+        (top - 0.46).abs() < 1e-3 && (bottom - 0.51).abs() < 1e-3,
+        "{top} {bottom}"
+    );
+    assert!(page_contents(&output)[0].contains("0 0 m"));
+}
+
+#[test]
+fn ocr_text_lands_where_the_reader_sees_it_on_a_turned_page() {
+    let input = tall_page(dictionary! { "Rotate" => 90 });
+    let output = add_text_layer_bytes(
+        &input,
+        "",
+        &ocr_page(vec![ocr_word("Turned", 0.2, 0.5, false)]),
+    )
+    .unwrap();
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    assert_eq!(page.text.concat(), "Turned");
+    assert!(page.styles.iter().all(|style| style.upright));
+    assert!((page.boxes[0][0] - 0.2).abs() < 1e-3, "{:?}", page.boxes[0]);
+    assert!((page.boxes[5][2] - 0.7).abs() < 1e-3, "{:?}", page.boxes[5]);
+    assert!((page.styles[0].baseline - 0.5).abs() < 1e-3);
+}
+
+#[test]
+fn ocr_text_keeps_any_script() {
+    let input = tall_page(dictionary! {});
+    let words = vec![
+        ocr_word("Ελληνικά", 0.1, 0.3, true),
+        ocr_word("漢字", 0.45, 0.1, true),
+        ocr_word("𝄞", 0.6, 0.05, false),
+    ];
+    let output = add_text_layer_bytes(&input, "", &ocr_page(words)).unwrap();
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    assert_eq!(page.text.concat(), "Ελληνικά 漢字 𝄞");
+}
+
+#[test]
+fn ocr_font_is_embedded_and_never_draws_notdef() {
+    let input = tall_page(dictionary! {});
+    let words = vec![
+        ocr_word("abc", 0.1, 0.3, true),
+        ocr_word("cab", 0.5, 0.3, false),
+    ];
+    let output = add_text_layer_bytes(&input, "", &ocr_page(words)).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let descendant = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .find(|dictionary| {
+            dictionary.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"CIDFontType2")
+        })
+        .expect("no CID font");
+    let map = document
+        .get_object(
+            descendant
+                .get(b"CIDToGIDMap")
+                .unwrap()
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap()
+        .as_stream()
+        .unwrap();
+    // a, b, c and the space: four CIDs past .notdef, all on glyph 1.
+    assert_eq!(
+        map.decompressed_content().unwrap(),
+        [0, 0, 0, 1, 0, 1, 0, 1, 0, 1]
+    );
+    let descriptor = document
+        .get_dictionary(
+            descendant
+                .get(b"FontDescriptor")
+                .unwrap()
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(descriptor.get(b"FontFile2").is_ok());
+    // An embedded font is what lets the result become PDF/A.
+    convert_to_pdfa_bytes(&output, "", PdfALevel::A2b, &[]).unwrap();
+}
+
+#[test]
+fn ocr_leaves_other_pages_alone_and_refuses_nothing_to_write() {
+    let page = dictionary! { "MediaBox" => vec![0.into(), 0.into(), 200.into(), 400.into()] };
+    let input = pdf_with_pages(&[("", page.clone()), ("", page)], dictionary! {});
+    let pages = vec![OcrPage {
+        page: 2,
+        words: vec![ocr_word("Second", 0.1, 0.3, false)],
+    }];
+    let output = add_text_layer_bytes(&input, "", &pages).unwrap();
+    let texts = glyph_texts(&output, "").unwrap();
+    assert!(texts[0].text.is_empty());
+    assert_eq!(texts[1].text.concat(), "Second");
+
+    let blank = ocr_page(vec![
+        ocr_word("  ", 0.1, 0.3, false),
+        ocr_word("x", 0.1, 0.0, false),
+    ]);
+    assert!(add_text_layer_bytes(&input, "", &blank).is_err());
 }

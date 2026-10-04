@@ -165,6 +165,24 @@ export type PdfWorkerRequest =
 	  }
 	| {
 			id: number;
+			// The PDF on a page's first request, then nothing while `document`
+			// stays open in the worker.
+			operation: 'ocr-render';
+			files: ArrayBuffer[];
+			passwords: string[];
+			document: number;
+			page: number;
+	  }
+	| { id: number; operation: 'ocr-close'; files: ArrayBuffer[]; document: number }
+	| {
+			id: number;
+			operation: 'ocr';
+			files: ArrayBuffer[];
+			passwords: string[];
+			words: OcrText[];
+	  }
+	| {
+			id: number;
 			operation: 'pdf-to-images';
 			files: ArrayBuffer[];
 			passwords: string[];
@@ -191,6 +209,9 @@ export type PdfWorkerResponse =
 	  }
 	| { id: number; ok: true; value: number }
 	| { id: number; ok: true; glyphs: PageGlyphs[] }
+	// A page as recognition reads it: a grey PGM, `width` by `height` pixels
+	// drawn at `dpi`.
+	| { id: number; ok: true; image: ArrayBuffer; width: number; height: number; dpi: number }
 	| { id: number; ok: false; error: string };
 
 // An empty `userPassword` opens without asking; an empty `ownerPassword` is
@@ -367,3 +388,19 @@ export type EditOptions = {
 /// A page where Edit painted over an area rather than taking out what was
 /// under it, and why.
 export type CoveredPage = { page: number; reason: 'text' | 'image' | 'content' };
+
+/// A recognized word as the engine writes it under the page: `left` and
+/// `width` are fractions of the visible page's width, `baseline` (where it
+/// meets the left edge) and `size` (the line's height, ascenders to
+/// descenders) fractions of its height, `angle` how far the baseline turns
+/// counterclockwise in radians, and `space` whether a word follows on its line.
+export type OcrText = {
+	page: number;
+	text: string;
+	left: number;
+	width: number;
+	baseline: number;
+	size: number;
+	angle: number;
+	space: boolean;
+};

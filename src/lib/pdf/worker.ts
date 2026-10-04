@@ -14,6 +14,7 @@ import init, {
 	pdf_protection,
 	protect_pdf,
 	add_page_numbers,
+	add_text_layer,
 	add_watermark,
 	annotate_pdf,
 	crop_pdf,
@@ -395,6 +396,61 @@ async function redactionPictures(
 	}
 }
 
+// Recognition reads pages at 300 DPI, the resolution Tesseract is tuned for,
+// down to whatever keeps a page within this many pixels.
+const OCR_DPI = 300;
+const OCR_PIXELS = 12_000_000;
+
+// The PDF being read for OCR stays open between its pages.
+let ocrDocument: { document: number; task: ReturnType<typeof openPdf> } | undefined;
+
+async function closeOcr() {
+	const open = ocrDocument;
+	ocrDocument = undefined;
+	if (open) await (await open.task).destroy();
+}
+
+/// A page as the reader sees it, in grey, as a binary PGM: the plainest
+/// image Tesseract reads, with nothing to compress or decode.
+async function ocrImage(request: Extract<PdfWorkerRequest, { operation: 'ocr-render' }>) {
+	if (typeof OffscreenCanvas === 'undefined') {
+		throw new Error('This browser cannot read text from pages.');
+	}
+	if (request.files.length) {
+		await closeOcr();
+		ocrDocument = {
+			document: request.document,
+			task: openPdf(request.files[0], request.passwords[0] ?? '')
+		};
+	}
+	if (ocrDocument?.document !== request.document) throw new Error('The PDF is no longer open.');
+	const pdf = await (await ocrDocument.task).promise;
+	const page = await pdf.getPage(request.page);
+	const size = page.getViewport({ scale: 1 });
+	const scale = Math.min(OCR_DPI / 72, Math.sqrt(OCR_PIXELS / (size.width * size.height)));
+	const viewport = page.getViewport({ scale });
+	const width = Math.max(1, Math.ceil(viewport.width));
+	const height = Math.max(1, Math.ceil(viewport.height));
+	const canvas = new OffscreenCanvas(width, height);
+	const context = canvas.getContext('2d', { willReadFrequently: true });
+	if (!context) throw new Error('This browser cannot read text from pages.');
+	await page.render({
+		canvas: canvas as unknown as HTMLCanvasElement,
+		viewport,
+		background: 'rgb(255,255,255)'
+	}).promise;
+	page.cleanup();
+	const { data } = context.getImageData(0, 0, width, height);
+	canvas.width = canvas.height = 0;
+	const header = new TextEncoder().encode(`P5\n${width} ${height}\n255\n`);
+	const image = new Uint8Array(header.length + width * height);
+	image.set(header);
+	for (let pixel = 0, at = header.length; pixel < data.length; pixel += 4, at++) {
+		image[at] = (data[pixel] * 77 + data[pixel + 1] * 150 + data[pixel + 2] * 29) >> 8;
+	}
+	return { image: image.buffer, width, height, dpi: Math.round(scale * 72) };
+}
+
 const unremovable = ['text', 'image', 'content'] as const;
 
 /// Redacts in place where it can, and draws from a picture each page the
@@ -730,6 +786,35 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 					page.looks.buffer,
 					page.images.buffer
 				])
+			});
+			return;
+		}
+		if (request.operation === 'ocr-render') {
+			const { image, width, height, dpi } = await ocrImage(request);
+			const response: PdfWorkerResponse = { id, ok: true, image, width, height, dpi };
+			self.postMessage(response, { transfer: [image] });
+			return;
+		}
+		if (request.operation === 'ocr-close') {
+			if (ocrDocument?.document === request.document) await closeOcr();
+			const response: PdfWorkerResponse = { id, ok: true, value: 0 };
+			self.postMessage(response);
+			return;
+		}
+		if (request.operation === 'ocr') {
+			const { words } = request;
+			postOutput(id, {
+				format: 'pdf',
+				bytes: add_text_layer(
+					new Uint8Array(request.files[0]),
+					request.passwords[0] ?? '',
+					Uint32Array.from(words, (word) => word.page),
+					words.map((word) => word.text),
+					Float32Array.from(
+						words.flatMap((word) => [word.left, word.width, word.baseline, word.size, word.angle])
+					),
+					Uint8Array.from(words, (word) => Number(word.space))
+				)
 			});
 			return;
 		}

@@ -206,6 +206,19 @@
 		scroller.scrollLeft += box.left + held.fx * box.width - held.x;
 	}
 
+	/// Scrolls so that `at`, a share of the page's height from its top, sits a
+	/// little above the middle of the screen.
+	export function reveal(number: number, at = 0) {
+		const page = pages[number - 1];
+		if (!page) return;
+		const box = page.getBoundingClientRect();
+		const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		window.scrollBy({
+			top: box.top + at * box.height - window.innerHeight * 0.4,
+			behavior: still ? 'auto' : 'smooth'
+		});
+	}
+
 	function step(direction: number) {
 		const share = scale / ACTUAL;
 		const level =

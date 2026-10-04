@@ -5,6 +5,7 @@ import type {
 	CropOptions,
 	EditOptions,
 	FillFormOptions,
+	OcrText,
 	ImagePdfOptions,
 	OrganizePage,
 	PageGlyphs,
@@ -298,6 +299,52 @@ export async function processEdit(
 		format: 'pdf' as const,
 		covered: response.covered ?? []
 	};
+}
+
+/// A page drawn for recognition. `file` opens `document` in the worker and is
+/// left out for the pages after, which read the copy already open.
+export async function ocrPageImage(
+	file: File | null,
+	password: string,
+	document: number,
+	page: number,
+	signal?: AbortSignal
+) {
+	const files = file ? [await file.arrayBuffer()] : [];
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'ocr-render', files, passwords: [password], document, page },
+		signal
+	);
+	if (!('image' in response)) throw new Error('The page could not be drawn.');
+	return {
+		image: new Uint8Array(response.image),
+		width: response.width,
+		height: response.height,
+		dpi: response.dpi
+	};
+}
+
+/// Lets the worker drop the PDF it kept open for recognition.
+export function closeOcrDocument(document: number) {
+	if (!worker) return;
+	void send({ id: ++requestId, operation: 'ocr-close', files: [], document }).catch(() => {});
+}
+
+/// The PDF with `words` written under its pages as invisible text.
+export async function processOcr(
+	file: File,
+	password: string,
+	words: OcrText[],
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffer = await file.arrayBuffer();
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	return submit(
+		{ id: ++requestId, operation: 'ocr', files: [buffer], passwords: [password], words },
+		signal
+	);
 }
 
 /// Where every glyph sits and what it reads, page by page.

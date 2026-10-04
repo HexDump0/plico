@@ -23,6 +23,8 @@
 		"test:raster:redact": "node scripts/raster-redact.mjs",
 		"test:forms": "node scripts/forms-check.mjs",
 		"test:edit": "node scripts/edit-check.mjs",
+		"test:ocr": "node scripts/ocr-check.mjs",
+		"pretest:ocr": "npm run build:wasm",
 		"pretest:edit": "npm run build:wasm",
 		"pretest:forms": "npm run build:wasm",
 		"pretest:raster:redact": "npm run build:wasm",
@@ -65,6 +67,9 @@
 		"fflate": "^0.8.3",
 		"gsap": "^3.15.0",
 		"pdf-oxide-wasm": "0.3.77",
-		"pdfjs-dist": "^6.3.289"
+		"pdfjs-dist": "^6.3.289",
+		"tesseract.js": "7.0.0",
+		"tesseract.js-core": "7.0.0",
+		"wasm-feature-detect": "^1.9.0"
 	}
 }

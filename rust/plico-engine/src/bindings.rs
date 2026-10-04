@@ -3,15 +3,15 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     Annotation, AnnotationKind, CompressOptions, EditOptions, Erasure, FieldFill, FieldValue,
-    FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OrganizeItem, PageCrop,
-    PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions, Protection,
-    RedactOptions, Redacted, Redaction, Shape, SignaturePlacement, SplitMode, StandardFont,
-    TextRemoval, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
-    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, annotate_pdf_bytes,
-    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, edit_pdf_bytes,
-    fill_form_bytes, flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options,
-    organize_pdf_items, page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes,
-    split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
+    FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord, OrganizeItem,
+    PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions,
+    Protection, RedactOptions, Redacted, Redaction, Shape, SignaturePlacement, SplitMode,
+    StandardFont, TextRemoval, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_signature_bytes, add_text_layer_bytes, add_watermark_bytes,
+    annotate_pdf_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
+    edit_pdf_bytes, fill_form_bytes, flatten_pdf_bytes, images_to_pdf_bytes,
+    merge_pdf_bytes_with_options, organize_pdf_items, page_texts, protect_pdf_bytes, protection_of,
+    redact_pdf_bytes, split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -465,6 +465,50 @@ pub fn sign_pdf(
         .collect::<Vec<_>>();
     add_signature_bytes(input, password, image, &placements)
         .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// Writes recognized words into their pages as invisible text. One entry per
+/// word: `pages` is its page from 1, `texts` what it says, `boxes` five
+/// numbers each (left, width, baseline, size and angle, as `OcrWord` measures
+/// them), and `spaces` whether a space follows it on its line.
+pub fn add_text_layer(
+    input: &[u8],
+    password: &str,
+    pages: &[u32],
+    texts: Vec<String>,
+    boxes: &[f32],
+    spaces: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    let (boxes, remainder) = boxes.as_chunks::<5>();
+    if !remainder.is_empty()
+        || boxes.len() != pages.len()
+        || texts.len() != pages.len()
+        || spaces.len() != pages.len()
+    {
+        return Err(JsValue::from_str("The recognized text is incomplete."));
+    }
+    let mut by_page = Vec::<OcrPage<'_>>::new();
+    for (index, &page) in pages.iter().enumerate() {
+        let [left, width, baseline, size, angle] = boxes[index];
+        let word = OcrWord {
+            text: &texts[index],
+            left,
+            width,
+            baseline,
+            size,
+            angle,
+            space: spaces[index] != 0,
+        };
+        match by_page.last_mut() {
+            Some(last) if last.page == page => last.words.push(word),
+            _ => by_page.push(OcrPage {
+                page,
+                words: vec![word],
+            }),
+        }
+    }
+    add_text_layer_bytes(input, password, &by_page).map_err(|error| JsValue::from_str(&error))
 }
 
 /// Returns the flattened PDF, then how many annotations in scope were left as

@@ -22,6 +22,8 @@ rust/plico-engine/src/flatten.rs                            annotation and form 
 rust/plico-engine/src/annotate.rs                           annotations with stored appearances, or drawn into pages
 rust/plico-engine/src/forms.rs                              form field values and the appearances that show them
 rust/plico-engine/src/edit.rs                               replacing a page's text, erasing areas, drawing additions in
+rust/plico-engine/src/ocr.rs                                recognized words written under a page as invisible text
+rust/plico-engine/assets/glyphless.ttf                      the empty font OCR text is written in
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
 rust/plico-engine/src/redact/content.rs                     content stream rewriting that removes what lies under a box
@@ -56,6 +58,8 @@ src/lib/pdf/annotate-editor.svelte.ts                       Annotate's marks, se
 src/lib/pdf/form-fields.ts                                  form fields read with pdf.js, and the fills sent for them
 src/lib/pdf/edit-text.ts                                    lines Edit can replace, their look, and colours sampled from the page
 src/lib/pdf/compare-text.ts                                 Compare's word diff, the changes it finds, and their markup
+src/lib/pdf/ocr.svelte.ts                                   OCR language models, Tesseract workers, and reading pages
+scripts/ocr-check.mjs                                       Tesseract and poppler check of OCR on scans made from the corpus
 src/lib/pdf/opened-pdf.svelte.ts                            a PDF opened with pdf.js and its page sizes, for Compare's two views
 testing/                                                    local corpus, gitignored
 ```
@@ -81,6 +85,7 @@ npm run test:raster:flatten  # needs a corpus, renders flattened output
 npm run test:raster:redact   # needs a corpus and poppler, checks redacted output
 npm run test:forms    # needs a corpus and poppler, fills every corpus form
 npm run test:edit     # needs a corpus and poppler, replaces a line on every page
+npm run test:ocr      # needs a corpus and poppler, slow and memory-heavy, reads scans
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
