@@ -10,8 +10,9 @@
 		notePolygon,
 		textLines
 	} from '$lib/pdf/annotate';
+	import type { Drawn } from '$lib/pdf/annotate';
 	import type { PreviewPage, StampImage } from '$lib/pdf/stamp-layout';
-	import type { AnnotationMark, CropArea } from '$lib/pdf/types';
+	import type { CropArea } from '$lib/pdf/types';
 
 	let {
 		page,
@@ -20,7 +21,7 @@
 		hideText = false
 	}: {
 		page: PreviewPage;
-		mark: AnnotationMark & { color: number; opacity: number };
+		mark: Drawn & { color: number; opacity: number };
 		/// The picture an image annotation draws.
 		image?: StampImage;
 		/// Leaves a text box's text out while it is typed in place.
@@ -165,6 +166,21 @@ annotation, and highlights multiply, as in the output. -->
 				<line {x1} {y1} {x2} {y2} stroke="#333333" stroke-width="1" />
 			{/each}
 		</g>
+	{:else if mark.kind === 'picture'}
+		{#if !mark.deleted}
+			{@const [left, top, right, bottom] = box(mark.area)}
+			<image
+				href={mark.snapshot}
+				x={left}
+				y={top}
+				width={right - left}
+				height={bottom - top}
+				preserveAspectRatio="none"
+			/>
+		{/if}
+	{:else if mark.kind === 'erase'}
+		{@const [left, top, right, bottom] = box(mark.area)}
+		<rect x={left} y={top} width={right - left} height={bottom - top} fill={color} />
 	{:else if mark.kind === 'image' && image}
 		{@const [left, top, right, bottom] = box(extent(mark, page, image.aspect))}
 		<image

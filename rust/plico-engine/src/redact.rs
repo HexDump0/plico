@@ -24,16 +24,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
 
-use content::{Context, NeedsImage, open_states, own_subdictionary, rewrite};
+use content::{Context, NeedsImage, Taken, Taking, open_states, own_subdictionary, rewrite};
 use decode::decode;
-use geometry::{IDENTITY, Rect};
+use geometry::{IDENTITY, Rect, multiply};
 use lexer::format_number;
 
 use crate::compression::strip_metadata;
 use crate::documents::{MAX_PAGE_TREE_DEPTH, load_document};
 use crate::flatten::{self, prune_fields, remove_orphaned_popups};
 use crate::images::{image_matrix, prepare_image};
-use crate::stamps::{Frame, Stamper, finish, page_frame, rectangle, resolve, selected_pages};
+use crate::stamps::{
+    FontFamily, Frame, Stamper, finish, page_frame, rectangle, resolve, selected_pages,
+};
 
 pub struct Redaction {
     /// From 1.
@@ -89,6 +91,30 @@ pub struct PageText {
     /// way as [`Redaction::area`].
     pub boxes: Vec<[f32; 4]>,
     pub text: Vec<String>,
+    pub styles: Vec<GlyphStyle>,
+    /// Where each image is drawn, as boxes like `boxes`, for picking and
+    /// moving them. Ones mostly off the page, too small to pick, or filling
+    /// most of it, as a scan or a background does, are left out.
+    pub images: Vec<[f32; 4]>,
+}
+
+/// How a glyph is drawn, for replacing it with text that looks like it.
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphStyle {
+    /// The font size in points as the page is shown.
+    pub size: f32,
+    /// The baseline as a fraction of the visible page's height from its top.
+    pub baseline: f32,
+    /// Runs left to right along the visible page, unslanted.
+    pub upright: bool,
+    /// Red, green and blue, each 0 to 1, when the engine can tell.
+    pub color: Option<[f32; 3]>,
+    /// The nearest standard font.
+    pub family: FontFamily,
+    pub bold: bool,
+    pub italic: bool,
+    /// Drawn so it paints nothing, as text laid over a scan for searching is.
+    pub invisible: bool,
 }
 
 pub fn redact_pdf_bytes(
@@ -215,6 +241,8 @@ pub fn page_texts(input: &[u8], password: &str) -> Result<Vec<PageText>, String>
         let mut found = PageText {
             boxes: Vec::new(),
             text: Vec::new(),
+            styles: Vec::new(),
+            images: Vec::new(),
         };
         let frame = page_frame(&document, page_id)?;
         let frame_matrix = frame.matrix.map(f64::from);
@@ -249,8 +277,46 @@ pub fn page_texts(input: &[u8], password: &str) -> Result<Vec<PageText>, String>
             if area[2] <= 0.0 || area[0] >= 1.0 || area[3] <= 0.0 || area[1] >= 1.0 {
                 continue;
             }
+            let origin = geometry::apply(to_frame, glyph.origin);
+            let top = geometry::apply(
+                to_frame,
+                (glyph.origin.0 + glyph.up.0, glyph.origin.1 + glyph.up.1),
+            );
+            let up = (top.0 - origin.0, top.1 - origin.1);
+            let size = up.0.hypot(up.1);
             found.boxes.push(area.map(|value| value as f32));
             found.text.push(glyph.text);
+            found.styles.push(GlyphStyle {
+                size: size as f32,
+                baseline: (1.0 - origin.1 / height) as f32,
+                // Within about a degree of straight up.
+                upright: up.1 > 0.0 && up.0.abs() <= up.1 * 0.02,
+                color: glyph.color,
+                family: glyph.look.family,
+                bold: glyph.look.bold,
+                italic: glyph.look.italic,
+                invisible: glyph.invisible,
+            });
+        }
+        for corners in &context.pictures {
+            let Some(shown) = Rect::around(*corners).and_then(|area| area.transformed(to_frame))
+            else {
+                continue;
+            };
+            let area = [
+                shown.x0 / width,
+                1.0 - shown.y1 / height,
+                shown.x1 / width,
+                1.0 - shown.y0 / height,
+            ];
+            let on_page =
+                area[0] >= -0.002 && area[1] >= -0.002 && area[2] <= 1.002 && area[3] <= 1.002;
+            let (across, down) = (area[2] - area[0], area[3] - area[1]);
+            let pickable = across * width >= 4.0 && down * height >= 4.0;
+            let fills = across > 0.85 && down > 0.85;
+            if on_page && pickable && !fills {
+                found.images.push(area.map(|value| value as f32));
+            }
         }
         texts.push(found);
     }
@@ -383,13 +449,35 @@ fn redact_page(
         content = combined;
     }
     let mut context = Context::new(boxes, fill);
-    let rewritten = rewrite(document, &mut context, &content, resources, IDENTITY, 0)?;
+    rewrite_page(
+        document,
+        page_id,
+        &mut context,
+        &content,
+        resources,
+        Some(fill),
+    )
+}
+
+/// Writes the page's content back without what `context` takes out, then
+/// paints its boxes in `paint` when given.
+fn rewrite_page(
+    document: &mut Document,
+    page_id: ObjectId,
+    context: &mut Context<'_>,
+    content: &[u8],
+    resources: Dictionary,
+    paint: Option<[f64; 3]>,
+) -> Result<BTreeSet<i64>, NeedsImage> {
+    let rewritten = rewrite(document, context, content, resources, IDENTITY, 0)?;
     // Wrapped so the boxes are drawn in the page's own space whatever the
     // content left behind, including states it saved and never restored.
     let mut stream = b"q\n".to_vec();
     stream.extend_from_slice(&rewritten.content);
     stream.extend(b"Q\n".repeat(rewritten.open + 1));
-    stream.extend(fill_boxes(boxes, fill));
+    if let Some(fill) = paint {
+        stream.extend(fill_boxes(context.boxes, fill));
+    }
     let contents = document.add_object(Stream::new(dictionary! {}, stream));
     let page = document
         .get_dictionary_mut(page_id)
@@ -397,6 +485,149 @@ fn redact_page(
     page.set("Contents", contents);
     page.set("Resources", rewritten.resources);
     Ok(rewritten.touched)
+}
+
+/// Takes what lies under `areas`, fractions of the visible page as in
+/// [`Redaction::area`], out of one page's content: only text with
+/// `text_only`, otherwise everything, with images under them painted in
+/// `fill` and the areas painted over. Annotations are left alone. Returns the
+/// marked content whose content changed, or why the page cannot be changed
+/// in place; then it is left as it was.
+pub(crate) fn remove_on_page(
+    document: &mut Document,
+    stamper: &mut Stamper,
+    page_id: ObjectId,
+    areas: &[[f32; 4]],
+    text_only: bool,
+    fill: [f64; 3],
+) -> Result<BTreeSet<i64>, Unremovable> {
+    let frame = page_frame(document, page_id).map_err(|_| Unremovable::Content)?;
+    let boxes = areas
+        .iter()
+        .filter_map(|area| page_area(&frame, *area))
+        .collect::<Vec<_>>();
+    if boxes.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let content = page_content(document, page_id).map_err(|NeedsImage(reason)| reason)?;
+    let resources = stamper.own_resources(document, page_id);
+    let mut context = Context::new(&boxes, fill);
+    context.text_only = text_only;
+    let paint = (!text_only).then_some(fill);
+    rewrite_page(document, page_id, &mut context, &content, resources, paint)
+        .map_err(|NeedsImage(reason)| reason)
+}
+
+/// An image drawing taken out of a page by [`take_images`], to draw again.
+pub(crate) struct TakenImage(Taken);
+
+/// Takes the image drawings whose bounds are `areas`, as
+/// [`PageText::images`] reports them, out of one page's content, leaving
+/// everything else. Each comes back to be drawn elsewhere with
+/// [`redraw_image`], or `None` when no drawing there was found. Returns the
+/// marked content that changed too, or why the page cannot be changed.
+pub(crate) fn take_images(
+    document: &mut Document,
+    stamper: &mut Stamper,
+    page_id: ObjectId,
+    areas: &[[f32; 4]],
+) -> Result<(Vec<Option<TakenImage>>, BTreeSet<i64>), Unremovable> {
+    let frame = page_frame(document, page_id).map_err(|_| Unremovable::Content)?;
+    let content = page_content(document, page_id).map_err(|NeedsImage(reason)| reason)?;
+    let resources = stamper.own_resources(document, page_id);
+    let mut context = Context::new(&[], [1.0; 3]);
+    context.text_only = true;
+    context.take = areas
+        .iter()
+        .map(|area| Taking {
+            // A box that cannot be placed matches nothing.
+            bounds: page_area(&frame, *area).unwrap_or(Rect {
+                x0: f64::NAN,
+                y0: f64::NAN,
+                x1: f64::NAN,
+                y1: f64::NAN,
+            }),
+            taken: None,
+        })
+        .collect();
+    let touched = rewrite_page(document, page_id, &mut context, &content, resources, None)
+        .map_err(|NeedsImage(reason)| reason)?;
+    let taken = context
+        .take
+        .into_iter()
+        .map(|slot| slot.taken.map(TakenImage))
+        .collect();
+    Ok((taken, touched))
+}
+
+/// Draws a taken image again over the page, its bounds moved and scaled to
+/// `area`, fractions of the visible page; any turn or slant it had stays.
+pub(crate) fn redraw_image(
+    document: &mut Document,
+    stamper: &mut Stamper,
+    page_id: ObjectId,
+    image: TakenImage,
+    area: [f32; 4],
+) -> Result<(), String> {
+    let TakenImage(taken) = image;
+    let frame = page_frame(document, page_id)?;
+    let to = page_area(&frame, area).ok_or("Place images inside the page.")?;
+    let from = Rect::around(
+        [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|corner| geometry::apply(taken.ctm, corner)),
+    )
+    .filter(|from| from.x1 > from.x0 && from.y1 > from.y0)
+    .ok_or("This image cannot be moved.")?;
+    let scale_x = (to.x1 - to.x0) / (from.x1 - from.x0);
+    let scale_y = (to.y1 - to.y0) / (from.y1 - from.y0);
+    let moved = [
+        scale_x,
+        0.0,
+        0.0,
+        scale_y,
+        to.x0 - from.x0 * scale_x,
+        to.y0 - from.y0 * scale_y,
+    ];
+    let matrix = multiply(taken.ctm, moved).map(format_number).join(" ");
+    let mut stream = format!("q\n{matrix} cm\n").into_bytes();
+    stream.extend_from_slice(&taken.draw);
+    stream.extend_from_slice(b"\nQ\n");
+    let bbox = frame.media_box.map(Object::Real).to_vec();
+    let form = document.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Form",
+            "BBox" => bbox,
+            "Resources" => taken.resources,
+        },
+        stream,
+    ));
+    stamper.place(document, page_id, form, false)
+}
+
+/// Paints `areas` over the page in `color` without taking anything out:
+/// the fallback when [`remove_on_page`] cannot change a page in place.
+pub(crate) fn cover_on_page(
+    document: &mut Document,
+    stamper: &mut Stamper,
+    page_id: ObjectId,
+    areas: &[[f32; 4]],
+    color: [f64; 3],
+) -> Result<(), String> {
+    let frame = page_frame(document, page_id)?;
+    let boxes = areas
+        .iter()
+        .filter_map(|area| page_area(&frame, *area))
+        .collect::<Vec<_>>();
+    if boxes.is_empty() {
+        return Ok(());
+    }
+    let bbox = frame.media_box.map(Object::Real).to_vec();
+    let form = document.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => bbox },
+        fill_boxes(&boxes, color),
+    ));
+    stamper.place(document, page_id, form, false)
 }
 
 fn fill_boxes(boxes: &[Rect], [red, green, blue]: [f64; 3]) -> Vec<u8> {
@@ -612,7 +843,7 @@ fn remove_annotations(
 /// Removes /ActualText, /Alt and /E from structure elements around content
 /// that changed, and every element on a page drawn from a picture: each can
 /// spell out what was removed.
-fn strip_descriptions(
+pub(crate) fn strip_descriptions(
     document: &mut Document,
     catalog_id: ObjectId,
     pages: &[(ObjectId, Option<BTreeSet<i64>>)],

@@ -17,6 +17,7 @@ import init, {
 	add_watermark,
 	annotate_pdf,
 	crop_pdf,
+	edit_pdf,
 	fill_form,
 	flatten_pdf,
 	sign_pdf,
@@ -26,7 +27,10 @@ import init, {
 import { contentBounds, padArea } from './crop-area';
 import type {
 	AnnotateOptions,
+	CoveredPage,
 	CropOptions,
+	EditOptions,
+	PageAnnotation,
 	PageGlyphs,
 	PdfImageOptions,
 	PdfOutput,
@@ -59,9 +63,9 @@ const annotationKind = {
 
 const NO_FILL = 0xffffffff;
 
-/// Packs annotations into the flat arrays `annotate_pdf` takes.
-function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptions) {
-	const { annotations } = options;
+/// Annotations as the flat arrays `annotate_pdf` and `edit_pdf` take, with
+/// `files[1 + image]` holding each image.
+function packAnnotations(files: ArrayBuffer[], annotations: PageAnnotation[]) {
 	const points = annotations.map((annotation): number[] => {
 		switch (annotation.kind) {
 			case 'ink':
@@ -93,31 +97,85 @@ function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptio
 		imageBytes.set(image, offset);
 		offset += image.length;
 	}
+	return {
+		kinds: Uint8Array.from(annotations, (annotation) => annotationKind[annotation.kind]),
+		pages: Uint32Array.from(annotations, (annotation) => annotation.page),
+		colors: Uint32Array.from(annotations, (annotation) => annotation.color),
+		opacities: Float32Array.from(annotations, (annotation) => annotation.opacity),
+		sizes: Float32Array.from(annotations, (annotation) =>
+			annotation.kind === 'text' ? annotation.size : 'width' in annotation ? annotation.width : 0
+		),
+		fills: Uint32Array.from(annotations, (annotation) =>
+			'fill' in annotation && annotation.fill !== null ? annotation.fill : NO_FILL
+		),
+		fonts: Uint8Array.from(annotations, (annotation) =>
+			annotation.kind === 'text' ? fontIndex[annotation.family] * 2 + Number(annotation.bold) : 0
+		),
+		lengths: Uint32Array.from(points, (values) => values.length),
+		points: Float32Array.from(points.flat()),
+		texts: annotations.map((annotation) => (annotation.kind === 'text' ? annotation.text : '')),
+		imageBytes,
+		imageLengths: Uint32Array.from(images, (image) => image.length)
+	};
+}
+
+function annotate(files: ArrayBuffer[], password: string, options: AnnotateOptions) {
+	const packed = packAnnotations(files, options.annotations);
 	return annotate_pdf(
 		new Uint8Array(files[0]),
 		password,
-		Uint8Array.from(annotations, (annotation) => annotationKind[annotation.kind]),
-		Uint32Array.from(annotations, (annotation) => annotation.page),
-		Uint32Array.from(annotations, (annotation) => annotation.color),
-		Float32Array.from(annotations, (annotation) => annotation.opacity),
-		Float32Array.from(annotations, (annotation) =>
-			annotation.kind === 'text' ? annotation.size : 'width' in annotation ? annotation.width : 0
-		),
-		Uint32Array.from(annotations, (annotation) =>
-			'fill' in annotation && annotation.fill !== null ? annotation.fill : NO_FILL
-		),
-		Uint8Array.from(annotations, (annotation) =>
-			annotation.kind === 'text' ? fontIndex[annotation.family] * 2 + Number(annotation.bold) : 0
-		),
-		Uint32Array.from(points, (values) => values.length),
-		Float32Array.from(points.flat()),
-		annotations.map((annotation) => (annotation.kind === 'text' ? annotation.text : '')),
-		annotations.map((annotation) => annotation.comment),
-		imageBytes,
-		Uint32Array.from(images, (image) => image.length),
+		packed.kinds,
+		packed.pages,
+		packed.colors,
+		packed.opacities,
+		packed.sizes,
+		packed.fills,
+		packed.fonts,
+		packed.lengths,
+		packed.points,
+		packed.texts,
+		options.annotations.map((annotation) => annotation.comment),
+		packed.imageBytes,
+		packed.imageLengths,
 		Uint32Array.from(options.remove),
 		options.flatten
 	);
+}
+
+function edit(files: ArrayBuffer[], password: string, options: EditOptions) {
+	const packed = packAnnotations(files, options.additions);
+	const [bytes, pages, reasons] = edit_pdf(
+		new Uint8Array(files[0]),
+		password,
+		Uint32Array.from(options.images, (image) => image.page),
+		Float32Array.from(options.images.flatMap((image) => image.from)),
+		Float32Array.from(options.images.flatMap((image) => image.to ?? [0, 0, 0, 0])),
+		Uint8Array.from(options.images, (image) => Number(image.to !== null)),
+		Uint32Array.from(options.replace, (removal) => removal.page),
+		Float32Array.from(options.replace.flatMap((removal) => removal.area)),
+		Float32Array.from(options.replace.flatMap((removal) => removal.shown)),
+		Uint32Array.from(options.replace, (removal) => removal.cover),
+		Uint32Array.from(options.erase, (erased) => erased.page),
+		Float32Array.from(options.erase.flatMap((erased) => erased.area)),
+		Uint32Array.from(options.erase, (erased) => erased.fill),
+		packed.kinds,
+		packed.pages,
+		packed.colors,
+		packed.opacities,
+		packed.sizes,
+		packed.fills,
+		packed.fonts,
+		packed.lengths,
+		packed.points,
+		packed.texts,
+		packed.imageBytes,
+		packed.imageLengths
+	) as [Uint8Array, Uint32Array, Uint8Array];
+	const covered: CoveredPage[] = Array.from(pages, (page, index) => ({
+		page,
+		reason: unremovable[reasons[index]] ?? 'content'
+	}));
+	return { bytes, covered };
 }
 
 function packageOutputs(
@@ -606,6 +664,13 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			});
 			return;
 		}
+		if (request.operation === 'edit') {
+			const { bytes, covered } = edit(request.files, request.passwords[0] ?? '', request.options);
+			const output = bytes.slice().buffer;
+			const response: PdfWorkerResponse = { id, ok: true, bytes: output, format: 'pdf', covered };
+			self.postMessage(response, { transfer: [output] });
+			return;
+		}
 		if (request.operation === 'sign') {
 			const { options } = request;
 			postOutput(id, {
@@ -635,11 +700,36 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 			const pages = redaction_text(
 				new Uint8Array(request.files[0]),
 				request.passwords[0] ?? ''
-			) as [Float32Array, string, Uint32Array][];
-			const glyphs: PageGlyphs[] = pages.map(([boxes, text, ends]) => ({ boxes, text, ends }));
+			) as [
+				Float32Array,
+				string,
+				Uint32Array,
+				Float32Array,
+				Uint32Array,
+				Uint8Array,
+				Float32Array
+			][];
+			const glyphs: PageGlyphs[] = pages.map(
+				([boxes, text, ends, metrics, colors, looks, images]) => ({
+					boxes,
+					text,
+					ends,
+					metrics,
+					colors,
+					looks,
+					images
+				})
+			);
 			const response: PdfWorkerResponse = { id, ok: true, glyphs };
 			self.postMessage(response, {
-				transfer: glyphs.flatMap((page) => [page.boxes.buffer, page.ends.buffer])
+				transfer: glyphs.flatMap((page) => [
+					page.boxes.buffer,
+					page.ends.buffer,
+					page.metrics.buffer,
+					page.colors.buffer,
+					page.looks.buffer,
+					page.images.buffer
+				])
 			});
 			return;
 		}

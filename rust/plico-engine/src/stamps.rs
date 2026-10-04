@@ -32,6 +32,36 @@ pub enum FontFamily {
     Courier,
 }
 
+/// The standard font nearest a font, by its name: Arial and most sans faces
+/// become Helvetica, Times New Roman and other serifs Times, monospaced faces
+/// Courier. Acrobat's own form resource names count too.
+pub(crate) fn standard_family(name: &[u8]) -> (FontFamily, bool) {
+    let name = String::from_utf8_lossy(name).to_lowercase();
+    // A subset's name starts with six capitals and a plus.
+    let name = match name.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 => rest,
+        _ => name.as_str(),
+    };
+    let has = |part: &str| name.contains(part);
+    let family = if has("cour") || has("mono") || name == "cobo" {
+        FontFamily::Courier
+    } else if has("times")
+        || name == "tiro"
+        || name == "tibo"
+        || (has("serif") && !has("sans"))
+        || ["roman", "georgia", "garamond", "minion", "cambria", "book"]
+            .iter()
+            .any(|part| has(part))
+    {
+        FontFamily::Times
+    } else {
+        FontFamily::Helvetica
+    };
+    let bold =
+        has("bold") || has("black") || has("heavy") || matches!(name, "hebo" | "tibo" | "cobo");
+    (family, bold)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TextStyle {
     pub family: FontFamily,

@@ -22,6 +22,8 @@
 		"pretest:raster:flatten": "npm run build:wasm",
 		"test:raster:redact": "node scripts/raster-redact.mjs",
 		"test:forms": "node scripts/forms-check.mjs",
+		"test:edit": "node scripts/edit-check.mjs",
+		"pretest:edit": "npm run build:wasm",
 		"pretest:forms": "npm run build:wasm",
 		"pretest:raster:redact": "npm run build:wasm",
 		"preview": "vite preview",

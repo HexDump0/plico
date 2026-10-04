@@ -7,6 +7,9 @@
 		IconArrowNarrowRight,
 		IconCheck,
 		IconCircle,
+		IconColorPicker,
+		IconCursorText,
+		IconEraser,
 		IconHighlight,
 		IconLine,
 		IconMessage,
@@ -15,6 +18,7 @@
 		IconPhotoPlus,
 		IconPointer,
 		IconReplace,
+		IconRestore,
 		IconShape,
 		IconSquare,
 		IconStrikethrough,
@@ -24,7 +28,7 @@
 		IconWaveSine,
 		IconX
 	} from '@tabler/icons-svelte-runes';
-	import { groupOf, scaled, translate, type AnnotateTool } from '$lib/pdf/annotate';
+	import { groupOf, hexColor, scaled, translate, type AnnotateTool } from '$lib/pdf/annotate';
 	import type { AnnotateEditor } from '$lib/pdf/annotate-editor.svelte';
 	import { formatSize } from '$lib/workspace.svelte';
 	import StampTextSettings from './StampTextSettings.svelte';
@@ -44,7 +48,7 @@
 	} = $props();
 	const id = $props.id();
 
-	const tools = [
+	const annotateTools = [
 		{ id: 'select', label: 'Select', icon: IconPointer },
 		{ id: 'markup', label: 'Mark up text', icon: IconHighlight },
 		{ id: 'ink', label: 'Draw', icon: IconPencil },
@@ -53,6 +57,16 @@
 		{ id: 'note', label: 'Note', icon: IconMessage },
 		{ id: 'image', label: 'Image', icon: IconPhoto }
 	] as const;
+	// Text both edits what the page says and adds to it.
+	const editTools = [
+		{ id: 'select', label: 'Select', icon: IconPointer },
+		{ id: 'text', label: 'Text', icon: IconCursorText },
+		{ id: 'image', label: 'Image', icon: IconPhoto },
+		{ id: 'shape', label: 'Shapes', icon: IconShape },
+		{ id: 'ink', label: 'Draw', icon: IconPencil },
+		{ id: 'erase', label: 'Erase', icon: IconEraser }
+	] as const;
+	const tools = $derived(editor.mode === 'edit' ? editTools : annotateTools);
 	const markups = [
 		{ id: 'highlight', label: 'Highlight', icon: IconHighlight },
 		{ id: 'underline', label: 'Underline', icon: IconUnderline },
@@ -142,7 +156,8 @@
 	}
 
 	// Ctrl+Z undoes; with a mark selected, arrows move it two points (twenty
-	// with Shift), plus and minus resize it, Delete removes it.
+	// with Shift), plus and minus resize it, Delete removes it, or deletes
+	// the text of a line the page had.
 	function key(event: KeyboardEvent) {
 		if (disabled) return;
 		if ((event.target as HTMLElement).closest('input, textarea, select, [contenteditable]')) return;
@@ -173,12 +188,19 @@
 			editor.change(mark.id, scaled(mark, factor, size, editor.aspect(mark)));
 		} else if (event.key === 'Delete' || event.key === 'Backspace') {
 			event.preventDefault();
-			editor.remove(mark.id);
+			// What the page had is deleted, not restored; its remove button
+			// restores it.
+			if (mark.kind === 'picture' || mark.replaces) editor.discard(mark.id);
+			else editor.remove(mark.id);
 		} else if (event.key === 'Escape') {
 			editor.select(null);
 			(document.activeElement as HTMLElement | null)?.blur();
 		}
 	}
+
+	// Whether dark marks read better than light ones on a colour.
+	const lightColor = (color: number) =>
+		0.299 * (color >> 16) + 0.587 * ((color >> 8) & 255) + 0.114 * (color & 255) > 150;
 
 	const pill =
 		'pointer-events-none absolute inset-y-1 left-1 rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]';
@@ -267,6 +289,70 @@
 					{disabled}
 					aria-label="Custom color"
 					oninput={(event) => editor.setStyle({ color: event.currentTarget.value })}
+					class="absolute inset-0 size-full cursor-pointer opacity-0"
+				/>
+			</label>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet fillPicker()}
+	{@const matching = values.match ?? true}
+	{@const white = !matching && values.color === '#ffffff'}
+	{@const custom = !matching && !white}
+	{@const matched = editor.selectedMark?.kind === 'erase' ? editor.selectedMark.matched : null}
+	<div>
+		<div class="mb-3 flex items-center justify-between">
+			<h2 class="text-sm font-semibold">Fill</h2>
+			<span class="text-xs text-muted">{matching ? 'Page color' : white ? 'White' : 'Custom'}</span>
+		</div>
+		<div class="flex items-center gap-2.5" role="group" aria-label="Fill">
+			<button
+				type="button"
+				aria-pressed={matching}
+				aria-label="Match the page"
+				title="Match the page"
+				{disabled}
+				onclick={() => editor.setStyle({ match: true })}
+				style:background-color={matched === null ? undefined : hexColor(matched)}
+				class="flex size-8 items-center justify-center rounded-full ring-offset-2 ring-offset-panel motion-safe:transition-shadow {matched ===
+				null
+					? 'bg-canvas text-white'
+					: lightColor(matched)
+						? 'text-canvas'
+						: 'text-white'} {matching
+					? 'ring-2 ring-brand'
+					: 'ring-1 ring-white/15 hover:ring-white/40'}"
+				><IconColorPicker size={15} stroke={2} /></button
+			>
+			<button
+				type="button"
+				aria-pressed={white}
+				aria-label="White"
+				title="White"
+				{disabled}
+				onclick={() => editor.setStyle({ color: '#ffffff', match: false })}
+				class="flex size-8 items-center justify-center rounded-full bg-white ring-offset-2 ring-offset-panel motion-safe:transition-shadow {white
+					? 'ring-2 ring-brand'
+					: 'ring-1 ring-white/15 hover:ring-white/40'}"
+			>
+				{#if white}<IconCheck size={15} stroke={3} class="text-canvas" />{/if}
+			</button>
+			<label
+				title="Custom color"
+				class="relative flex size-8 cursor-pointer items-center justify-center rounded-full ring-offset-2 ring-offset-panel has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-6 has-[:focus-visible]:outline-brand motion-safe:transition-shadow {custom
+					? 'ring-2 ring-brand'
+					: 'ring-1 ring-white/15 hover:ring-white/40'}"
+				style:background={custom
+					? values.color
+					: 'conic-gradient(from 180deg, #f87171, #fbbf24, #34d399, #60a5fa, #a78bfa, #f472b6, #f87171)'}
+			>
+				<input
+					type="color"
+					value={values.color}
+					{disabled}
+					aria-label="Custom color"
+					oninput={(event) => editor.setStyle({ color: event.currentTarget.value, match: false })}
 					class="absolute inset-0 size-full cursor-pointer opacity-0"
 				/>
 			</label>
@@ -372,13 +458,43 @@
 							maxSize={72}
 							{disabled}
 						/>
-						<ToggleSwitch
-							bind:checked={
-								() => values.background ?? false, (background) => editor.setStyle({ background })
-							}
-							label="White background"
-							tone="brand"
-						/>
+						{#if !editor.selectedMark?.replaces}
+							<ToggleSwitch
+								bind:checked={
+									() => values.background ?? false, (background) => editor.setStyle({ background })
+								}
+								label="White background"
+								tone="brand"
+							/>
+						{/if}
+					{:else if group === 'erase'}
+						{@render fillPicker()}
+					{:else if group === 'picture' && editor.selectedMark?.kind === 'picture'}
+						{@const picture = editor.selectedMark}
+						<div>
+							<div class="mb-3 flex items-center justify-between">
+								<h2 class="text-sm font-semibold">Image</h2>
+								<span class="text-xs text-muted">{picture.deleted ? 'Deleted' : 'In the PDF'}</span>
+							</div>
+							<div
+								class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
+								role="group"
+								aria-label="Image"
+							>
+								<button
+									type="button"
+									onclick={() => editor.discard(picture.id)}
+									disabled={disabled || picture.deleted}
+									class={action}><IconTrash size={16} />Delete</button
+								>
+								<button
+									type="button"
+									onclick={() => editor.remove(picture.id)}
+									{disabled}
+									class={action}><IconRestore size={16} />Restore</button
+								>
+							</div>
+						</div>
 					{:else if group === 'image'}
 						<div class="space-y-3">
 							<input
@@ -476,11 +592,11 @@
 	</div>
 
 	<div>
-		<h2 class="mb-3 text-sm font-semibold">Annotations</h2>
+		<h2 class="mb-3 text-sm font-semibold">{editor.mode === 'edit' ? 'Edits' : 'Annotations'}</h2>
 		<div
 			class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
 			role="group"
-			aria-label="Annotations"
+			aria-label={editor.mode === 'edit' ? 'Edits' : 'Annotations'}
 		>
 			<button
 				type="button"

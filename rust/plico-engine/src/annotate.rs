@@ -123,11 +123,22 @@ pub fn annotate_pdf_bytes(
     if !remove.is_empty() {
         remove_annotations(&mut document, remove)?;
     }
+    draw_annotations(&mut document, annotations, flatten)?;
+    finish(document, 1.0)
+}
+
+/// Adds `annotations` to a loaded document, or draws them into its pages
+/// with `flatten`. Each has passed [`check`].
+pub(crate) fn draw_annotations(
+    document: &mut Document,
+    annotations: &[Annotation<'_>],
+    flatten: bool,
+) -> Result<(), String> {
     let numbers = annotations
         .iter()
         .map(|annotation| annotation.page)
         .collect::<Vec<_>>();
-    let pages = selected_pages(&document, &numbers)?
+    let pages = selected_pages(document, &numbers)?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
     let mut drawn = BTreeMap::<ObjectId, Vec<ObjectId>>::new();
@@ -135,7 +146,7 @@ pub fn annotate_pdf_bytes(
 
     for (index, annotation) in annotations.iter().enumerate() {
         let page_id = pages[&annotation.page];
-        let frame = page_frame(&document, page_id)?;
+        let frame = page_frame(document, page_id)?;
         let mut sketch = Sketch::new(frame.width, frame.height);
         let mut resources = Dictionary::new();
         let mut state = dictionary! { "Type" => "ExtGState" };
@@ -144,7 +155,7 @@ pub fn annotate_pdf_bytes(
             state.set("CA", Object::Real(annotation.opacity));
             transparent = true;
         }
-        let mut entries = sketch.draw(&mut document, annotation, &mut resources, &mut state)?;
+        let mut entries = sketch.draw(document, annotation, &mut resources, &mut state)?;
         if state.len() > 1 {
             transparent = true;
             let state = document.add_object(state);
@@ -220,12 +231,12 @@ pub fn annotate_pdf_bytes(
             entries.set("Contents", text_string(annotation.comment));
         }
         let id = document.add_object(entries);
-        add_to_page(&mut document, page_id, id)?;
+        add_to_page(document, page_id, id)?;
     }
 
-    let mut stamper = Stamper::new(&mut document, 1.0);
+    let mut stamper = Stamper::new(document, 1.0);
     for (page_id, appearances) in drawn {
-        let frame = page_frame(&document, page_id)?;
+        let frame = page_frame(document, page_id)?;
         let mut xobjects = Dictionary::new();
         let mut content = String::new();
         for (index, appearance) in appearances.into_iter().enumerate() {
@@ -242,13 +253,13 @@ pub fn annotate_pdf_bytes(
             },
             content.into_bytes(),
         ));
-        stamper.place(&mut document, page_id, form, false)?;
+        stamper.place(document, page_id, form, false)?;
     }
     // Constant opacity and blend modes arrived in PDF 1.4.
     if transparent && parse_version(&document.version) < (1, 4) {
         document.version = "1.4".into();
     }
-    finish(document, 1.0)
+    Ok(())
 }
 
 /// Takes the annotations in `remove` off their pages, with their popups, and
@@ -306,7 +317,7 @@ fn remove_annotations(document: &mut Document, remove: &[ObjectId]) -> Result<()
     Ok(())
 }
 
-fn check(annotation: &Annotation<'_>, flatten: bool) -> Result<(), String> {
+pub(crate) fn check(annotation: &Annotation<'_>, flatten: bool) -> Result<(), String> {
     let fraction = |value: &f32| (0.0..=1.0).contains(value);
     let area = |[left, top, right, bottom]: [f32; 4]| {
         [left, top, right, bottom].iter().all(fraction) && left < right && top < bottom

@@ -5513,3 +5513,488 @@ fn filling_without_flattening_keeps_the_form_but_drops_xfa() {
     assert!(!form.has(b"XFA"));
     assert!(form.get(b"NeedAppearances").unwrap().as_bool().unwrap());
 }
+
+fn edit(
+    input: &[u8],
+    replace: &[crate::TextRemoval],
+    erase: &[(u32, [f32; 4], [f32; 3])],
+    additions: &[crate::Annotation<'_>],
+) -> crate::Edited {
+    let erase = erase
+        .iter()
+        .map(|&(page, area, fill)| crate::Erasure { page, area, fill })
+        .collect::<Vec<_>>();
+    crate::edit_pdf_bytes(
+        input,
+        "",
+        crate::EditOptions {
+            images: &[],
+            replace,
+            erase: &erase,
+            additions,
+        },
+    )
+    .unwrap()
+}
+
+/// A blue band behind "Hello World", from (90, 680) to (290, 720).
+const BANDED: &[u8] =
+    b"0 0 1 rg 90 680 200 40 re f 0 g BT /F1 20 Tf 100 700 Td (Hello World) Tj ET";
+
+fn world(cover: [f32; 3]) -> crate::TextRemoval {
+    crate::TextRemoval {
+        page: 1,
+        area: WORLD,
+        shown: WORLD,
+        cover,
+    }
+}
+
+#[test]
+fn editing_replaces_text_and_leaves_what_is_behind_it() {
+    let input = redaction_pdf(BANDED, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let replacement = annotation(
+        1,
+        crate::AnnotationKind::Text {
+            area: [WORLD[0], 0.09, 0.5, 0.14],
+            text: "Earth",
+            family: FontFamily::Helvetica,
+            bold: false,
+            size: 20.0,
+            fill: None,
+        },
+    );
+    let edited = edit(&input, &[world([0.0, 0.0, 1.0])], &[], &[replacement]);
+    assert!(edited.covered.is_empty());
+    let content = first_page_content(&edited.bytes);
+    assert!(content.contains("[<48656C6C6F20> -2611] TJ"), "{content}");
+    // The band is neither cut nor painted over.
+    assert!(content.contains("90 680 200 40 re"), "{content}");
+    assert!(!content.contains("0 0 1 rg\n151"), "{content}");
+    let everything = every_stream(&edited.bytes);
+    assert!(!everything.contains("World"), "{everything}");
+    assert!(everything.contains("<4561727468>"), "{everything}");
+}
+
+#[test]
+fn erasing_takes_everything_out_and_paints_it_over() {
+    let input = redaction_pdf(BANDED, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let edited = edit(&input, &[], &[(1, WORLD, [0.0, 0.0, 1.0])], &[]);
+    assert!(edited.covered.is_empty());
+    let content = first_page_content(&edited.bytes);
+    assert!(!every_stream(&edited.bytes).contains("World"));
+    assert!(!content.contains("90 680 200 40 re"), "the band is cut");
+    assert!(
+        content.contains("0 0 1 rg\n151 690 53 30 re\nf"),
+        "{content}"
+    );
+}
+
+#[test]
+fn erasing_paints_each_area_in_its_own_colour_in_order() {
+    let input = redaction_pdf(BANDED, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let left = [0.1, 0.05, 0.2, 0.1];
+    let edited = edit(
+        &input,
+        &[],
+        &[
+            (1, WORLD, [1.0, 1.0, 1.0]),
+            (1, left, [1.0, 0.0, 0.0]),
+            (1, WORLD, [0.0, 1.0, 0.0]),
+        ],
+        &[],
+    );
+    let content = first_page_content(&edited.bytes);
+    let red = content.find("1 0 0 rg\n60 720 60 40 re").expect(&content);
+    let green = content.find("0 1 0 rg\n151 690 53 30 re").expect(&content);
+    assert!(red < green, "{content}");
+    // A later area takes out an earlier one's paint like anything else.
+    assert!(!content.contains("1 1 1 rg\n151 690"), "{content}");
+}
+
+#[test]
+fn editing_covers_text_it_cannot_measure_and_says_so() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "TrueType",
+            "BaseFont" => "Mystery",
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F1" => font } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let edited = edit(&input, &[world([1.0, 0.0, 0.0])], &[], &[]);
+    assert_eq!(edited.covered, [(1, crate::Unremovable::Text)]);
+    assert!(every_stream(&edited.bytes).contains("1 0 0 rg"));
+}
+
+#[test]
+fn editing_refuses_to_do_nothing_and_areas_off_the_page() {
+    let input = redaction_pdf(HELLO, |document, _| {
+        (
+            helvetica_resources(document),
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    fn options(erase: &[crate::Erasure]) -> crate::EditOptions<'_> {
+        crate::EditOptions {
+            images: &[],
+            replace: &[],
+            erase,
+            additions: &[],
+        }
+    }
+    assert!(crate::edit_pdf_bytes(&input, "", options(&[])).is_err());
+    let off = [crate::Erasure {
+        page: 1,
+        area: [0.5, 0.5, 1.5, 0.6],
+        fill: [1.0; 3],
+    }];
+    assert!(crate::edit_pdf_bytes(&input, "", options(&off)).is_err());
+    let missing = [crate::Erasure {
+        page: 2,
+        area: [0.1, 0.1, 0.2, 0.2],
+        fill: [1.0; 3],
+    }];
+    assert!(crate::edit_pdf_bytes(&input, "", options(&missing)).is_err());
+    let unseen = [crate::Erasure {
+        page: 1,
+        area: [0.1, 0.1, 0.2, 0.2],
+        fill: [2.0, 0.0, 0.0],
+    }];
+    assert!(crate::edit_pdf_bytes(&input, "", options(&unseen)).is_err());
+}
+
+#[test]
+fn page_text_reports_how_each_glyph_is_drawn() {
+    let content = b"BT 1 0 0 rg /F1 20 Tf 100 700 Td (Hi) Tj ET \
+        BT /F2 10 Tf 3 Tr 100 100 Td (Lo) Tj ET \
+        BT 0 1 -1 0 300 300 Tm /F1 12 Tf (Up) Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        let bold = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "ABCDEF+Arial-BoldMT",
+            "FirstChar" => 72,
+            "LastChar" => 111,
+            "Widths" => vec![600.into(); 40],
+        });
+        let descriptor = document.add_object(dictionary! {
+            "Type" => "FontDescriptor",
+            "FontName" => "Garamondish",
+            "Flags" => 2 + 64,
+        });
+        let serif = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "TrueType",
+            "BaseFont" => "Garamondish",
+            "FirstChar" => 72,
+            "LastChar" => 111,
+            "Widths" => vec![500.into(); 40],
+            "FontDescriptor" => descriptor,
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F1" => bold, "F2" => serif } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let pages = crate::page_texts(&input, "").unwrap();
+    let styles = &pages[0].styles;
+    assert_eq!(pages[0].text.concat(), "HiLoUp");
+    let hi = styles[0];
+    assert!((hi.size - 20.0).abs() < 1e-3);
+    assert!((hi.baseline - 0.125).abs() < 1e-4);
+    assert_eq!(hi.color, Some([1.0, 0.0, 0.0]));
+    assert_eq!(
+        (hi.family, hi.bold, hi.italic, hi.invisible, hi.upright),
+        (FontFamily::Helvetica, true, false, false, true)
+    );
+    let lo = styles[2];
+    assert_eq!(
+        lo.color,
+        Some([1.0, 0.0, 0.0]),
+        "colour belongs to the graphics state, not the text object"
+    );
+    assert_eq!(
+        (lo.family, lo.bold, lo.italic, lo.invisible),
+        (FontFamily::Times, false, true, true)
+    );
+    assert!(!styles[4].upright, "turned text");
+}
+
+#[test]
+fn page_text_knows_the_clones_of_the_standard_fonts_by_name() {
+    let names = [
+        "TACTGM+NimbusRomNo9L-Medi",
+        "KUYGUP+NimbusRomNo9L-ReguItal",
+        "ABCMRX+CMR10",
+        "QWERTY+CMBX12",
+        "TeXGyreTermes-Italic",
+        "LMMono10-Regular",
+        "NimbusMonL-Regu",
+        "MinionPro-It",
+        "CMTT10",
+    ];
+    let content = (0..names.len())
+        .map(|index| format!("BT /F{index} 10 Tf 100 {} Td (Hi) Tj ET ", 100 + 50 * index))
+        .collect::<String>();
+    let input = redaction_pdf(content.as_bytes(), |document, _| {
+        let mut fonts = Dictionary::new();
+        for (index, name) in names.iter().enumerate() {
+            let font = document.add_object(dictionary! {
+                "Type" => "Font",
+                "Subtype" => "Type1",
+                "BaseFont" => Object::Name(name.as_bytes().to_vec()),
+                "FirstChar" => 72,
+                "LastChar" => 105,
+                "Widths" => vec![500.into(); 34],
+            });
+            fonts.set(format!("F{index}"), font);
+        }
+        (
+            dictionary! { "Font" => fonts },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    let pages = crate::page_texts(&input, "").unwrap();
+    let looks = pages[0]
+        .styles
+        .iter()
+        .step_by(2)
+        .map(|style| (style.family, style.bold, style.italic))
+        .collect::<Vec<_>>();
+    use FontFamily::{Courier, Times};
+    assert_eq!(
+        looks,
+        [
+            (Times, true, false),
+            (Times, false, true),
+            (Times, false, false),
+            (Times, true, false),
+            (Times, false, true),
+            (Courier, false, false),
+            (Courier, false, false),
+            (Times, false, true),
+            (Courier, false, false),
+        ]
+    );
+}
+
+#[test]
+fn page_text_reads_a_tint_of_black_as_grey() {
+    let content = b"BT /K cs 0.25 sc /F1 20 Tf 100 700 Td (Hi) Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        let mut resources = helvetica_resources(document);
+        let tint = document.add_object(dictionary! {
+            "FunctionType" => 2,
+            "Domain" => vec![0.into(), 1.into()],
+            "C0" => vec![1.into()],
+            "C1" => vec![0.into()],
+            "N" => 1,
+        });
+        resources.set(
+            "ColorSpace",
+            dictionary! {
+                "K" => vec![
+                    Object::Name(b"Separation".to_vec()),
+                    Object::Name(b"Black".to_vec()),
+                    Object::Name(b"DeviceGray".to_vec()),
+                    tint.into(),
+                ],
+            },
+        );
+        (resources, dictionary! {}, dictionary! {})
+    });
+    let pages = crate::page_texts(&input, "").unwrap();
+    assert_eq!(pages[0].styles[0].color, Some([0.75; 3]));
+}
+
+#[test]
+fn editing_a_line_leaves_lines_set_closer_than_their_font_is_tall() {
+    // 20 point text on lines 17 points apart, in a font whose glyphs stand
+    // 1.1 em above the baseline and 0.35 em below it.
+    let content = b"BT /F1 20 Tf 17 TL 100 717 Td (Above) Tj T* (Middle) Tj T* (Below) Tj ET";
+    let input = redaction_pdf(content, |document, _| {
+        let descriptor = document.add_object(dictionary! {
+            "Type" => "FontDescriptor",
+            "FontName" => "Tall",
+            "Flags" => 32,
+            "Ascent" => 1100,
+            "Descent" => -350,
+        });
+        let font = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Tall",
+            "FirstChar" => 65,
+            "LastChar" => 122,
+            "Widths" => vec![500.into(); 58],
+            "FontDescriptor" => descriptor,
+        });
+        (
+            dictionary! { "Font" => dictionary! { "F1" => font } },
+            dictionary! {},
+            dictionary! {},
+        )
+    });
+    // The band the app sends: from the middle line's baseline at 700 up
+    // 0.55 em.
+    let band = [
+        100.0 / 600.0,
+        1.0 - (700.0 + 11.0) / 800.0,
+        400.0 / 600.0,
+        1.0 - 700.0 / 800.0,
+    ];
+    let removal = crate::TextRemoval {
+        page: 1,
+        area: band,
+        shown: band,
+        cover: [1.0; 3],
+    };
+    let edited = edit(&input, &[removal], &[], &[]);
+    let everything = every_stream(&edited.bytes);
+    assert!(!everything.contains("Middle"), "{everything}");
+    assert!(everything.contains("Above"), "{everything}");
+    assert!(everything.contains("Below"), "{everything}");
+}
+
+/// A page drawing one image four ways: filling the page, plainly, inside a
+/// form, and inline.
+fn pictured_pdf() -> Vec<u8> {
+    let content = b"q 600 0 0 800 0 0 cm /Im1 Do Q \
+        q 100 0 0 100 50 600 cm /Im1 Do Q \
+        q 1 0 0 1 300 100 cm /Fm1 Do Q \
+        q 40 0 0 40 400 400 cm BI /W 2 /H 2 /CS /G /BPC 8 ID \x10\x20\x30\x40 EI Q";
+    redaction_pdf(content, |document, _| {
+        let image = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 2,
+                "Height" => 2,
+                "ColorSpace" => "DeviceGray",
+                "BitsPerComponent" => 8,
+            },
+            vec![200; 4],
+        ));
+        let form = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => vec![0.into(), 0.into(), 100.into(), 100.into()],
+                "Resources" => dictionary! { "XObject" => dictionary! { "Im1" => image } },
+            },
+            b"q 60 0 0 30 0 0 cm /Im1 Do Q".to_vec(),
+        ));
+        (
+            dictionary! { "XObject" => dictionary! { "Im1" => image, "Fm1" => form } },
+            dictionary! {},
+            dictionary! {},
+        )
+    })
+}
+
+fn listed_images(bytes: &[u8]) -> Vec<[f32; 4]> {
+    crate::page_texts(bytes, "").unwrap().remove(0).images
+}
+
+fn near(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
+}
+
+#[test]
+fn page_text_lists_where_images_are_drawn_but_not_backgrounds() {
+    let images = listed_images(&pictured_pdf());
+    let expected = [
+        [50.0 / 600.0, 0.125, 0.25, 0.25],
+        [0.5, 1.0 - 130.0 / 800.0, 0.6, 0.875],
+        [400.0 / 600.0, 0.45, 440.0 / 600.0, 0.5],
+    ];
+    assert_eq!(images.len(), 3, "{images:?}");
+    for (found, expected) in images.iter().zip(expected) {
+        assert!(near(*found, expected), "{found:?} {expected:?}");
+    }
+}
+
+#[test]
+fn editing_moves_resizes_and_takes_away_images_the_page_draws() {
+    let input = pictured_pdf();
+    let listed = listed_images(&input);
+    let moves = [
+        crate::ImageMove {
+            page: 1,
+            from: listed[0],
+            to: Some([0.5, 0.5, 0.6, 0.6]),
+        },
+        crate::ImageMove {
+            page: 1,
+            from: listed[1],
+            to: None,
+        },
+        crate::ImageMove {
+            page: 1,
+            from: listed[2],
+            to: Some([0.1, 0.8, 0.2, 0.85]),
+        },
+    ];
+    let edited = crate::edit_pdf_bytes(
+        &input,
+        "",
+        crate::EditOptions {
+            images: &moves,
+            replace: &[],
+            erase: &[],
+            additions: &[],
+        },
+    )
+    .unwrap();
+    let mut images = listed_images(&edited.bytes);
+    images.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert_eq!(images.len(), 2, "{images:?}");
+    assert!(near(images[0], [0.1, 0.8, 0.2, 0.85]), "{images:?}");
+    assert!(near(images[1], [0.5, 0.5, 0.6, 0.6]), "{images:?}");
+    // The same image filling the page is drawn as it was.
+    assert!(first_page_content(&edited.bytes).contains("600 0 0 800 0 0 cm"));
+    assert!(every_stream(&edited.bytes).contains("ID \x10\x20\x30\x40"));
+}
+
+#[test]
+fn editing_refuses_to_move_an_image_that_is_not_there() {
+    let input = pictured_pdf();
+    let moves = [crate::ImageMove {
+        page: 1,
+        from: [0.3, 0.3, 0.4, 0.4],
+        to: None,
+    }];
+    let options = crate::EditOptions {
+        images: &moves,
+        replace: &[],
+        erase: &[],
+        additions: &[],
+    };
+    assert!(crate::edit_pdf_bytes(&input, "", options).is_err());
+}

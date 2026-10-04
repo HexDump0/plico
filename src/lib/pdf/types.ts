@@ -142,6 +142,14 @@ export type PdfWorkerRequest =
 	| { id: number; operation: 'redact-text'; files: ArrayBuffer[]; passwords: string[] }
 	| {
 			id: number;
+			operation: 'edit';
+			// The PDF, then each image an addition draws.
+			files: ArrayBuffer[];
+			passwords: string[];
+			options: EditOptions;
+	  }
+	| {
+			id: number;
 			operation: 'annotate';
 			// The PDF, then each image an annotation draws.
 			files: ArrayBuffer[];
@@ -169,8 +177,9 @@ export type PdfOutput = {
 };
 
 export type PdfWorkerResponse =
-	// `value` carries a count some operations report beside their file, and
-	// `pictured` the pages Redact drew from a picture.
+	// `value` carries a count some operations report beside their file,
+	// `pictured` the pages Redact drew from a picture, and `covered` the pages
+	// where Edit painted over what it could not take out.
 	| {
 			id: number;
 			ok: true;
@@ -178,6 +187,7 @@ export type PdfWorkerResponse =
 			format: PdfOutput['format'];
 			value?: number;
 			pictured?: PicturedPage[];
+			covered?: CoveredPage[];
 	  }
 	| { id: number; ok: true; value: number }
 	| { id: number; ok: true; glyphs: PageGlyphs[] }
@@ -315,5 +325,45 @@ export type RedactOptions = {
 export type PicturedPage = { page: number; reason: 'chosen' | 'text' | 'image' | 'content' };
 
 /// A page's glyphs as the engine reads them: four fractions per glyph as in
-/// `CropArea`, the page's text, and where each glyph's text ends in it.
-export type PageGlyphs = { boxes: Float32Array; text: string; ends: Uint32Array };
+/// `CropArea`, the page's text, and where each glyph's text ends in it. Then
+/// how each is drawn: font size in points and baseline as a fraction of the
+/// page's height, two per glyph; fill as 0xRRGGBB, or 0xFFFFFFFF when
+/// unknown; and its look, the nearest standard family (0 Helvetica, 1 Times,
+/// 2 Courier) plus 4 for bold, 8 italic, 16 invisible and 32 upright. Last,
+/// where each image the page draws sits, four fractions each as in `boxes`.
+export type PageGlyphs = {
+	boxes: Float32Array;
+	text: string;
+	ends: Uint32Array;
+	metrics: Float32Array;
+	colors: Uint32Array;
+	looks: Uint8Array;
+	images: Float32Array;
+};
+
+/// Text Edit takes out: whatever glyphs `area` covers, as redaction decides.
+/// When they cannot be taken out, `shown`, where they reach, is painted in
+/// `cover`, the colour behind them, 0xRRGGBB.
+export type TextRemoval = { page: number; area: CropArea; shown: CropArea; cover: number };
+
+/// An area Edit empties: everything under it is taken out and it is painted
+/// in `fill`, 0xRRGGBB.
+export type Erasure = RedactArea & { fill: number };
+
+/// An image the page draws, from where `redaction_text` reports it, moved
+/// to `to`, or taken away when `to` is null.
+export type ImageEdit = { page: number; from: CropArea; to: CropArea | null };
+
+/// `images` are moved or taken away first, then `replace` takes text out,
+/// `erase` empties areas, and `additions` are drawn into the pages after
+/// all of them.
+export type EditOptions = {
+	images: ImageEdit[];
+	replace: TextRemoval[];
+	erase: Erasure[];
+	additions: PageAnnotation[];
+};
+
+/// A page where Edit painted over an area rather than taking out what was
+/// under it, and why.
+export type CoveredPage = { page: number; reason: 'text' | 'image' | 'content' };

@@ -4,6 +4,7 @@ mod bindings;
 mod compression;
 mod crop;
 mod documents;
+mod edit;
 mod flatten;
 mod forms;
 mod images;
@@ -19,9 +20,9 @@ pub use annotate::{
 pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{
     add_page_numbers, add_watermark, annotate_pdf, compress_pdf, convert_to_pdfa, crop_pdf,
-    fill_form, images_to_pdf, merge_pdfs, organize_pdfs, pdf_protection, pdfa_standard_fonts,
-    protect_pdf, redact_pdf, redaction_text, sign_pdf, split_pdf_every, split_pdf_ranges,
-    unlock_pdf,
+    edit_pdf, fill_form, images_to_pdf, merge_pdfs, organize_pdfs, pdf_protection,
+    pdfa_standard_fonts, protect_pdf, redact_pdf, redaction_text, sign_pdf, split_pdf_every,
+    split_pdf_ranges, unlock_pdf,
 };
 pub use compression::{CompressOptions, compress_pdf_bytes, compress_pdf_bytes_with_password};
 pub use crop::{PageCrop, crop_pdf_bytes};
@@ -30,11 +31,12 @@ pub use documents::{
     merge_pdf_bytes_with_passwords, organize_pdf_bytes, organize_pdf_items, organize_pdfs_bytes,
     organize_pdfs_bytes_with_passwords, split_pdf_bytes, split_pdf_bytes_with_password,
 };
+pub use edit::{EditOptions, Edited, Erasure, ImageMove, TextRemoval, edit_pdf_bytes};
 pub use flatten::{FlattenScope, Flattened, flatten_pdf_bytes};
 pub use forms::{FieldFill, FieldValue, fill_form_bytes};
 pub use images::{ImagePdfOptions, PageOrientation, images_to_pdf_bytes};
 pub use redact::{
-    PageImage, PageText, RedactOptions, Redacted, Redaction, Unremovable, page_texts,
+    GlyphStyle, PageImage, PageText, RedactOptions, Redacted, Redaction, Unremovable, page_texts,
     redact_pdf_bytes,
 };
 pub use security::{

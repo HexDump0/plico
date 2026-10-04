@@ -22,8 +22,8 @@ use crate::flatten::{
     FlattenScope, Flattened, field_type, flatten_pdf_bytes, name_of, resolve_dict,
 };
 use crate::stamps::{
-    FontFamily, LEADING, base_font, cap_height, finish, number, rectangle, resolve, text_width,
-    win_ansi,
+    FontFamily, LEADING, base_font, cap_height, finish, number, rectangle, resolve,
+    standard_family, text_width, win_ansi,
 };
 
 pub enum FieldValue<'a> {
@@ -967,36 +967,6 @@ impl Look {
             colour: colour.unwrap_or_else(|| "0 g".into()),
         }
     }
-}
-
-/// The standard font nearest a form font, by its name: Arial and most sans
-/// faces become Helvetica, Times New Roman and other serifs Times, monospaced
-/// faces Courier. Acrobat's own resource names count too.
-fn standard_family(name: &[u8]) -> (FontFamily, bool) {
-    let name = String::from_utf8_lossy(name).to_lowercase();
-    // A subset's name starts with six capitals and a plus.
-    let name = match name.split_once('+') {
-        Some((tag, rest)) if tag.len() == 6 => rest,
-        _ => name.as_str(),
-    };
-    let has = |part: &str| name.contains(part);
-    let family = if has("cour") || has("mono") || name == "cobo" {
-        FontFamily::Courier
-    } else if has("times")
-        || name == "tiro"
-        || name == "tibo"
-        || (has("serif") && !has("sans"))
-        || ["roman", "georgia", "garamond", "minion", "cambria", "book"]
-            .iter()
-            .any(|part| has(part))
-    {
-        FontFamily::Times
-    } else {
-        FontFamily::Helvetica
-    };
-    let bold =
-        has("bold") || has("black") || has("heavy") || matches!(name, "hebo" | "tibo" | "cobo");
-    (family, bold)
 }
 
 /// What the form gives every field that does not say otherwise.

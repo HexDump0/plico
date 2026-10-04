@@ -14,13 +14,14 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
 use super::Unremovable;
 use super::decode::decode;
-use super::fonts::Font;
+use super::fonts::{Font, Look};
 use super::geometry::{
     IDENTITY, Matrix, Point, Rect, apply, covered, flatten_cubic, invert, multiply,
     polygon_touches, segment_outside, subtract, translate,
 };
 use super::lexer::{self, Operation, Value, format_number, write_name, write_value};
 use super::pixels::{ImageEdit, redact_image, redact_inline};
+use crate::stamps::resolve;
 
 /// The page cannot be redacted in place: something under a box could not be
 /// measured or decoded, so the caller draws the page as a picture instead.
@@ -31,16 +32,58 @@ pub(super) struct FoundGlyph {
     /// Page space.
     pub(super) bounds: Rect,
     pub(super) text: String,
+    /// Where the pen stood on the baseline, and the way up one font size
+    /// reaches from there, in page space.
+    pub(super) origin: Point,
+    pub(super) up: Point,
+    /// The fill colour as red, green and blue, each 0 to 1, when it is one
+    /// this engine can tell.
+    pub(super) color: Option<[f32; 3]>,
+    pub(super) look: Look,
+    /// Drawn in a render mode that paints nothing, as OCR layers are.
+    pub(super) invisible: bool,
 }
 
 pub(super) struct Context<'a> {
     /// Page space.
     pub(super) boxes: &'a [Rect],
     pub(super) fill: [f64; 3],
+    /// Takes out only text under the boxes, leaving paths and images as they
+    /// were, for replacing text with other text.
+    pub(super) text_only: bool,
     /// Set to gather every glyph instead of redacting, for finding text.
     pub(super) found: Option<Vec<FoundGlyph>>,
+    /// While gathering, where each image is drawn: the corners of its unit
+    /// square in page space.
+    pub(super) pictures: Vec<[Point; 4]>,
+    /// Image drawings to take out, each the first not yet taken whose
+    /// bounds are these, kept so they can be drawn again elsewhere.
+    pub(super) take: Vec<Taking>,
     fonts: HashMap<ObjectId, Rc<Font>>,
     names: usize,
+}
+
+pub(super) struct Taking {
+    /// Page space.
+    pub(super) bounds: Rect,
+    pub(super) taken: Option<Taken>,
+}
+
+/// An image drawing taken out of the content.
+pub(super) struct Taken {
+    /// From the image's unit square to page space.
+    pub(super) ctm: Matrix,
+    /// The operation that drew it, `/Name Do` or an inline image.
+    pub(super) draw: Vec<u8>,
+    /// The resources its names were looked up in.
+    pub(super) resources: Dictionary,
+}
+
+/// How far, in points, an image's bounds may be from the ones asked for.
+const TAKE_TOLERANCE: f64 = 0.5;
+
+fn unit_corners(ctm: Matrix) -> [Point; 4] {
+    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|corner| apply(ctm, corner))
 }
 
 impl<'a> Context<'a> {
@@ -48,7 +91,10 @@ impl<'a> Context<'a> {
         Context {
             boxes,
             fill,
+            text_only: false,
             found: None,
+            pictures: Vec::new(),
+            take: Vec::new(),
             fonts: HashMap::new(),
             names: 0,
         }
@@ -63,6 +109,24 @@ pub(super) struct Rewritten {
     pub(super) open: usize,
     /// Marked content whose content changed, by MCID.
     pub(super) touched: BTreeSet<i64>,
+}
+
+/// A colour as red, green and blue from its components, for the spaces this
+/// engine reads; CMYK is turned the naive way, which is close enough to pick
+/// a text colour.
+fn colour(space: Space, values: &[f64]) -> Option<[f32; 3]> {
+    let channel = |value: f64| value.clamp(0.0, 1.0) as f32;
+    match (space, values) {
+        (Space::Gray, [gray]) => Some([channel(*gray); 3]),
+        (Space::Tint, [tint]) => Some([channel(1.0 - tint); 3]),
+        (Space::Rgb, [red, green, blue]) => Some([channel(*red), channel(*green), channel(*blue)]),
+        (Space::Cmyk, [cyan, magenta, yellow, black]) => {
+            let ink =
+                |value: f64| channel((1.0 - value.clamp(0.0, 1.0)) * (1.0 - black.clamp(0.0, 1.0)));
+            Some([ink(*cyan), ink(*magenta), ink(*yellow)])
+        }
+        _ => None,
+    }
 }
 
 /// Forms inside forms deeper than this are not followed.
@@ -102,6 +166,9 @@ pub(super) fn rewrite(
             scale: 1.0,
             leading: 0.0,
             rise: 0.0,
+            space: Space::Gray,
+            color: Some([0.0; 3]),
+            render: 0,
         },
         stack: Vec::new(),
         text_matrix: IDENTITY,
@@ -153,6 +220,23 @@ struct State {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The fill colour space, and the colour in it when this engine can tell.
+    space: Space,
+    color: Option<[f32; 3]>,
+    /// Text render mode (9.3.6).
+    render: i64,
+}
+
+/// Fill colour spaces by how their components read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Space {
+    Gray,
+    Rgb,
+    Cmyk,
+    /// A separation for black ink, or for every ink: a tint of 1 is black.
+    Tint,
+    /// Patterns, other separations, indexed and Lab colours.
+    Other,
 }
 
 #[derive(Clone, Copy)]
@@ -233,6 +317,30 @@ impl Interpreter<'_, '_> {
         }
         self.out.extend_from_slice(operator);
         self.out.push(b'\n');
+    }
+
+    /// Takes the image drawn by `operation` here when it is one asked for.
+    fn take(&mut self, operation: &Operation) -> bool {
+        let Some(bounds) = Rect::around(unit_corners(self.state.ctm)) else {
+            return false;
+        };
+        let close = |a: f64, b: f64| (a - b).abs() <= TAKE_TOLERANCE;
+        let Some(slot) = self.context.take.iter_mut().find(|slot| {
+            slot.taken.is_none()
+                && close(slot.bounds.x0, bounds.x0)
+                && close(slot.bounds.y0, bounds.y0)
+                && close(slot.bounds.x1, bounds.x1)
+                && close(slot.bounds.y1, bounds.y1)
+        }) else {
+            return false;
+        };
+        slot.taken = Some(Taken {
+            ctm: self.state.ctm,
+            draw: self.bytes[operation.span.clone()].to_vec(),
+            resources: self.resources.clone(),
+        });
+        self.removed();
+        true
     }
 
     /// Records that something under a box was taken out here.
@@ -332,6 +440,16 @@ impl Interpreter<'_, '_> {
                 self.graphics_state(operation);
                 self.copy(operation);
             }
+            b"g" | b"rg" | b"k" | b"cs" | b"sc" | b"scn" => {
+                self.fill_colour(operation);
+                self.copy(operation);
+            }
+            b"Tr" => {
+                if let Some([mode]) = operation.numbers::<1>() {
+                    self.state.render = mode as i64;
+                }
+                self.copy(operation);
+            }
             b"Tj" => {
                 if let [Value::String(text)] = operation.operands.as_slice() {
                     self.show(operation, vec![Element::Text(text.clone())], b"")?;
@@ -418,6 +536,91 @@ impl Interpreter<'_, '_> {
             }
             Object::Dictionary(font) => Some(Rc::new(Font::load(self.document, font))),
             _ => None,
+        }
+    }
+
+    /// Follows the fill colour, so text that replaces text can be drawn in
+    /// the colour it had.
+    fn fill_colour(&mut self, operation: &Operation) {
+        let values = operation
+            .operands
+            .iter()
+            .map(Value::number)
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
+        let (space, values) = match operation.operator.as_slice() {
+            b"g" => (Space::Gray, values),
+            b"rg" => (Space::Rgb, values),
+            b"k" => (Space::Cmyk, values),
+            b"cs" => {
+                let space = match operation.operands.as_slice() {
+                    [Value::Name(name)] => self.colour_space(name, 0),
+                    _ => Space::Other,
+                };
+                // Every space this engine reads starts out black.
+                let black = match space {
+                    Space::Gray => vec![0.0],
+                    Space::Rgb => vec![0.0; 3],
+                    Space::Tint => vec![1.0],
+                    _ => vec![0.0, 0.0, 0.0, 1.0],
+                };
+                (space, black)
+            }
+            _ => (self.state.space, values),
+        };
+        self.state.space = space;
+        self.state.color = colour(space, &values);
+    }
+
+    fn colour_space(&self, name: &[u8], depth: usize) -> Space {
+        match name {
+            b"DeviceGray" | b"CalGray" | b"G" => return Space::Gray,
+            b"DeviceRGB" | b"CalRGB" | b"RGB" => return Space::Rgb,
+            b"DeviceCMYK" | b"CMYK" => return Space::Cmyk,
+            _ if depth > 2 => return Space::Other,
+            _ => {}
+        }
+        let document = &*self.document;
+        let resolve = |value| resolve(document, value);
+        let found = self
+            .resources
+            .get(b"ColorSpace")
+            .ok()
+            .and_then(resolve)
+            .and_then(|spaces| spaces.as_dict().ok())
+            .and_then(|spaces| spaces.get(name).ok())
+            .and_then(resolve);
+        match found {
+            Some(Object::Name(alias)) => self.colour_space(alias, depth + 1),
+            Some(Object::Array(parts)) => {
+                match parts.first().and_then(|part| part.as_name().ok()) {
+                    Some(b"Separation")
+                        if matches!(
+                            parts.get(1).and_then(|name| name.as_name().ok()),
+                            Some(b"Black" | b"All")
+                        ) =>
+                    {
+                        Space::Tint
+                    }
+                    Some(b"ICCBased") => {
+                        let count = parts
+                            .get(1)
+                            .and_then(resolve)
+                            .and_then(|profile| profile.as_stream().ok())
+                            .and_then(|profile| profile.dict.get(b"N").ok())
+                            .and_then(|count| count.as_i64().ok());
+                        match count {
+                            Some(1) => Space::Gray,
+                            Some(3) => Space::Rgb,
+                            Some(4) => Space::Cmyk,
+                            _ => Space::Other,
+                        }
+                    }
+                    Some(other) => self.colour_space(other, depth + 1),
+                    None => Space::Other,
+                }
+            }
+            _ => Space::Other,
         }
     }
 
@@ -523,10 +726,21 @@ impl Interpreter<'_, '_> {
                             + state.char_spacing
                             + if glyph.space { state.word_spacing } else { 0.0 };
                         let shift = if vertical { shift } else { shift * state.scale };
-                        if let (Some(found), Some(bounds)) = (&mut self.context.found, bounds) {
+                        if let (Some(found), Some(bounds), Some(font)) =
+                            (&mut self.context.found, bounds, &font)
+                        {
+                            // The render matrix carries the font size, so one
+                            // unit up in text space is one size up.
+                            let origin = apply(to_page, (0.0, 0.0));
+                            let top = apply(to_page, (0.0, 1.0));
                             found.push(FoundGlyph {
                                 bounds,
                                 text: glyph.text.clone(),
+                                origin,
+                                up: (top.0 - origin.0, top.1 - origin.1),
+                                color: state.color,
+                                look: font.look,
+                                invisible: matches!(state.render, 3 | 7),
                             });
                         }
                         let remove = !self.context.boxes.is_empty()
@@ -686,6 +900,7 @@ impl Interpreter<'_, '_> {
         let bounds = Rect::around(points);
         let boxes = self.context.boxes;
         let touches = operator != b"n"
+            && !self.context.text_only
             && bounds.is_some_and(|bounds| boxes.iter().any(|area| area.overlaps(bounds)));
         if !touches {
             self.flush_path();
@@ -832,18 +1047,32 @@ impl Interpreter<'_, '_> {
             self.copy(operation);
             return Ok(());
         };
+        let subtype = match self.document.get_object(id) {
+            Ok(Object::Stream(stream)) => stream
+                .dict
+                .get(b"Subtype")
+                .and_then(Object::as_name)
+                .unwrap_or_default()
+                .to_vec(),
+            _ => {
+                self.copy(operation);
+                return Ok(());
+            }
+        };
+        if subtype == b"Image" {
+            if self.collecting() {
+                self.context.pictures.push(unit_corners(self.state.ctm));
+            } else if !self.context.take.is_empty() && self.take(operation) {
+                self.replaced.insert(name.clone());
+                return Ok(());
+            }
+        }
         let Ok(Object::Stream(stream)) = self.document.get_object(id) else {
             self.copy(operation);
             return Ok(());
         };
-        let subtype = stream
-            .dict
-            .get(b"Subtype")
-            .and_then(Object::as_name)
-            .unwrap_or_default()
-            .to_vec();
         match subtype.as_slice() {
-            b"Image" if !self.collecting() => {
+            b"Image" if !self.collecting() && !self.context.text_only => {
                 let stream = stream.clone();
                 match redact_image(
                     self.document,
@@ -914,7 +1143,14 @@ impl Interpreter<'_, '_> {
 
         if !self.collecting() {
             let touches = match bounds {
-                Some(bounds) => boxes.iter().any(|area| area.overlaps(bounds)),
+                Some(bounds) => {
+                    boxes.iter().any(|area| area.overlaps(bounds))
+                        || self
+                            .context
+                            .take
+                            .iter()
+                            .any(|slot| slot.taken.is_none() && slot.bounds.overlaps(bounds))
+                }
                 None => true,
             };
             if !touches {
@@ -923,6 +1159,7 @@ impl Interpreter<'_, '_> {
                 return Ok(());
             }
             if let Some(corners) = corners
+                && !self.context.text_only
                 && boxes
                     .iter()
                     .any(|area| corners.iter().all(|corner| area.contains(*corner)))
@@ -997,12 +1234,16 @@ impl Interpreter<'_, '_> {
 
     fn inline_image(&mut self, operation: &Operation) -> Result<(), NeedsImage> {
         if self.collecting() {
+            self.context.pictures.push(unit_corners(self.state.ctm));
+        } else if !self.context.take.is_empty() && self.take(operation) {
+            return Ok(());
+        }
+        if self.collecting() || self.context.text_only {
             self.copy(operation);
             return Ok(());
         }
         let ctm = self.state.ctm;
-        let corners =
-            [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|corner| apply(ctm, corner));
+        let corners = unit_corners(ctm);
         let boxes = self.context.boxes;
         let touches = Rect::around(corners)
             .is_some_and(|bounds| boxes.iter().any(|area| area.overlaps(bounds)));

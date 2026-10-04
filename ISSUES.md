@@ -220,6 +220,40 @@ is removed, so an XFA-aware reader shows the AcroForm fields rather than the
 XFA copy of the form; a field with no widgets on a page cannot be reached from
 the UI, which reads fields from page annotations.
 
+### What Edit PDF changes, and its limits
+
+Edit takes text out with redaction's rewrite (`text_only`) and draws the new
+text into the page, so the limits of both apply, plus some of its own:
+
+- The new text is drawn in the standard 14 font nearest the old one, not in
+  the document's own embedded font, so it is WinAnsi only (the sidebar says
+  which character cannot be drawn) and its shapes differ from the text
+  beside it. Italic is detected but drawn upright: the stamp fonts have no
+  italic or oblique faces yet. Drawing in the run's own font needs the same
+  reverse mapping as "Filled form fields are drawn in the standard fonts".
+- Text is edited one run at a time: a line, or the part of it between gaps
+  over 1.2 em. Nothing reflows; a longer replacement grows to the right and
+  wraps only at the page edge. Justified spacing, letter spacing and kerning
+  inside the old run are not kept.
+- Only upright, visible text can be picked: turned or vertical text and
+  invisible OCR layers are not offered, and neither are lines whose baseline
+  is off the page (printer's marks in `freeculture.pdf`, `issue19326.pdf`).
+- A glyph goes once a quarter of it is under the band, so a superscript or
+  footnote mark on the line that dips into the band goes with it, though it
+  is a separate run and not in the replacement's text.
+- Where the engine cannot take text out (a font with no widths, as in
+  redaction), the run's ink is painted over in the colour sampled behind it,
+  and the result says on which pages. The old text is still in the file
+  there.
+- A moved image is drawn again on top of the page, outside any clip, soft
+  mask or transparency it was drawn under, so a clipped or faded image shows
+  whole and opaque once moved. Deleting keeps nothing of it. Images under 4
+  pt, mostly off the page, or filling most of it cannot be picked; vector
+  drawings cannot be picked at all.
+- An erased area's fill and a replaced line's background are sampled from the
+  page as pdf.js drew it in the preview, so a gradient or a picture behind
+  them gets one flat colour.
+
 ### What redaction removes, and where it falls back
 
 Redaction removes rather than covers (see `AI/ARCHITECTURE.md`). Things a box
@@ -413,7 +447,7 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Twenty-nine tools exist, the catalogue advertises about forty
+### Thirty tools exist, the catalogue advertises about forty
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -648,6 +682,31 @@ their fields in its own way before flattening and draws the engine's
 appearances after. 6 differ by more than 0.1% of pixels, the largest
 (`bug1844583.pdf`, 9%) a page barely larger than its one field, where the two
 fonts' slightly different metrics are most of the page.
+
+### Editing is checked by poppler and rendering
+
+`npm run test:edit` replaces the longest line the app would let a person edit
+on every page of every corpus file with "Plico edit", found and placed by
+`src/lib/pdf/edit-text.ts` itself and styled as the app styles it. Poppler,
+which shares no code with the engine, must find no word left on the old line
+(a word whose middle lies in the band the engine was asked to clear) unless
+the engine said it painted that page over, and must find the new text; pdf.js
+renders of source and result must match away from the line and its
+replacement, beyond a 12 pt margin.
+
+Baseline 2026-10-04: 921 files read, 492 edited, 1,168 pages
+compared, 10,225 words replaced, none refused and no failures. 426 files have
+no line to edit and 64 do not load; 6 pages were painted over for text in a
+font without widths, and on 4 pages poppler reads no words at all. Lines read
+as Helvetica 371, Times 744, Courier 56; 84 bold, 26 italic (drawn upright),
+10 of unknown colour.
+
+It found five real bugs on its way to green, each fixed: glyphs drawn with no
+width on a run's edge stayed (`bug1157493.pdf`, `issue5039.pdf`; the band now
+reaches a tenth of an em past the run), and lines whose baseline lies off the
+page were offered, refused by the engine (`issue19326.pdf`) or replaced where
+nothing shows (`freeculture.pdf`). One was its own: lopdf writes boxes back
+with fewer digits, which can round a page's rendered size by a pixel.
 
 ### No fuzzing
 

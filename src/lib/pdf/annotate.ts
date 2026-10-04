@@ -12,13 +12,73 @@ export const TEXT_PADDING = 2;
 export const NOTE_SIZE = 20;
 export const LEADING = 1.2;
 
-export type AnnotateTool = 'select' | 'markup' | 'ink' | 'shape' | 'text' | 'note' | 'image';
-export type StyleGroup = Exclude<AnnotateTool, 'select'>;
+export type AnnotateTool =
+	'select' | 'markup' | 'ink' | 'shape' | 'text' | 'note' | 'image' | 'erase';
+/// What the sidebar can show settings for: a tool's marks, or an image the
+/// page already draws, picked with Select.
+export type StyleGroup = Exclude<AnnotateTool, 'select'> | 'picture';
 export type MarkupKind = 'highlight' | 'underline' | 'strikeout' | 'squiggly';
 export type ShapeKind = 'rectangle' | 'ellipse' | 'line' | 'arrow';
 
-/// An annotation as the tool edits it.
-export type AnnotateMark = PageAnnotation & { id: number };
+/// An image the page already draws, picked to move, resize or take away:
+/// `from` is where the PDF draws it, `area` where it goes, `snapshot` how it
+/// looks, copied from the page as drawn, and `cover` the colour around it,
+/// which the preview paints where it was.
+export type Picture = {
+	kind: 'picture';
+	area: CropArea;
+	from: CropArea;
+	snapshot: string;
+	cover: number;
+	deleted: boolean;
+};
+
+/// What the overlay draws: an annotation, an area Edit erases, or an image
+/// the page draws, moved.
+export type Drawn = AnnotationMark | { kind: 'erase'; area: CropArea } | Picture;
+
+/// Text an edit replaces: the band the engine takes its glyphs out of, where
+/// its ink reached, the colour behind it, and the text box as it first
+/// matched it, to tell whether anything changed.
+export type Replaced = {
+	band: CropArea;
+	ink: CropArea;
+	cover: number;
+	original: {
+		text: string;
+		area: CropArea;
+		family: FontFamily;
+		bold: boolean;
+		size: number;
+		color: number;
+	};
+};
+
+/// An area Edit empties, painted in `color`: `matched`, the colour of the
+/// page around it, while `match` holds.
+export type Erased = {
+	kind: 'erase';
+	area: CropArea;
+	page: number;
+	color: number;
+	opacity: number;
+	comment: string;
+	match: boolean;
+	matched: number;
+};
+
+/// A mark as the tool edits it. A text box with `fit` grows sideways as it
+/// is typed in rather than wrapping; one with `replaces` stands in for text
+/// the page already has.
+export type AnnotateMark = (
+	| PageAnnotation
+	| Erased
+	| (Picture & { page: number; color: number; opacity: number; comment: string })
+) & {
+	id: number;
+	fit?: boolean;
+	replaces?: Replaced;
+};
 
 /// What a gesture on the page made, before it becomes an annotation.
 export type Geometry =
@@ -28,7 +88,7 @@ export type Geometry =
 	| { kind: 'segment'; from: PagePoint; to: PagePoint }
 	| { kind: 'point'; at: PagePoint };
 
-export function groupOf(kind: AnnotationMark['kind']): StyleGroup {
+export function groupOf(kind: Drawn['kind']): StyleGroup {
 	switch (kind) {
 		case 'highlight':
 		case 'underline':
@@ -70,7 +130,7 @@ export function imageHeight(width: number, aspect: number, page: PreviewPage) {
 
 /// What the geometry spans, as the engine places it: notes and images are
 /// pulled back onto the page there, so they are here too.
-export function extent(mark: AnnotationMark, page: PreviewPage, aspect = 1): CropArea {
+export function extent(mark: Drawn, page: PreviewPage, aspect = 1): CropArea {
 	switch (mark.kind) {
 		case 'ink':
 			return spread(mark.strokes.flat());
@@ -80,6 +140,8 @@ export function extent(mark: AnnotationMark, page: PreviewPage, aspect = 1): Cro
 		case 'rectangle':
 		case 'ellipse':
 		case 'text':
+		case 'erase':
+		case 'picture':
 			return mark.area;
 		case 'note': {
 			const [width, height] = [NOTE_SIZE / page.width, NOTE_SIZE / page.height];
@@ -101,7 +163,7 @@ export function extent(mark: AnnotationMark, page: PreviewPage, aspect = 1): Cro
 
 /// The extent with the stroke around it, which is what can be seen and
 /// picked.
-export function bounds(mark: AnnotationMark, page: PreviewPage, aspect = 1): CropArea {
+export function bounds(mark: Drawn, page: PreviewPage, aspect = 1): CropArea {
 	const [left, top, right, bottom] = extent(mark, page, aspect);
 	const reach =
 		mark.kind === 'arrow'
@@ -119,7 +181,7 @@ export function bounds(mark: AnnotationMark, page: PreviewPage, aspect = 1): Cro
 
 /// Every coordinate taken from one box to another, the way a resize or a
 /// move carries the geometry along. An axis with no size only moves.
-export function refit<T extends AnnotationMark>(mark: T, from: CropArea, to: CropArea): T {
+export function refit<T extends Drawn>(mark: T, from: CropArea, to: CropArea): T {
 	const axis = (low: number, high: number, newLow: number, newHigh: number) => {
 		const size = high - low;
 		const scale = size > 1e-9 ? (newHigh - newLow) / size : 1;
@@ -138,6 +200,8 @@ export function refit<T extends AnnotationMark>(mark: T, from: CropArea, to: Cro
 		case 'rectangle':
 		case 'ellipse':
 		case 'text':
+		case 'erase':
+		case 'picture':
 			return { ...mark, area: box(mark.area) };
 		case 'note':
 			return { ...mark, at: point(mark.at) };
@@ -149,7 +213,7 @@ export function refit<T extends AnnotationMark>(mark: T, from: CropArea, to: Cro
 }
 
 /// Moved by a fraction of the page, kept wholly on it.
-export function translate<T extends AnnotationMark>(
+export function translate<T extends Drawn>(
 	mark: T,
 	dx: number,
 	dy: number,
@@ -163,12 +227,7 @@ export function translate<T extends AnnotationMark>(
 }
 
 /// Grown or shrunk about its centre, kept on the page.
-export function scaled<T extends AnnotationMark>(
-	mark: T,
-	factor: number,
-	page: PreviewPage,
-	aspect = 1
-): T {
+export function scaled<T extends Drawn>(mark: T, factor: number, page: PreviewPage, aspect = 1): T {
 	const from = extent(mark, page, aspect);
 	const [cx, cy] = [(from[0] + from[2]) / 2, (from[1] + from[3]) / 2];
 	let [halfWidth, halfHeight] = [
@@ -265,6 +324,19 @@ export function textHeight(
 	return (
 		2 * TEXT_PADDING + capHeight(family, bold) * size + (count - 1) * LEADING * size + 0.25 * size
 	);
+}
+
+/// Where capital letters reach above the baseline, in ems.
+export const capHeightOf = (family: FontFamily, bold: boolean) => capHeight(family, bold);
+
+/// The width in points a text box needs to keep each of its lines whole.
+export function textFitWidth(text: string, family: FontFamily, bold: boolean, size: number) {
+	const widest = Math.max(
+		0,
+		...text.split('\n').map((line) => textWidth(line.replace(/\r$/, ''), family, bold, size))
+	);
+	// A little over, so rounding never wraps the last word.
+	return widest + 2 * TEXT_PADDING + 0.5;
 }
 
 const round = (value: number) => Math.round(value * 1000) / 1000;

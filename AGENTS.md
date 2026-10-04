@@ -21,6 +21,7 @@ rust/plico-engine/src/crop.rs                               crop boxes set on ex
 rust/plico-engine/src/flatten.rs                            annotation and form appearances drawn into pages
 rust/plico-engine/src/annotate.rs                           annotations with stored appearances, or drawn into pages
 rust/plico-engine/src/forms.rs                              form field values and the appearances that show them
+rust/plico-engine/src/edit.rs                               replacing a page's text, erasing areas, drawing additions in
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
 rust/plico-engine/src/redact.rs                             redaction: boxes, annotations, page pictures
 rust/plico-engine/src/redact/content.rs                     content stream rewriting that removes what lies under a box
@@ -45,6 +46,7 @@ scripts/raster-crop.mjs                                     rendered check of cr
 scripts/raster-flatten.mjs                                  rendered check of flattening
 scripts/raster-redact.mjs                                   poppler text and rendered check of redaction
 scripts/forms-check.mjs                                     pdf.js, poppler and rendered check of form filling
+scripts/edit-check.mjs                                      poppler and rendered check of replacing text
 src/lib/pdf/crop-area.ts                                    content bounds and padding, shared by preview and worker
 src/lib/pdf/signature.ts                                    drawn, typed and uploaded signatures as trimmed PNGs
 src/lib/pdf/annotations.ts                                  what Flatten will draw, read with pdf.js for the preview
@@ -52,6 +54,7 @@ src/lib/pdf/redact-text.ts                                  finding text, pickin
 src/lib/pdf/annotate.ts                                     annotation geometry and appearance, mirroring annotate.rs
 src/lib/pdf/annotate-editor.svelte.ts                       Annotate's marks, selection, undo and style
 src/lib/pdf/form-fields.ts                                  form fields read with pdf.js, and the fills sent for them
+src/lib/pdf/edit-text.ts                                    lines Edit can replace, their look, and colours sampled from the page
 testing/                                                    local corpus, gitignored
 ```
 
@@ -75,6 +78,7 @@ npm run test:raster:crop   # needs a corpus, renders cropped output
 npm run test:raster:flatten  # needs a corpus, renders flattened output
 npm run test:raster:redact   # needs a corpus and poppler, checks redacted output
 npm run test:forms    # needs a corpus and poppler, fills every corpus form
+npm run test:edit     # needs a corpus and poppler, replaces a line on every page
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
 
@@ -122,6 +126,13 @@ forms and 787 fields filled and read back, none refused, red on 4 failures in
 3 files, each explained in `ISSUES.md`. A value that reads back wrong or a text
 missing from the flattened page is the failure that matters. If your change
 moves either number, say so.
+
+`npm run test:edit` also needs poppler's `pdftotext`. Baseline 2026-10-04:
+921 files, 492 edited,
+1,168 pages compared, 10,225 words replaced, none refused, no failures; 6 pages
+painted over for text in a font without widths.
+Old text left under its band is the failure that matters. If your change moves
+any of those numbers, say so.
 
 The crop raster harness is red on 11 files, 7 of them the same lopdf load/save
 losses and 4 where pdf.js antialiases a shading edge differently once the page
@@ -194,6 +205,12 @@ Never add to `/Resources` other pages share; give the page its own shallow copy.
 Annotating edits pages in place too. Each appearance's `/BBox` is its
 annotation's `/Rect` in page space, with the content turned into the frame
 inside it, so readers draw it without fitting and it holds on turned pages.
+
+Editing takes old text out, it does not paint over it: a white box over a
+word leaves the word selectable and searchable underneath. Only where the
+engine cannot take it out does it paint over, and then it says on which
+pages. Replacing text removes glyphs only (`text_only`), never the paths and
+images behind them.
 
 New objects never take an id something already references. lopdf numbers
 them from `max_id`, which only counts objects that exist, so a dangling

@@ -13,7 +13,7 @@ use super::geometry::Matrix;
 use super::lexer::{self, Value};
 use crate::archive::{MAC_ROMAN, WIN_ANSI, standard_equivalent};
 use crate::documents::MAX_DECOMPRESSED_STREAM;
-use crate::stamps::{standard_width, win_ansi_char};
+use crate::stamps::{FontFamily, standard_family, standard_width, win_ansi_char};
 
 pub(super) struct Glyph {
     /// Where it sits in the string.
@@ -86,7 +86,23 @@ pub(super) struct Font {
     /// For a simple font, each code's glyph name.
     names: Option<Vec<Option<String>>>,
     unicode: HashMap<(usize, u32), String>,
+    pub(super) look: Look,
 }
+
+/// The standard font nearest a font, for drawing text that replaces some of
+/// what it drew.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Look {
+    pub(crate) family: FontFamily,
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+}
+
+/// Font descriptor flags (ISO 32000-1, 9.8.2).
+const FIXED_PITCH: i64 = 1;
+const SERIF: i64 = 1 << 1;
+const ITALIC: i64 = 1 << 6;
+const FORCE_BOLD: i64 = 1 << 18;
 
 /// Fonts with absurd bounding boxes would make every glyph so tall that a box
 /// covering it would never cover a quarter of it. These limits, in ems, keep
@@ -151,6 +167,7 @@ impl Font {
         {
             loaded.unicode = to_unicode(&bytes);
         }
+        loaded.look = look(document, font);
         loaded
     }
 
@@ -216,6 +233,7 @@ impl Font {
             descent: descent.clamp(-MAX_DESCENT, 0.0),
             names: Some(names),
             unicode: HashMap::new(),
+            look: PLAIN,
         }
     }
 
@@ -312,6 +330,7 @@ impl Font {
             descent: descent.clamp(-MAX_DESCENT, 0.0),
             names: None,
             unicode: HashMap::new(),
+            look: PLAIN,
         }
     }
 
@@ -626,6 +645,117 @@ fn cid_metrics(
             }
             None => return,
         }
+    }
+}
+
+const PLAIN: Look = Look {
+    family: FontFamily::Helvetica,
+    bold: false,
+    italic: false,
+};
+
+/// By the font's name first, since that is what a designer chose, then by
+/// what its descriptor says about it.
+fn look(document: &Document, font: &Dictionary) -> Look {
+    let descendant = font
+        .get(b"DescendantFonts")
+        .ok()
+        .and_then(|value| resolve(document, value))
+        .and_then(|value| value.as_array().ok())
+        .and_then(|fonts| fonts.first())
+        .and_then(|value| dictionary(document, value));
+    let descriptor = descendant
+        .unwrap_or(font)
+        .get(b"FontDescriptor")
+        .ok()
+        .and_then(|value| dictionary(document, value));
+    let read = |key: &[u8]| {
+        descriptor
+            .and_then(|descriptor| descriptor.get(key).ok())
+            .and_then(|value| number(document, value))
+    };
+    let flags = read(b"Flags").map_or(0, |flags| flags as i64);
+    let name = font
+        .get(b"BaseFont")
+        .and_then(Object::as_name)
+        .unwrap_or_default();
+    let (named, bold) = standard_family(name);
+    let lower = String::from_utf8_lossy(name).to_lowercase();
+    // A subset's tag would read as part of the name: "ABCMRX+" holds "cmr".
+    let lower = match lower.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 => rest.to_string(),
+        _ => lower,
+    };
+    let has = |parts: &[&str]| parts.iter().any(|part| lower.contains(part));
+    let says_sans = has(&["sans", "arial", "helvetica", "gothic", "grotesk"]);
+    // Free clones of Times and Courier, and TeX's own faces, which papers
+    // and anything typeset with LaTeX use; tracemonkey.pdf is in Nimbus.
+    let says_mono = has(&[
+        "nimbusmon",
+        "cmtt",
+        "lmmono",
+        "typewriter",
+        "texgyrecursor",
+        "consola",
+        "menlo",
+        "inconsolata",
+        "lucidaconsole",
+        "andale",
+        "cousine",
+        "sourcecode",
+    ]);
+    let says_serif = !says_sans
+        && has(&[
+            "nimbusrom",
+            "texgyretermes",
+            "texgyrepagella",
+            "texgyrebonum",
+            "texgyreschola",
+            "lmroman",
+            "cmr",
+            "cmbx",
+            "cmti",
+            "cmsl",
+            "palatino",
+            "baskerville",
+            "caslon",
+            "bodoni",
+            "didot",
+            "century",
+            "schoolbook",
+            "bookman",
+            "libertine",
+            "charter",
+            "utopia",
+            "tinos",
+            "constantia",
+            "merriweather",
+            "sabon",
+            "stix",
+            "goudy",
+        ]);
+    let family = if flags & FIXED_PITCH != 0 || says_mono {
+        FontFamily::Courier
+    } else if named == FontFamily::Helvetica && !says_sans && (says_serif || flags & SERIF != 0) {
+        FontFamily::Times
+    } else {
+        named
+    };
+    // URW names its weights and slants in four letters: "Medi" is bold,
+    // "ReguItal" italic. TeX's are in the name: cmbx bold, cmti italic.
+    let style = lower.rsplit('-').next().unwrap_or_default();
+    Look {
+        family,
+        bold: bold
+            || flags & FORCE_BOLD != 0
+            || read(b"FontWeight").is_some_and(|weight| weight >= 600.0)
+            || has(&["semibold", "demi", "cmbx"])
+            || style.starts_with("medi"),
+        italic: flags & ITALIC != 0
+            || has(&["italic", "oblique", "cmti", "cmsl", "slant"])
+            || style.ends_with("ital")
+            || style == "it"
+            || read(b"ItalicAngle").is_some_and(|angle| angle.abs() >= 5.0),
     }
 }
 

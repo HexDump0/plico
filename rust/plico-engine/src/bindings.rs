@@ -2,12 +2,13 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    Annotation, AnnotationKind, CompressOptions, FieldFill, FieldValue, FlattenScope, FontFamily,
-    ImagePdfOptions, Markup, OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation,
-    PdfALevel, Position, ProtectOptions, Protection, RedactOptions, Redacted, Redaction, Shape,
-    SignaturePlacement, SplitMode, StandardFont, TextStyle, Unremovable, WatermarkContent,
-    WatermarkOptions, add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes,
-    annotate_pdf_bytes, compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes,
+    Annotation, AnnotationKind, CompressOptions, EditOptions, Erasure, FieldFill, FieldValue,
+    FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OrganizeItem, PageCrop,
+    PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position, ProtectOptions, Protection,
+    RedactOptions, Redacted, Redaction, Shape, SignaturePlacement, SplitMode, StandardFont,
+    TextRemoval, TextStyle, Unremovable, WatermarkContent, WatermarkOptions,
+    add_page_numbers_bytes, add_signature_bytes, add_watermark_bytes, annotate_pdf_bytes,
+    compress_pdf_bytes_with_password, convert_to_pdfa_bytes, crop_pdf_bytes, edit_pdf_bytes,
     fill_form_bytes, flatten_pdf_bytes, images_to_pdf_bytes, merge_pdf_bytes_with_options,
     organize_pdf_items, page_texts, protect_pdf_bytes, protection_of, redact_pdf_bytes,
     split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
@@ -608,9 +609,15 @@ pub fn redact_pdf(
     Ok(result)
 }
 
-/// Each page's glyphs as `[boxes, text, ends]`: four fractions per glyph as
-/// in `redact_pdf`, the page's text, and where each glyph's text ends in it,
-/// in UTF-16 units.
+/// Each page's glyphs as `[boxes, text, ends, metrics, colors, looks,
+/// images]`: four fractions per glyph as in `redact_pdf`, the page's text,
+/// where each glyph's text ends in it in UTF-16 units, then each glyph's
+/// font size in points and baseline as a fraction of the page's height from
+/// its top, its fill as 0xRRGGBB or 0xFFFFFFFF when unknown, and its look:
+/// the nearest standard family (0 Helvetica, 1 Times, 2 Courier), plus 4 for
+/// bold, 8 for italic, 16 when it paints nothing, and 32 when it runs
+/// upright. Last, where each image is drawn, four fractions each like the
+/// glyphs' boxes.
 #[wasm_bindgen]
 pub fn redaction_text(input: &[u8], password: &str) -> Result<Array, JsValue> {
     let pages = page_texts(input, password).map_err(|error| JsValue::from_str(&error))?;
@@ -625,10 +632,47 @@ pub fn redaction_text(input: &[u8], password: &str) -> Result<Array, JsValue> {
             length += glyph.encode_utf16().count() as u32;
             ends.push(length);
         }
+        let metrics = page
+            .styles
+            .iter()
+            .flat_map(|style| [style.size, style.baseline])
+            .collect::<Vec<_>>();
+        let colors = page
+            .styles
+            .iter()
+            .map(|style| {
+                style.color.map_or(NO_FILL, |channels| {
+                    let [red, green, blue] =
+                        channels.map(|channel| (channel * 255.0).round() as u32);
+                    (red << 16) | (green << 8) | blue
+                })
+            })
+            .collect::<Vec<_>>();
+        let looks = page
+            .styles
+            .iter()
+            .map(|style| {
+                let family = match style.family {
+                    FontFamily::Helvetica => 0,
+                    FontFamily::Times => 1,
+                    FontFamily::Courier => 2,
+                };
+                family
+                    | u8::from(style.bold) << 2
+                    | u8::from(style.italic) << 3
+                    | u8::from(style.invisible) << 4
+                    | u8::from(style.upright) << 5
+            })
+            .collect::<Vec<_>>();
         let entry = Array::new();
         entry.push(&js_sys::Float32Array::from(boxes.as_slice()));
         entry.push(&JsValue::from_str(&text));
         entry.push(&js_sys::Uint32Array::from(ends.as_slice()));
+        entry.push(&js_sys::Float32Array::from(metrics.as_slice()));
+        entry.push(&js_sys::Uint32Array::from(colors.as_slice()));
+        entry.push(&Uint8Array::from(looks.as_slice()));
+        let images = page.images.iter().flatten().copied().collect::<Vec<_>>();
+        entry.push(&js_sys::Float32Array::from(images.as_slice()));
         result.push(&entry);
     }
     Ok(result)
@@ -672,6 +716,195 @@ pub fn annotate_pdf(
     remove: &[u32],
     flatten: bool,
 ) -> Result<Vec<u8>, JsValue> {
+    let annotations = annotations(
+        kinds,
+        pages,
+        colors,
+        opacities,
+        sizes,
+        fills,
+        fonts,
+        lengths,
+        points,
+        &texts,
+        &comments,
+        images,
+        image_lengths,
+    )?;
+    let remove = remove.iter().map(|&number| (number, 0)).collect::<Vec<_>>();
+    annotate_pdf_bytes(input, password, &annotations, &remove, flatten)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+/// Edits pages. Text under each of `replace_areas` (four fractions per area,
+/// on `replace_pages`) is taken out with nothing else under it; when it
+/// cannot be, its `replace_shown` area is painted in its `replace_covers`
+/// colour, 0xRRGGBB.
+/// Everything under `erase_areas` is taken out and the area painted in its
+/// `erase_fills` colour, 0xRRGGBB.
+/// Before either, each image drawn at `image_froms` (four fractions each,
+/// as `redaction_text` reports them, on `image_pages`) is drawn at
+/// `image_tos` instead, or taken away where `image_kept` is 0.
+/// The rest are annotations as `annotate_pdf` takes them, drawn into the
+/// pages afterwards. Returns `[bytes, pages, reasons]`: the pages where an
+/// area was painted over rather than taken out, with reasons numbered as
+/// `redact_pdf` numbers them.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn edit_pdf(
+    input: &[u8],
+    password: &str,
+    image_pages: &[u32],
+    image_froms: &[f32],
+    image_tos: &[f32],
+    image_kept: &[u8],
+    replace_pages: &[u32],
+    replace_areas: &[f32],
+    replace_shown: &[f32],
+    replace_covers: &[u32],
+    erase_pages: &[u32],
+    erase_areas: &[f32],
+    erase_fills: &[u32],
+    kinds: &[u8],
+    pages: &[u32],
+    colors: &[u32],
+    opacities: &[f32],
+    sizes: &[f32],
+    fills: &[u32],
+    fonts: &[u8],
+    lengths: &[u32],
+    points: &[f32],
+    texts: Vec<String>,
+    images: &[u8],
+    image_lengths: &[u32],
+) -> Result<Array, JsValue> {
+    let incomplete = || JsValue::from_str("An edit is incomplete.");
+    let (replace_areas, remainder) = replace_areas.as_chunks::<4>();
+    let (replace_shown, rest) = replace_shown.as_chunks::<4>();
+    if !remainder.is_empty()
+        || !rest.is_empty()
+        || replace_areas.len() != replace_pages.len()
+        || replace_shown.len() != replace_pages.len()
+        || replace_covers.len() != replace_pages.len()
+    {
+        return Err(incomplete());
+    }
+    let (erase_areas, remainder) = erase_areas.as_chunks::<4>();
+    if !remainder.is_empty()
+        || erase_areas.len() != erase_pages.len()
+        || erase_fills.len() != erase_pages.len()
+    {
+        return Err(incomplete());
+    }
+    let (image_froms, remainder) = image_froms.as_chunks::<4>();
+    let (image_tos, rest) = image_tos.as_chunks::<4>();
+    if !remainder.is_empty()
+        || !rest.is_empty()
+        || image_froms.len() != image_pages.len()
+        || image_tos.len() != image_pages.len()
+        || image_kept.len() != image_pages.len()
+    {
+        return Err(incomplete());
+    }
+    let moves = image_pages
+        .iter()
+        .zip(image_froms)
+        .zip(image_tos)
+        .zip(image_kept)
+        .map(|(((&page, &from), &to), &kept)| ImageMove {
+            page,
+            from,
+            to: (kept != 0).then_some(to),
+        })
+        .collect::<Vec<_>>();
+    let rgb = |color: u32| [16, 8, 0].map(|shift| ((color >> shift) & 0xFF) as f32 / 255.0);
+    let replace = replace_pages
+        .iter()
+        .zip(replace_areas)
+        .zip(replace_shown)
+        .zip(replace_covers)
+        .map(|(((&page, &area), &shown), &cover)| TextRemoval {
+            page,
+            area,
+            shown,
+            cover: rgb(cover),
+        })
+        .collect::<Vec<_>>();
+    let erase = erase_pages
+        .iter()
+        .zip(erase_areas)
+        .zip(erase_fills)
+        .map(|((&page, &area), &fill)| Erasure {
+            page,
+            area,
+            fill: rgb(fill),
+        })
+        .collect::<Vec<_>>();
+    let comments = vec![String::new(); kinds.len()];
+    let additions = annotations(
+        kinds,
+        pages,
+        colors,
+        opacities,
+        sizes,
+        fills,
+        fonts,
+        lengths,
+        points,
+        &texts,
+        &comments,
+        images,
+        image_lengths,
+    )?;
+    let edited = edit_pdf_bytes(
+        input,
+        password,
+        EditOptions {
+            images: &moves,
+            replace: &replace,
+            erase: &erase,
+            additions: &additions,
+        },
+    )
+    .map_err(|error| JsValue::from_str(&error))?;
+    let (covered, reasons): (Vec<u32>, Vec<u8>) = edited
+        .covered
+        .iter()
+        .map(|&(page, reason)| {
+            (
+                page,
+                match reason {
+                    Unremovable::Text => 0u8,
+                    Unremovable::Image => 1,
+                    Unremovable::Content => 2,
+                },
+            )
+        })
+        .unzip();
+    let result = Array::new();
+    result.push(&Uint8Array::from(edited.bytes.as_slice()));
+    result.push(&js_sys::Uint32Array::from(covered.as_slice()));
+    result.push(&Uint8Array::from(reasons.as_slice()));
+    Ok(result)
+}
+
+/// Unpacks the flat arrays `annotate_pdf` and `edit_pdf` take.
+#[allow(clippy::too_many_arguments)]
+fn annotations<'a>(
+    kinds: &[u8],
+    pages: &[u32],
+    colors: &[u32],
+    opacities: &[f32],
+    sizes: &[f32],
+    fills: &[u32],
+    fonts: &[u8],
+    lengths: &[u32],
+    points: &[f32],
+    texts: &'a [String],
+    comments: &'a [String],
+    images: &'a [u8],
+    image_lengths: &[u32],
+) -> Result<Vec<Annotation<'a>>, JsValue> {
     let count = kinds.len();
     let incomplete = || JsValue::from_str("An annotation is incomplete.");
     if [
@@ -794,7 +1027,5 @@ pub fn annotate_pdf(
             comment: &comments[index],
         });
     }
-    let remove = remove.iter().map(|&number| (number, 0)).collect::<Vec<_>>();
-    annotate_pdf_bytes(input, password, &annotations, &remove, flatten)
-        .map_err(|error| JsValue::from_str(&error))
+    Ok(annotations)
 }

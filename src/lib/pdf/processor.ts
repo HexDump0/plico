@@ -3,6 +3,7 @@ import type {
 	AnnotateOptions,
 	CompressOptions,
 	CropOptions,
+	EditOptions,
 	FillFormOptions,
 	ImagePdfOptions,
 	OrganizePage,
@@ -274,6 +275,28 @@ export async function processRedact(
 		bytes: new Uint8Array(response.bytes),
 		format: 'pdf' as const,
 		pictured: response.pictured ?? []
+	};
+}
+
+export async function processEdit(
+	file: File,
+	password: string,
+	options: EditOptions,
+	images: File[] = [],
+	signal?: AbortSignal
+) {
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const buffers = await Promise.all([file, ...images].map((source) => source.arrayBuffer()));
+	if (signal?.aborted) throw new DOMException('The operation was cancelled.', 'AbortError');
+	const response = await send(
+		{ id: ++requestId, operation: 'edit', files: buffers, passwords: [password], options },
+		signal
+	);
+	if (!('bytes' in response)) throw new Error('The PDF engine returned no file.');
+	return {
+		bytes: new Uint8Array(response.bytes),
+		format: 'pdf' as const,
+		covered: response.covered ?? []
 	};
 }
 

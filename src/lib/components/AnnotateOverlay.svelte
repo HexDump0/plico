@@ -18,6 +18,14 @@
 		type Geometry
 	} from '$lib/pdf/annotate';
 	import type { AnnotateEditor } from '$lib/pdf/annotate-editor.svelte';
+	import {
+		caretAt,
+		colorAround,
+		runAt,
+		sampleColors,
+		textRuns,
+		type TextRun
+	} from '$lib/pdf/edit-text';
 	import { wordAt } from '$lib/pdf/redact-text';
 	import { capHeight, type FontFamily } from '$lib/pdf/standard-fonts';
 	import type { PreviewPage } from '$lib/pdf/stamp-layout';
@@ -41,8 +49,8 @@
 
 	type Corner = 'nw' | 'ne' | 'se' | 'sw';
 	type Drag = { pointer: number; start: PagePoint; moved: boolean } & (
-		| { kind: 'create'; over: number | null; glyph: number }
-		| { kind: 'move'; origin: AnnotateMark; wasSelected: boolean }
+		| { kind: 'create'; over: number | null; glyph: number; run?: TextRun }
+		| { kind: 'move'; origin: AnnotateMark; wasSelected: boolean; fresh?: boolean }
 		| { kind: 'corner'; origin: AnnotateMark; corner: Corner }
 		| { kind: 'end'; origin: AnnotateMark; end: 'from' | 'to' }
 	);
@@ -86,6 +94,8 @@
 	const MIN_PIXELS = 6;
 	// How far from text a markup drag may start and still follow the text.
 	const TEXT_REACH = 0.015;
+	// How far from a line of text a click still edits it, in points.
+	const RUN_REACH = 2;
 
 	let root = $state<HTMLDivElement>();
 	let pixels = $state(0);
@@ -95,14 +105,32 @@
 	let draft = $state.raw<Geometry | null>(null);
 	// Where a click would put the picture, shown faintly under a mouse.
 	let ghost = $state.raw<PagePoint | null>(null);
+	// The line of text a click would edit, or the image Select would pick,
+	// outlined under a mouse.
+	let hovered = $state.raw<TextRun | null>(null);
+	let hoveredImage = $state.raw<CropArea | null>(null);
 
 	const tool = $derived(editor.tool);
+	const editing = $derived(editor.mode === 'edit');
+	// The page's lines of text Edit can replace, and the images it draws.
+	const runs = $derived(editing && glyphs ? textRuns(glyphs, page.width, page.height) : []);
+	const images = $derived.by(() => {
+		if (!editing || !glyphs?.images) return [];
+		const found: CropArea[] = [];
+		for (let index = 0; index + 3 < glyphs.images.length; index += 4)
+			found.push([...glyphs.images.subarray(index, index + 4)] as CropArea);
+		return found;
+	});
 	const marks = $derived(editor.marks.filter((mark) => mark.page === page.number));
 	const selected = $derived(marks.find((mark) => mark.id === editor.selected));
 	const editingMark = $derived(marks.find((mark) => mark.id === editor.editing));
 	// Pixels per point.
 	const zoom = $derived(pixels / page.width);
-	const draftMark = $derived(draft ? editor.build(page, draft) : null);
+	const draftMark = $derived(
+		draft
+			? editor.build(page, draft, draft.kind === 'area' ? matchedAt(draft.area) : undefined)
+			: null
+	);
 	const ghostMark = $derived(
 		ghost && tool === 'image' ? editor.build(page, { kind: 'point', at: ghost }) : null
 	);
@@ -126,26 +154,105 @@
 
 	/// Whether a mark answers the pointer with the current tool. Drawing
 	/// passes over everything, marking up text picks only other markup, and
-	/// the shape tools pick everything but markup.
+	/// the shape tools pick everything but markup. In Edit, each tool picks
+	/// only its own kind of mark.
 	function interactive(mark: AnnotateMark) {
 		if (!editable) return false;
 		if (mark.id === editor.selected || tool === 'select') return true;
 		const group = groupOf(mark.kind);
 		if (tool === 'ink') return false;
+		if (editing) return group === tool;
 		return tool === 'markup' ? group === 'markup' : group !== 'markup';
+	}
+
+	/// The line of text at a point, within reach of it.
+	function runNear([x, y]: PagePoint) {
+		return runAt(runs, x, y, RUN_REACH / page.width);
+	}
+
+	/// The smallest image the page draws under a point: the one in front,
+	/// most likely.
+	function imageAt([x, y]: PagePoint) {
+		let best: CropArea | null = null;
+		for (const area of images) {
+			if (x < area[0] || x > area[2] || y < area[1] || y > area[3]) continue;
+			const size = (area[2] - area[0]) * (area[3] - area[1]);
+			if (!best || size < (best[2] - best[0]) * (best[3] - best[1])) best = area;
+		}
+		return best;
+	}
+
+	/// What Select would pick at a point: text before the image under it.
+	function pickableAt(at: PagePoint) {
+		const run = runNear(at);
+		if (run) return { run };
+		const image = imageAt(at);
+		return image ? { image } : null;
+	}
+
+	const canvas = () => root?.parentElement?.querySelector('canvas');
+
+	/// The page as drawn under an area, as a picture.
+	function snapshot(area: CropArea) {
+		const source = canvas();
+		if (!source?.width) return '';
+		const [x0, y0] = [Math.floor(area[0] * source.width), Math.floor(area[1] * source.height)];
+		const [x1, y1] = [Math.ceil(area[2] * source.width), Math.ceil(area[3] * source.height)];
+		const copy = document.createElement('canvas');
+		copy.width = Math.max(1, x1 - x0);
+		copy.height = Math.max(1, y1 - y0);
+		copy
+			.getContext('2d')
+			?.drawImage(source, x0, y0, copy.width, copy.height, 0, 0, copy.width, copy.height);
+		return copy.toDataURL('image/png');
+	}
+
+	/// Picks what the page has at a point with Select and starts moving it.
+	function pickOriginal(event: PointerEvent, at: PagePoint) {
+		const found = pickableAt(at);
+		if (!found) return false;
+		let picked: { id: number; fresh: boolean };
+		if (found.run) {
+			const sampled = sampleColors(canvas(), found.run.box);
+			picked = editor.pickRun(page, found.run, sampled.background, found.run.color ?? sampled.text);
+		} else {
+			const area = found.image;
+			picked = editor.pick(page, area, snapshot(area), colorAround(canvas(), area));
+		}
+		const mark = editor.marks.find((existing) => existing.id === picked.id);
+		if (mark) grab(event, mark, 'move', picked.fresh);
+		return true;
+	}
+
+	/// The colour of the page around an area being erased.
+	function matchedAt(area: CropArea) {
+		return tool === 'erase' ? colorAround(canvas(), area) : undefined;
+	}
+
+	/// Starts replacing a line of text, matching its colour, and the colour
+	/// behind it, from the page as drawn.
+	function editRun(run: TextRun, x: number) {
+		const sampled = sampleColors(canvas(), run.box);
+		const caret = glyphs ? caretAt(glyphs, run, x) : null;
+		editor.replace(page, run, sampled.background, run.color ?? sampled.text, caret);
 	}
 
 	function begin(event: PointerEvent, over: number | null = null) {
 		if (!editable || !root || event.button !== 0) return;
 		event.stopPropagation();
-		// A click away from the text being typed only ends typing.
+		// A click away from the text being typed only ends typing, unless it
+		// lands on another line of text to edit.
 		if (editor.editing !== null) {
 			editor.finishEditing();
 			editor.select(null);
-			return;
+			const at = point(event);
+			const onward =
+				editing && ((tool === 'text' && runNear(at)) || (tool === 'select' && pickableAt(at)));
+			if (!onward) return;
 		}
 		if (tool === 'select') {
-			editor.select(null);
+			hovered = hoveredImage = null;
+			if (!(editing && pickOriginal(event, point(event)))) editor.select(null);
 			return;
 		}
 		event.preventDefault();
@@ -154,15 +261,24 @@
 		const start = point(event);
 		const glyph =
 			tool === 'markup' && glyphs ? nearestGlyph(glyphs, start[0], start[1], TEXT_REACH) : -1;
-		drag = { kind: 'create', pointer: event.pointerId, start, moved: false, over, glyph };
+		const run = editing && tool === 'text' ? runNear(start) : undefined;
+		hovered = null;
+		drag = { kind: 'create', pointer: event.pointerId, start, moved: false, over, glyph, run };
 		if (tool === 'ink') draft = { kind: 'stroke', points: [start] };
 	}
 
-	function grab(event: PointerEvent, mark: AnnotateMark, handle: 'move' | Corner | 'from' | 'to') {
+	/// `fresh` when the mark was made by this very press, which then neither
+	/// counts as a second click nor takes its own undo step to move.
+	function grab(
+		event: PointerEvent,
+		mark: AnnotateMark,
+		handle: 'move' | Corner | 'from' | 'to',
+		fresh = false
+	) {
 		if (!editable || !root || event.button !== 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		const wasSelected = editor.selected === mark.id;
+		const wasSelected = !fresh && editor.selected === mark.id;
 		if (editor.editing !== null && editor.editing !== mark.id) editor.finishEditing();
 		editor.select(mark.id);
 		if (handle === 'move' && groupOf(mark.kind) === 'markup') return;
@@ -170,7 +286,7 @@
 		const common = { pointer: event.pointerId, start: point(event), moved: false, origin: mark };
 		drag =
 			handle === 'move'
-				? { ...common, kind: 'move', wasSelected }
+				? { ...common, kind: 'move', wasSelected, fresh }
 				: handle === 'from' || handle === 'to'
 					? { ...common, kind: 'end', end: handle }
 					: { ...common, kind: 'corner', corner: handle };
@@ -199,7 +315,7 @@
 				? { kind: 'segment', from: start, to: at }
 				: { kind: 'area', area: box(start, at) };
 		}
-		if (tool === 'text') return { kind: 'area', area: box(start, at) };
+		if (tool === 'text' || tool === 'erase') return { kind: 'area', area: box(start, at) };
 		return null;
 	}
 
@@ -230,7 +346,7 @@
 		const from = extent(origin, page, aspect);
 		const [width, height] = size();
 		const [east, south] = [corner.includes('e'), corner.includes('s')];
-		if (origin.kind === 'image') {
+		if (origin.kind === 'image' || origin.kind === 'picture') {
 			// The opposite corner stays put and the shape never changes, as in Sign.
 			const ratio = (aspect * page.width) / page.height;
 			const span = from[2] - from[0];
@@ -247,6 +363,8 @@
 		}
 		const [minimumX, minimumY] = [MIN_PIXELS / width, MIN_PIXELS / height];
 		const [left, top, right, bottom] = from;
+		// A box sized by hand stops growing to fit its text.
+		if (origin.kind === 'text' && origin.fit) origin = { ...origin, fit: false };
 		return refit(origin, from, [
 			east ? left : Math.min(right - minimumX, x),
 			south ? top : Math.min(bottom - minimumY, y),
@@ -257,10 +375,15 @@
 
 	function update(event: PointerEvent) {
 		if (!drag) {
-			ghost =
-				editable && tool === 'image' && editor.image !== null && event.pointerType === 'mouse'
-					? point(event)
-					: null;
+			const mouse = editable && event.pointerType === 'mouse';
+			ghost = mouse && tool === 'image' && editor.image !== null ? point(event) : null;
+			// Only over the page itself: a mark under the pointer answers first.
+			const free = mouse && editing && editor.editing === null && event.target === root;
+			const at = free ? point(event) : null;
+			const over = at && (tool === 'text' || tool === 'select') ? runNear(at) : undefined;
+			if (over !== (hovered ?? undefined)) hovered = over ?? null;
+			const image = at && tool === 'select' && !over ? imageAt(at) : null;
+			if (image !== hoveredImage) hoveredImage = image;
 			return;
 		}
 		if (event.pointerId !== drag.pointer) return;
@@ -284,7 +407,7 @@
 		if (!drag.moved) {
 			if (Math.hypot(dx * width, dy * height) < CLICK_PIXELS) return;
 			drag.moved = true;
-			if (drag.kind !== 'create') editor.snapshot();
+			if (drag.kind !== 'create' && !(drag.kind === 'move' && drag.fresh)) editor.snapshot();
 		}
 		switch (drag.kind) {
 			case 'create':
@@ -316,16 +439,33 @@
 		const geometry = draft;
 		drag = null;
 		draft = null;
+		// An erased area that moved matches the page where it now is.
+		if (finished.kind !== 'create' && finished.moved && finished.origin.kind === 'erase') {
+			const mark = editor.marks.find((existing) => existing.id === finished.origin.id);
+			if (mark?.kind === 'erase') {
+				const matched = colorAround(canvas(), mark.area);
+				editor.change(mark.id, { ...mark, matched, color: mark.match ? matched : mark.color });
+			}
+		}
 		if (finished.kind === 'move' && !finished.moved) {
-			// A note opens on a click; a selected text box opens on another.
+			// A note opens on a click; a selected text box opens on another, or on
+			// the first with Edit's text tool.
 			const mark = finished.origin;
-			if (mark.kind === 'note' || (mark.kind === 'text' && finished.wasSelected))
+			if (
+				mark.kind === 'note' ||
+				(mark.kind === 'text' && (finished.wasSelected || (editing && tool === 'text')))
+			)
 				editor.edit(mark.id);
 			return;
 		}
 		if (finished.kind !== 'create') return;
 		if (finished.moved) {
-			if (geometry && meant(geometry, finished.glyph >= 0)) editor.create(page, geometry);
+			if (geometry && meant(geometry, finished.glyph >= 0))
+				editor.create(
+					page,
+					geometry,
+					geometry.kind === 'area' ? matchedAt(geometry.area) : undefined
+				);
 			return;
 		}
 		const [x, y] = finished.start;
@@ -351,6 +491,9 @@
 				});
 				break;
 			case 'text':
+				if (finished.run) editRun(finished.run, x);
+				else editor.create(page, { kind: 'point', at: [x, y] });
+				break;
 			case 'image':
 				editor.create(page, { kind: 'point', at: [x, y] });
 				break;
@@ -361,8 +504,10 @@
 
 	function focus(node: HTMLElement) {
 		node.focus({ preventScroll: true });
-		if (node instanceof HTMLTextAreaElement)
-			node.setSelectionRange(node.value.length, node.value.length);
+		if (node instanceof HTMLTextAreaElement) {
+			const at = Math.min(editor.caret ?? node.value.length, node.value.length);
+			node.setSelectionRange(at, at);
+		}
 	}
 
 	function label(mark: AnnotateMark) {
@@ -378,18 +523,30 @@
 			arrow: 'Arrow',
 			text: 'Text box',
 			note: 'Note',
-			image: 'Image'
+			image: 'Image',
+			erase: 'Erased area',
+			picture: 'Image in the PDF'
 		};
 		const name =
-			mark.kind === 'text' && mark.text.trim()
-				? `Text box, ${mark.text.trim().slice(0, 60)}`
-				: names[mark.kind];
+			mark.kind === 'picture' && mark.deleted
+				? 'Deleted image'
+				: mark.kind === 'text' && mark.replaces
+					? mark.text.trim()
+						? `Edited text, ${mark.text.trim().slice(0, 60)}`
+						: 'Deleted text'
+					: mark.kind === 'text' && mark.text.trim()
+						? `Text box, ${mark.text.trim().slice(0, 60)}`
+						: names[mark.kind];
 		const hints =
 			groupOf(mark.kind) === 'markup'
 				? 'Delete removes it.'
-				: mark.kind === 'text' || mark.kind === 'note'
-					? 'Enter edits it, arrow keys move it, Delete removes it.'
-					: 'Arrow keys move it, plus and minus resize it, Delete removes it.';
+				: mark.kind === 'text' && mark.replaces
+					? 'Enter edits it, arrow keys move it, Delete deletes the text.'
+					: mark.kind === 'picture'
+						? 'Arrow keys move it, plus and minus resize it, Delete deletes it.'
+						: mark.kind === 'text' || mark.kind === 'note'
+							? 'Enter edits it, arrow keys move it, Delete removes it.'
+							: 'Arrow keys move it, plus and minus resize it, Delete removes it.';
 		return `${name}. ${hints}`;
 	}
 
@@ -410,8 +567,10 @@
 		!editable
 			? ''
 			: tool === 'select'
-				? 'cursor-default'
-				: tool === 'markup'
+				? hovered || hoveredImage
+					? 'cursor-move'
+					: 'cursor-default'
+				: tool === 'markup' || (tool === 'text' && hovered)
 					? 'cursor-text'
 					: tool === 'note' || tool === 'image'
 						? editor.image === null && tool === 'image'
@@ -436,8 +595,42 @@ picked, moved and resized where the tool lets them be. -->
 	onpointermove={update}
 	onpointerup={end}
 	onpointercancel={end}
-	onpointerleave={() => (ghost = null)}
+	onpointerleave={() => {
+		ghost = null;
+		hovered = hoveredImage = null;
+	}}
 >
+	<!-- Where replaced text was, painted in what was behind it, wherever its
+	replacement has moved to. -->
+	{#each marks as mark (mark.id)}
+		{#if mark.kind === 'picture'}
+			<div
+				class="pointer-events-none absolute {mark.deleted
+					? 'outline-1 -outline-offset-1 outline-brand/35 outline-dashed'
+					: ''}"
+				style="{place(mark.from)}; background-color: {hexColor(mark.cover)}"
+			></div>
+		{:else if mark.replaces}
+			<div
+				class="pointer-events-none absolute {mark.kind === 'text' && !mark.text.trim()
+					? 'outline-1 -outline-offset-1 outline-brand/35 outline-dashed'
+					: ''}"
+				style="{place(mark.replaces.ink)}; background-color: {hexColor(mark.replaces.cover)}"
+			></div>
+		{/if}
+	{/each}
+
+	{#if (hovered || hoveredImage) && (tool === 'text' || tool === 'select') && editor.editing === null}
+		{@const area = hovered?.box ?? hoveredImage}
+		{#if area}
+			<div
+				class="pointer-events-none absolute rounded-[3px] outline-1 outline-offset-2 outline-brand/70 outline-dashed"
+				style={place(area)}
+				transition:fade={{ duration: reducedMotion ? 0 : 120 }}
+			></div>
+		{/if}
+	{/if}
+
 	{#each marks as mark (mark.id)}
 		<div
 			class="pointer-events-none absolute inset-0"
@@ -449,6 +642,13 @@ picked, moved and resized where the tool lets them be. -->
 				image={mark.kind === 'image' ? editor.images[mark.image] : undefined}
 				hideText={mark.id === editor.editing}
 			/>
+			{#if mark.kind === 'erase'}
+				<!-- White on white would leave nothing to find it by. -->
+				<div
+					class="absolute outline-1 -outline-offset-1 outline-brand/35 outline-dashed"
+					style={place(mark.area)}
+				></div>
+			{/if}
 		</div>
 	{/each}
 
@@ -511,7 +711,9 @@ picked, moved and resized where the tool lets them be. -->
 			selected.kind === 'rectangle' ||
 			selected.kind === 'ellipse' ||
 			selected.kind === 'text' ||
-			selected.kind === 'image'}
+			selected.kind === 'image' ||
+			selected.kind === 'erase' ||
+			(selected.kind === 'picture' && !selected.deleted)}
 		{@const nearTop = area[1] * ((pixels * page.height) / page.width) < 18}
 		<div
 			class="pointer-events-none absolute rounded-[2px] outline-1 outline-brand outline-dashed"
@@ -536,8 +738,12 @@ picked, moved and resized where the tool lets them be. -->
 			{/if}
 			<button
 				type="button"
-				aria-label="Remove this {group === 'markup' ? 'markup' : 'annotation'}"
-				title="Remove"
+				aria-label={selected.replaces
+					? 'Restore the original text'
+					: selected.kind === 'picture'
+						? 'Restore the original image'
+						: `Remove this ${group === 'markup' ? 'markup' : editing ? 'edit' : 'annotation'}`}
+				title={selected.replaces || selected.kind === 'picture' ? 'Restore original' : 'Remove'}
 				class="pointer-events-auto absolute right-0 flex size-6 translate-x-1/2 items-center justify-center rounded-full bg-canvas text-white shadow-lg ring-1 ring-white/15 hover:bg-brand hover:text-canvas motion-safe:transition-colors {nearTop
 					? 'bottom-0 translate-y-1/2'
 					: 'top-0 -translate-y-1/2'}"
