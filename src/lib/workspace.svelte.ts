@@ -1,9 +1,9 @@
 import { createContext } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
-import { acceptsFile, type OfficeInput } from './pdf/office-conversion';
+import { acceptsFile, formatName, type DocumentInput } from './pdf/office-conversion';
 import { useRepairedCopy } from './pdf/processor';
 
-export type AcceptedFileType = 'pdf' | 'image' | OfficeInput;
+export type AcceptedFileType = 'pdf' | 'image' | DocumentInput;
 /// `checking` keeps the unlock form in place while pdf.js tries a password;
 /// `unlocked` holds it just long enough to fade out before the preview shows.
 export type LockState = 'locked' | 'incorrect' | 'checking' | 'unlocked';
@@ -11,10 +11,22 @@ export type LockState = 'locked' | 'incorrect' | 'checking' | 'unlocked';
 export class Workspace {
 	private pdfFiles = $state<File[]>([]);
 	private imageFiles = $state<File[]>([]);
-	private officeFiles = $state<Record<OfficeInput, File[]>>({ docx: [], pptx: [], xlsx: [] });
+	private officeFiles = $state<Record<DocumentInput, File[]>>({
+		docx: [],
+		pptx: [],
+		xlsx: [],
+		html: [],
+		md: []
+	});
 	private pdfError = $state('');
 	private imageError = $state('');
-	private officeErrors = $state<Record<OfficeInput, string>>({ docx: '', pptx: '', xlsx: '' });
+	private officeErrors = $state<Record<DocumentInput, string>>({
+		docx: '',
+		pptx: '',
+		xlsx: '',
+		html: '',
+		md: ''
+	});
 	private activeType = $state<AcceptedFileType>('pdf');
 	// Memory only, like the files themselves: nothing here survives a reload.
 	private passwords = new SvelteMap<File, string>();
@@ -59,7 +71,7 @@ export class Workspace {
 		this.error =
 			allowed.length === candidates.length
 				? ''
-				: `Please choose ${accept === 'image' ? 'JPG or PNG images' : accept === 'pdf' ? 'PDFs' : `${accept.toUpperCase()} files`}. Other file types were skipped.`;
+				: `Please choose ${accept === 'image' ? 'JPG or PNG images' : accept === 'pdf' ? 'PDFs' : `${formatName(accept)} files`}. Other file types were skipped.`;
 		this.files = [
 			...this.files,
 			...allowed.filter(
@@ -146,7 +158,7 @@ export class Workspace {
 		if (this.pdfFiles.includes(file)) this.pdfFiles = this.pdfFiles.filter((item) => item !== file);
 		if (this.imageFiles.includes(file))
 			this.imageFiles = this.imageFiles.filter((item) => item !== file);
-		for (const format of ['docx', 'pptx', 'xlsx'] as const) {
+		for (const format of ['docx', 'pptx', 'xlsx', 'html', 'md'] as const) {
 			if (this.officeFiles[format].includes(file))
 				this.officeFiles[format] = this.officeFiles[format].filter((item) => item !== file);
 		}

@@ -12,7 +12,11 @@
 	let toolsDialog: ToolsDialog;
 	let moreButton = $state<HTMLButtonElement>();
 
-	const shortLabel = (label: string) => label.replace(/ PDF$/, '').replace(/^Add /, '');
+	// "Add page numbers" reads "Page numbers" on a tile.
+	const shortLabel = (label: string) => {
+		const short = label.replace(/ PDF$/, '').replace(/^Add /, '');
+		return short.charAt(0).toUpperCase() + short.slice(1);
+	};
 
 	function open(next: CatalogTool) {
 		const file = result();

@@ -1,5 +1,6 @@
 import type { FontFamily } from './standard-fonts';
 import type { StampPosition } from './stamp-layout';
+import type { TextItem } from './unicode-fonts';
 
 export type SplitOptions =
 	| { mode: 'ranges'; ranges: { from: number; to: number }[]; combine: boolean }
@@ -143,6 +144,15 @@ export type PdfWorkerRequest =
 	| { id: number; operation: 'redact-text'; files: ArrayBuffer[]; passwords: string[] }
 	| {
 			id: number;
+			operation: 'print';
+			// The images the layout draws, by index.
+			files: ArrayBuffer[];
+			layout: PrintLayout;
+			fonts: TextItem[];
+	  }
+	| { id: number; operation: 'missing-characters'; files: []; text: string; fonts: TextItem[] }
+	| {
+			id: number;
 			operation: 'edit';
 			// The PDF, then each image an addition draws.
 			files: ArrayBuffer[];
@@ -246,6 +256,7 @@ export type PdfWorkerResponse =
 			corners: number[];
 	  }
 	| { id: number; ok: true; corners: number[] }
+	| { id: number; ok: true; text: string }
 	| { id: number; ok: false; error: string };
 
 // An empty `userPassword` opens without asking; an empty `ownerPassword` is
@@ -446,4 +457,19 @@ export type OcrText = {
 	size: number;
 	angle: number;
 	space: boolean;
+};
+
+/// A document the browser laid out, as `print_pdf` takes it: each page's
+/// width and height in points, then one entry per item in the order they
+/// paint, `PRINT_STRIDE` numbers each (see `print_pdf` in `bindings.rs`).
+export type PrintLayout = {
+	pages: Float32Array;
+	kinds: Uint8Array;
+	itemPages: Uint32Array;
+	colors: Uint32Array;
+	texts: string[];
+	numbers: Float32Array;
+	headings: { level: number; title: string; page: number; top: number }[];
+	title: string;
+	language: string;
 };

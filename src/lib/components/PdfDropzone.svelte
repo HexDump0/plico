@@ -10,12 +10,7 @@
 	} from '@tabler/icons-svelte-runes';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
-	import {
-		officeOperation,
-		officeTools,
-		inputAccept,
-		acceptsFile
-	} from '$lib/pdf/office-conversion';
+	import { toolInput, formatName, inputAccept, acceptsFile } from '$lib/pdf/office-conversion';
 	let {
 		selectedTool = null,
 		emptyOnly = false,
@@ -35,13 +30,12 @@
 			selectedTool?.id === 'image-to-pdf' ||
 			selectedTool?.id === 'images-to-pdf'
 	);
-	const officeTool = $derived(officeOperation(selectedTool?.id ?? ''));
-	const inputType = $derived(
-		officeTool ? officeTools[officeTool].input : isImageTool ? 'image' : 'pdf'
-	);
+	// Office, HTML and Markdown tools each take one file of their own type.
+	const documentInput = $derived(toolInput(selectedTool?.id ?? ''));
+	const inputType = $derived(documentInput ?? (isImageTool ? 'image' : 'pdf'));
 	$effect(() => workspace.use(inputType));
 	const single = $derived(
-		!!officeTool ||
+		!!documentInput ||
 			selectedTool?.id === 'split' ||
 			selectedTool?.id === 'extract' ||
 			selectedTool?.id === 'remove' ||
@@ -216,14 +210,14 @@
 	multiple={!single}
 	class="hidden"
 	aria-label={single
-		? `Choose a ${inputType.toUpperCase()} file`
+		? `Choose a ${formatName(inputType)} file`
 		: isImageTool
 			? 'Choose image files'
 			: 'Choose PDF files'}
 	onchange={() => input.files && add(input.files)}
 />
 <section
-	aria-label={`${inputType.toUpperCase()} file selection`}
+	aria-label={`${formatName(inputType)} file selection`}
 	class="flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
 		: ''}"
@@ -259,8 +253,8 @@
 						? 'You can let go btw'
 						: isImageTool
 							? 'Drop in your images'
-							: officeTool
-								? `Drop in your ${inputType.toUpperCase()} file`
+							: documentInput
+								? `Drop in your ${formatName(inputType)} file`
 								: 'Drop in your PDFs'}</span
 				>
 			</button>

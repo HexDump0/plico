@@ -99,6 +99,14 @@ const scriptFaces: FontFace[] = [
 		regular: 'NotoSansThai-Regular.ttf',
 		bold: 'NotoSansThai-Bold.ttf',
 		covers: /\p{Script=Thai}/u
+	},
+	// Noto Sans and Serif have no arrows, maths or box shapes; the mono face
+	// does, so it stands in for them in every family.
+	{
+		group: 'symbols',
+		regular: 'NotoSansMono-Regular.ttf',
+		bold: 'NotoSansMono-Bold.ttf',
+		covers: /[\u2190-\u21ff\u2200-\u22ff\u2300-\u23ff\u2500-\u25ff]/u
 	}
 ];
 
@@ -167,11 +175,12 @@ export type TextItem = { text: string; family: FontFamily; bold: boolean };
 /// A font file to fetch and the role the engine knows it by.
 export type FontRequest = { file: string; role: string };
 
-/// The files a job's texts need; none when the standard fonts draw them all.
-export function fontRequests(items: TextItem[]): FontRequest[] {
+/// The files a job's texts need; none when the standard fonts draw them all,
+/// unless `always`, for text the browser has already laid out in these fonts.
+export function fontRequests(items: TextItem[], always = false): FontRequest[] {
 	const requests = new Map<string, string>();
 	for (const item of items) {
-		if (!needsEmbedding(item.text)) continue;
+		if (!always && !needsEmbedding(item.text)) continue;
 		for (const face of facesFor(item.text, item.family)) {
 			const bold = item.bold && face.bold !== undefined;
 			const file = bold ? face.bold! : face.regular;

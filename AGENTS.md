@@ -24,6 +24,7 @@ rust/plico-engine/src/annotate.rs                           annotations with sto
 rust/plico-engine/src/forms.rs                              form field values and the appearances that show them
 rust/plico-engine/src/edit.rs                               replacing a page's text, erasing areas, drawing additions in
 rust/plico-engine/src/ocr.rs                                recognized words written under a page as invisible text
+rust/plico-engine/src/print.rs                              new pages drawn from a layout the browser measured (HTML and Markdown to PDF)
 rust/plico-engine/src/scan.rs                               finding a sheet in a photo, straightening and cleaning it, scans as pages
 rust/plico-engine/assets/glyphless.ttf                      the empty font OCR text is written in
 rust/plico-engine/src/archive.rs                            PDF/A-2b and 3b conversion, in place
@@ -73,6 +74,8 @@ src/lib/pdf/translate-worker.ts                             Bergamot (Firefox's 
 src/lib/pdf/translator.ts                                   that worker seen from the page
 src/lib/pdf/translate-layout.ts                             paragraphs from Edit's runs, and translations set where they were
 src/lib/pdf/translate-document.svelte.ts                    Translate's state and run
+src/lib/pdf/html-print.ts                                   HTML laid out in a sandboxed frame, cut into pages and measured for print.rs
+src/lib/pdf/markdown-print.ts                               Markdown made into an HTML document with Plico's print stylesheet
 testing/                                                    local corpus, gitignored
 ```
 

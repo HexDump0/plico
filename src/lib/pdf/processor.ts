@@ -14,6 +14,7 @@ import type {
 	PdfImageOptions,
 	PdfWorkerRequest,
 	PdfWorkerResponse,
+	PrintLayout,
 	Protection,
 	ProtectOptions,
 	RedactOptions,
@@ -24,6 +25,7 @@ import type {
 	SplitOptions,
 	WatermarkOptions
 } from './types';
+import type { TextItem } from './unicode-fonts';
 
 let worker: Worker | undefined;
 let requestId = 0;
@@ -597,4 +599,27 @@ export async function processPdfToImages(
 		},
 		signal
 	);
+}
+
+/// A PDF drawn from a document the browser laid out; `images` are the
+/// pictures its items draw, by index.
+export async function processPrint(
+	layout: PrintLayout,
+	images: ArrayBuffer[],
+	fonts: TextItem[],
+	signal?: AbortSignal
+) {
+	return pdfOrZip(
+		await submit({ id: ++requestId, operation: 'print', files: images, layout, fonts }, signal)
+	);
+}
+
+/// The characters of `text` none of the fonts for `fonts` draws.
+export async function missingCharacters(text: string, fonts: TextItem[], signal?: AbortSignal) {
+	const response = await send(
+		{ id: ++requestId, operation: 'missing-characters', files: [], text, fonts },
+		signal
+	);
+	if (!('text' in response)) throw new Error('The PDF engine returned no characters.');
+	return response.text;
 }

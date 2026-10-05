@@ -214,6 +214,10 @@ Limits, each deliberate for now:
 
 - Scripts: Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Bengali, Tamil,
   Gujarati, Kannada, Malayalam, Telugu, Thai and Chinese, Japanese and Korean.
+  Arrows, maths and box shapes (U+2190 to U+25FF), which Noto Sans and Serif
+  lack, come from Noto Sans Mono in every family (the `symbols` face,
+  2026-10-05); before that, a watermark with "→" passed the page's check and
+  was refused by the engine.
   Other characters (emoji, Ethiopic, Georgian, the other Indic scripts) are refused by name ("“😀” cannot be drawn
   with the fonts Plico has."). Adding a script is a font file plus a row in
   `src/lib/pdf/unicode-fonts.ts`.
@@ -476,9 +480,10 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-five tools exist, the catalogue advertises thirty-seven
+### Thirty-seven tools exist, the catalogue advertises thirty-eight
 
-HTML to PDF and Summarize are the two left.
+Summarize is the one left. HTML to PDF and Markdown to PDF were added on
+2026-10-05 (see "What HTML and Markdown to PDF draw" below).
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -534,6 +539,47 @@ wins. JBIG2 matters especially for scanned text. Anything render-dependent
 needs a rasteriser. If you reach for one, note that mupdf is AGPL, which is a
 licensing decision to make on purpose rather than discover. pdfium and qpdf
 are permissive and both build to wasm.
+
+### What HTML and Markdown to PDF draw, and their limits
+
+The browser lays the document out and the engine draws what it measured
+(`html-print.ts`, `print.rs`, decision 0004). Markdown becomes HTML first
+(`markdown-print.ts`, marked 18). Checked by 6 engine unit tests, a Node run
+of a hand-built layout through the wasm binding rendered by poppler, and a
+Node run of the Markdown document. The browser half (the frame, columns,
+measuring) had not run anywhere when this was written; the user tests it.
+
+Deliberate limits:
+
+- Every font becomes Noto Sans, Serif or Sans Mono, by the first name in the
+  element's `font-family`. The document's own web fonts are never used: the
+  frame fetches nothing, and the engine can only draw what the browser
+  measured in the fonts it embeds.
+- Only images inside the file (`data:` URLs) are drawn. Linked images are
+  removed before layout and counted in the sidebar; relative paths have no
+  folder to resolve against. CSS background images and gradients are not
+  drawn; background colours are.
+- Characters no bundled font has (emoji, ✓, rarer scripts) are drawn as
+  pictures of what the browser drew, at 4× scale, so they are not selectable
+  text. Which characters those are comes from the engine (`missing_characters`).
+- Italic is slanted (no italic faces are bundled), as browsers fake it too.
+- Not drawn: box shadows, outlines, transforms (boxes are drawn where their
+  bounding box is), `::first-letter`/`::first-line`, counters in generated
+  content, form controls' values, video, canvas, inline SVG styled by the
+  page's CSS (SVG is drawn from its own markup at 3×).
+- Paint order is document order, backgrounds before content; `z-index` and
+  positioned stacking are ignored.
+- A page wider than the paper is laid out wider and scaled down, to half size
+  at most, as browsers print; scripts never run, so pages built by JavaScript
+  come out as their static HTML.
+- One page: up to 14,400 pt (200 in), the largest PDF page; longer documents
+  continue on further pages of that height.
+
+Untested assumptions worth checking first if something looks wrong: that
+`getClientRects()` returns one box per column for a block split across
+columns (backgrounds and borders across a page break), and that a `Range`'s
+box height is the font's ascent plus descent (baselines; `Reader.ratio`
+measures it the same way, so a different meaning would cancel out).
 
 ### Compare reads text in content order
 

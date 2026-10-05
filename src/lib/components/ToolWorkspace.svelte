@@ -29,6 +29,7 @@
 		convertToPdfA,
 		processCompressPdf,
 		processImagesToPdf,
+		processPrint,
 		processOrganizePdf,
 		processPdfToImages,
 		processPageNumbers,
@@ -57,6 +58,7 @@
 		PageGlyphs,
 		PdfImageOptions,
 		PicturedPage,
+		PdfOutput,
 		Protection,
 		RedactMark
 	} from '$lib/pdf/types';
@@ -65,9 +67,14 @@
 	import {
 		officeOperation,
 		officeTools,
+		printOperation,
+		toolInput,
+		formatName,
 		inputAccept,
 		acceptsFile
 	} from '$lib/pdf/office-conversion';
+	import { layoutHtml, readHtml, type PrintSize } from '$lib/pdf/html-print';
+	import { markdownDocument, type Typeface } from '$lib/pdf/markdown-print';
 	import { processOfficeFile } from '$lib/pdf/office-processor';
 	import PdfDropzone from './PdfDropzone.svelte';
 	import DocumentCards from './DocumentCards.svelte';
@@ -89,6 +96,8 @@
 	import PasswordInput from './PasswordInput.svelte';
 	import StampPreview from './StampPreview.svelte';
 	import PageScroller from './PageScroller.svelte';
+	import PrintSettings from './PrintSettings.svelte';
+	import PrintPreview from './PrintPreview.svelte';
 	import StampOverlay from './StampOverlay.svelte';
 	import PageNumberSettings from './PageNumberSettings.svelte';
 	import WatermarkSettings from './WatermarkSettings.svelte';
@@ -201,10 +210,9 @@
 			tool.id === 'images-to-pdf'
 	);
 	const officeTool = $derived(officeOperation(tool.id));
+	const printTool = $derived(printOperation(tool.id));
 	const isMarkdown = $derived(tool.id === 'pdf-to-markdown');
-	const inputType = $derived(
-		officeTool ? officeTools[officeTool].input : isImageToPdf || isScan ? 'image' : 'pdf'
-	);
+	const inputType = $derived(toolInput(tool.id) ?? (isImageToPdf || isScan ? 'image' : 'pdf'));
 	workspace.use(untrack(() => inputType));
 	workspace.receive();
 	const accent = $derived(toolCategoryColor(tool.id));
@@ -268,6 +276,18 @@
 	const unlockWrong = $derived(rejectedPassword !== '' && rejectedPassword === unlockPassword);
 	let organizeViewer = $state<{ addBlankPage: () => Promise<void> }>();
 	let officeStage = $state<'loading' | 'converting'>('loading');
+	let printSize = $state<PrintSize>('a4');
+	let printLandscape = $state(false);
+	let printMargin = $state(36);
+	let printTypeface = $state<Typeface>('sans');
+	// The PDF the options make: the preview, and what downloads as it is.
+	let printOutput = $state.raw<PdfOutput | null>(null);
+	let printPreview = $state.raw<File | null>(null);
+	let printSource: File | undefined;
+	let printError = $state('');
+	let printBusy = $state(false);
+	// Images the document only links to, which the PDF leaves out.
+	let printSkipped = $state(0);
 	let markdownPages = $state('');
 	let markdownImages = $state(false);
 	let markdownText = $state('');
@@ -895,6 +915,9 @@
 		JSON.stringify([pdfToImageFormat, pdfToImageDpi, pdfToImageQuality, pdfToImagePageRange])
 	);
 	const markdownSignature = $derived(JSON.stringify([markdownPages, markdownImages]));
+	const printSignature = $derived(
+		JSON.stringify([printSize, printLandscape, printMargin, printTypeface])
+	);
 	const imagePdfSignature = $derived(
 		JSON.stringify([
 			imagePdfPageSize,
@@ -1334,30 +1357,32 @@
 																	? !cropValid || processing
 																	: isStamp
 																		? !stampValid || processing
-																		: officeTool
-																			? !currentFile || processing
-																			: isMerge
-																				? workspace.files.length < 2 ||
-																					processing ||
-																					!!dragged ||
-																					!!keyboardPicked
-																				: isSplit
-																					? !splitValid || processing
-																					: isPageTool
-																						? !pageToolValid || processing
-																						: isCompress
-																							? workspace.files.length === 0 ||
-																								processing ||
-																								!!dragged ||
-																								!!keyboardPicked
-																							: isPdfToImage
-																								? !pdfToImageValid || processing
-																								: isImageToPdf
-																									? !imagePdfValid ||
-																										processing ||
-																										!!dragged ||
-																										!!keyboardPicked
-																									: true
+																		: printTool
+																			? !printOutput || printBusy || processing
+																			: officeTool
+																				? !currentFile || processing
+																				: isMerge
+																					? workspace.files.length < 2 ||
+																						processing ||
+																						!!dragged ||
+																						!!keyboardPicked
+																					: isSplit
+																						? !splitValid || processing
+																						: isPageTool
+																							? !pageToolValid || processing
+																							: isCompress
+																								? workspace.files.length === 0 ||
+																									processing ||
+																									!!dragged ||
+																									!!keyboardPicked
+																								: isPdfToImage
+																									? !pdfToImageValid || processing
+																									: isImageToPdf
+																										? !imagePdfValid ||
+																											processing ||
+																											!!dragged ||
+																											!!keyboardPicked
+																										: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -1392,25 +1417,29 @@
 																	? !cropValid
 																	: isStamp
 																		? !stampValid
-																		: officeTool
-																			? !currentFile
-																			: isMerge
-																				? workspace.files.length < 2 ||
-																					!!dragged ||
-																					!!keyboardPicked
-																				: isSplit
-																					? !splitValid
-																					: isPageTool
-																						? !pageToolValid
-																						: isCompress
-																							? workspace.files.length === 0 ||
-																								!!dragged ||
-																								!!keyboardPicked
-																							: isPdfToImage
-																								? !pdfToImageValid
-																								: isImageToPdf
-																									? !imagePdfValid || !!dragged || !!keyboardPicked
-																									: true
+																		: printTool
+																			? !printOutput || printBusy
+																			: officeTool
+																				? !currentFile
+																				: isMerge
+																					? workspace.files.length < 2 ||
+																						!!dragged ||
+																						!!keyboardPicked
+																					: isSplit
+																						? !splitValid
+																						: isPageTool
+																							? !pageToolValid
+																							: isCompress
+																								? workspace.files.length === 0 ||
+																									!!dragged ||
+																									!!keyboardPicked
+																								: isPdfToImage
+																									? !pdfToImageValid
+																									: isImageToPdf
+																										? !imagePdfValid ||
+																											!!dragged ||
+																											!!keyboardPicked
+																										: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -1422,7 +1451,7 @@
 					? `${baseName}-${translate.to.toLowerCase()}`
 					: isCompare
 						? `${compareChanged?.name.replace(/\.[^.]+$/, '') || 'document'}-compared`
-						: officeTool
+						: officeTool || printTool
 							? baseName
 							: isProtect
 								? `${baseName}-protected`
@@ -1533,6 +1562,7 @@
 		void annotate.signature;
 		void edit.signature;
 		void markdownSignature;
+		void printSignature;
 		void pdfaPart;
 		void ocrSignature;
 		void translate.signature;
@@ -2089,7 +2119,75 @@
 				if (output.format === 'md') markdownText = new TextDecoder().decode(output.bytes);
 				return output;
 			},
-			`Could not convert this ${inputType.toUpperCase()} file.`,
+			`Could not convert this ${formatName(inputType)} file.`,
+			() => downloadLink?.click()
+		);
+	}
+	// The preview is made again whenever the file or an option changes; a
+	// change while one is being made cancels it.
+	$effect(() => {
+		if (!printTool) return;
+		const file = currentFile;
+		const options = { size: printSize, landscape: printLandscape, margin: printMargin };
+		const typeface = printTypeface;
+		if (file !== untrack(() => printSource)) {
+			printSource = file;
+			printPreview = null;
+			printOutput = null;
+		}
+		if (!file) return;
+		const controller = new AbortController();
+		const delay = setTimeout(
+			() => void preparePrint(file, options, typeface, controller.signal),
+			untrack(() => printPreview) ? 150 : 0
+		);
+		return () => {
+			clearTimeout(delay);
+			controller.abort();
+		};
+	});
+	async function preparePrint(
+		file: File,
+		options: { size: PrintSize; landscape: boolean; margin: number },
+		typeface: Typeface,
+		signal: AbortSignal
+	) {
+		printBusy = true;
+		printError = '';
+		printOutput = null;
+		try {
+			const html =
+				printTool === 'markdown-to-pdf'
+					? markdownDocument(await file.text(), typeface)
+					: await readHtml(file);
+			const { layout, images, fonts, skipped } = await layoutHtml(html, options, signal);
+			if (signal.aborted) return;
+			// Not cancelled: a newer preview waits for this one rather than
+			// restarting the PDF worker.
+			const output = await processPrint(layout, images, fonts);
+			if (signal.aborted) return;
+			printOutput = output;
+			printSkipped = skipped;
+			printPreview = new File([output.bytes.slice().buffer], `${baseName}.pdf`, {
+				type: 'application/pdf'
+			});
+		} catch (cause) {
+			if (signal.aborted) return;
+			printPreview = null;
+			printError =
+				cause instanceof Error && cause.message
+					? cause.message
+					: `Could not lay out this ${formatName(inputType)} file.`;
+		} finally {
+			if (!signal.aborted) printBusy = false;
+		}
+	}
+	async function convertPrint() {
+		const output = printOutput;
+		if (!output || processing) return;
+		await job.run(
+			async () => output,
+			`Could not convert this ${formatName(inputType)} file.`,
 			() => downloadLink?.click()
 		);
 	}
@@ -2103,7 +2201,7 @@
 			workspace.files = [file];
 			workspace.error = '';
 		} else if (files.length) {
-			workspace.error = `Please choose a ${inputType.toUpperCase()} file.`;
+			workspace.error = `Please choose a ${formatName(inputType)} file.`;
 		}
 		if (input) input.value = '';
 	}
@@ -2295,7 +2393,7 @@
 					? 'px-6 pt-6 pb-2 lg:pb-6'
 					: 'px-6 pt-6 sm:px-10 lg:px-16 lg:pt-10'} {isCompare
 					? ''
-					: isSplit || isPdfToImage || isPageTool || isPagePreview
+					: isSplit || isPdfToImage || isPageTool || isPagePreview || printTool
 						? 'pb-2 lg:pb-16'
 						: 'pb-12 lg:pb-20'}"
 				ondragover={(event) => event.preventDefault()}
@@ -2317,6 +2415,7 @@
 								isPdfA ||
 								isRepair ||
 								isPagePreview ||
+								printTool ||
 								officeTool ||
 								(isPageTool && !isOrganize)
 							)
@@ -2352,7 +2451,7 @@
 							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
-							{#if isOrganize || (!isCompare && !isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isPdfA && !isRepair && !isPagePreview && !officeTool)}<input
+							{#if isOrganize || (!isCompare && !isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isPdfA && !isRepair && !isPagePreview && !officeTool && !printTool)}<input
 									bind:this={input}
 									type="file"
 									accept={inputAccept[inputType]}
@@ -2427,6 +2526,16 @@
 											}}
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}
+								</div>
+							{:else if printTool && currentFile}
+								<div class="w-full py-6 lg:pb-0">
+									<PrintPreview
+										file={currentFile}
+										preview={printPreview}
+										error={printError}
+										onload={(count) => (pageCount = count)}
+										onremove={() => workspace.remove(currentFile)}
+									/>
 								</div>
 							{:else if isPagePreview && currentFile}
 								<div class="my-auto w-full py-6 lg:py-10">
@@ -2831,6 +2940,14 @@
 						<CompressSettings bind:level={compressLevel} />
 					{:else if isPdfToImage}
 						<PdfToImageSettings bind:format={pdfToImageFormat} bind:dpi={pdfToImageDpi} />
+					{:else if printTool}
+						<PrintSettings
+							bind:size={printSize}
+							bind:landscape={printLandscape}
+							bind:margin={printMargin}
+							bind:typeface={printTypeface}
+							markdown={printTool === 'markdown-to-pdf'}
+						/>
 					{:else if isImageToPdf}
 						<ImageToPdfSettings
 							{reducedMotion}
@@ -3022,15 +3139,17 @@
 																											? void split()
 																											: isPageTool
 																												? void organize()
-																												: officeTool
-																													? void convertOffice()
-																													: isCompress
-																														? void compress()
-																														: isPdfToImage
-																															? void convertPdfToImage()
-																															: isImageToPdf
-																																? void convertImagesToPdf()
-																																: void merge()}
+																												: printTool
+																													? void convertPrint()
+																													: officeTool
+																														? void convertOffice()
+																														: isCompress
+																															? void compress()
+																															: isPdfToImage
+																																? void convertPdfToImage()
+																																: isImageToPdf
+																																	? void convertImagesToPdf()
+																																	: void merge()}
 							aria-label={result
 								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
 								: processing
@@ -3072,17 +3191,19 @@
 																											? 'Splitting PDF'
 																											: isPageTool
 																												? `${tool.label} in progress`
-																												: officeTool
-																													? officeStage === 'loading'
-																														? 'Loading converter...'
-																														: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																													: isCompress
-																														? 'Compressing PDF'
-																														: isPdfToImage
-																															? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																															: isImageToPdf
-																																? 'Converting images to PDF...'
-																																: 'Merging PDF'
+																												: printTool
+																													? 'Converting to PDF...'
+																													: officeTool
+																														? officeStage === 'loading'
+																															? 'Loading converter...'
+																															: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																														: isCompress
+																															? 'Compressing PDF'
+																															: isPdfToImage
+																																? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																																: isImageToPdf
+																																	? 'Converting images to PDF...'
+																																	: 'Merging PDF'
 									: idleLabel}
 							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
 								? 'opacity-40'
@@ -3109,47 +3230,49 @@
 													? ocrStatus
 													: isTranslate
 														? translateStatus
-														: officeTool
-															? officeStage === 'loading'
-																? 'Loading converter...'
-																: 'Converting...'
-															: isCompare
-																? 'Marking up...'
-																: isProtect
-																	? 'Protecting...'
-																	: isUnlock
-																		? 'Unlocking...'
-																		: isPdfA
-																			? 'Converting...'
-																			: isFlatten
-																				? 'Flattening...'
-																				: isForms
-																					? 'Filling...'
-																					: isEdit
-																						? 'Editing...'
-																						: isAnnotate
-																							? 'Annotating...'
-																							: isRedact
-																								? 'Redacting...'
-																								: isSign
-																									? 'Signing...'
-																									: isCrop
-																										? 'Cropping...'
-																										: isPageNumbers
-																											? 'Numbering...'
-																											: isWatermark
-																												? 'Watermarking...'
-																												: isSplit
-																													? 'Splitting...'
-																													: isPageTool
-																														? 'Processing...'
-																														: isCompress
-																															? 'Compressing...'
-																															: isPdfToImage
-																																? 'Converting...'
-																																: isImageToPdf
+														: printTool
+															? 'Converting...'
+															: officeTool
+																? officeStage === 'loading'
+																	? 'Loading converter...'
+																	: 'Converting...'
+																: isCompare
+																	? 'Marking up...'
+																	: isProtect
+																		? 'Protecting...'
+																		: isUnlock
+																			? 'Unlocking...'
+																			: isPdfA
+																				? 'Converting...'
+																				: isFlatten
+																					? 'Flattening...'
+																					: isForms
+																						? 'Filling...'
+																						: isEdit
+																							? 'Editing...'
+																							: isAnnotate
+																								? 'Annotating...'
+																								: isRedact
+																									? 'Redacting...'
+																									: isSign
+																										? 'Signing...'
+																										: isCrop
+																											? 'Cropping...'
+																											: isPageNumbers
+																												? 'Numbering...'
+																												: isWatermark
+																													? 'Watermarking...'
+																													: isSplit
+																														? 'Splitting...'
+																														: isPageTool
+																															? 'Processing...'
+																															: isCompress
+																																? 'Compressing...'
+																																: isPdfToImage
 																																	? 'Converting...'
-																																	: 'Merging...'}{:else}
+																																	: isImageToPdf
+																																		? 'Converting...'
+																																		: 'Merging...'}{:else}
 										{idleLabel}<IconArrowRight size={20} />{/if}</span
 								>
 								<span
@@ -3191,6 +3314,14 @@
 							class="text-xs leading-relaxed text-muted"
 						>
 							{translateNotice}
+						</p>{/if}
+					{#if printTool && printPreview && printSkipped > 0}<p
+							role="status"
+							transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+							class="text-xs leading-relaxed text-muted"
+						>
+							{printSkipped} linked {printSkipped === 1 ? 'image was' : 'images were'} left out. Only
+							images saved inside the file are included.
 						</p>{/if}
 					{#if isEdit && result && editNotice}<p
 							role="status"

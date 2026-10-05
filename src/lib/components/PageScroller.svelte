@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick, type Snippet } from 'svelte';
+	import { onMount, tick, untrack, type Snippet } from 'svelte';
 	import { IconArrowAutofitWidth, IconMinus, IconPlus, IconX } from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 	import type { PreviewPage } from '$lib/pdf/stamp-layout';
@@ -9,6 +9,9 @@
 
 	let {
 		file,
+		name,
+		removeLabel = 'Remove PDF',
+		keep = false,
 		current = $bindable(1),
 		overlay,
 		forms,
@@ -16,9 +19,15 @@
 		onremove
 	}: {
 		file: File;
+		/// What the header calls the file.
+		name?: string;
+		removeLabel?: string;
+		/// A new file replaces the old one once it has opened, rather than
+		/// clearing the pages while it loads, for a preview made again.
+		keep?: boolean;
 		/// The page most in view, from 1.
 		current?: number;
-		overlay: Snippet<[PreviewPage]>;
+		overlay?: Snippet<[PreviewPage]>;
 		/// Renders form fields apart from each page, handing over the canvases
 		/// pdf.js draws some of them on; see `ScrollerPage`.
 		forms?: (page: number, canvases: Map<string, HTMLCanvasElement | HTMLCanvasElement[]>) => void;
@@ -35,6 +44,7 @@
 	const FIT_LIMIT = 1100;
 
 	const workspace = getWorkspace();
+	const title = $derived(name ?? file.name);
 	const password = $derived(workspace.passwordFor(file));
 	const lock = $derived(workspace.lockState(file));
 	let pdf = $state<PDFDocumentProxy | null>(null);
@@ -54,16 +64,21 @@
 	const percent = $derived(Math.round((scale / ACTUAL) * 100));
 	const pageCount = $derived(pdf?.numPages ?? 0);
 
+	// The document on screen, while `keep` has a newer one loading.
+	let shown: PDFDocumentLoadingTask | undefined;
 	$effect(() => {
 		const source = file;
 		const secret = password;
 		let cancelled = false;
 		let loadingTask: PDFDocumentLoadingTask | undefined;
-		pdf = null;
-		sizes = [];
-		near = [];
-		current = 1;
-		status = 'Loading PDF...';
+		const swap = keep && untrack(() => pdf) !== null;
+		if (!swap) {
+			pdf = null;
+			sizes = [];
+			near = [];
+			current = 1;
+			status = 'Loading PDF...';
+		}
 		async function load() {
 			try {
 				const pdfjs = await import('pdfjs-dist');
@@ -95,9 +110,15 @@
 					width: first.width,
 					height: first.height
 				}));
+				const before = untrack(() => near);
 				sizes = measured;
-				near = measured.map((_, index) => index < 2);
+				near = measured.map((_, index) => (swap ? (before[index] ?? false) : index < 2));
 				pdf = document;
+				if (keep) {
+					const previous = shown;
+					shown = loadingTask;
+					if (previous && previous !== loadingTask) void previous.destroy();
+				}
 				status = '';
 				onload(document.numPages, document);
 				// The rest are measured in the background, a batch at a time.
@@ -114,9 +135,10 @@
 		void load();
 		return () => {
 			cancelled = true;
-			void loadingTask?.destroy();
+			if (!keep || loadingTask !== shown) void loadingTask?.destroy();
 		};
 	});
+	onMount(() => () => void shown?.destroy());
 
 	// Pages within two screens keep their pixels.
 	let observer: IntersectionObserver | undefined;
@@ -247,7 +269,7 @@
 
 <section aria-label="Preview" class="w-full space-y-6">
 	<div class="mx-auto flex w-fit max-w-full items-center gap-2 px-1">
-		<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={file.name}>{file.name}</p>
+		<p class="max-w-xl min-w-0 truncate text-sm font-semibold" {title}>{title}</p>
 		<span class="shrink-0 text-xs whitespace-nowrap text-muted"
 			>{pageCount ? `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}` : status}</span
 		>
@@ -255,8 +277,8 @@
 			type="button"
 			onclick={onremove}
 			class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas"
-			aria-label="Remove PDF"
-			title="Remove PDF"><IconX size={18} stroke={2.5} /></button
+			aria-label={removeLabel}
+			title={removeLabel}><IconX size={18} stroke={2.5} /></button
 		>
 	</div>
 
@@ -280,10 +302,10 @@
 								number={page.number}
 								{scale}
 								near={near[index] ?? false}
-								label={`Page ${page.number} of ${file.name}`}
+								label={`Page ${page.number} of ${title}`}
 								forms={forms && ((canvases) => forms(page.number, canvases))}
 							/>
-							{@render overlay(page)}
+							{@render overlay?.(page)}
 						</div>
 					{/each}
 				</div>

@@ -6478,3 +6478,377 @@ fn text_outside_winansi_is_drawn_in_embedded_subsets() {
     );
     assert!(refused.unwrap_err().contains("😀"));
 }
+
+fn print_fonts() -> Vec<crate::SuppliedFont<'static>> {
+    vec![
+        noto(
+            "helvetica",
+            Some(FontFamily::Helvetica),
+            "NotoSans-Regular.ttf",
+        ),
+        noto("times", Some(FontFamily::Times), "NotoSerif-Regular.ttf"),
+        noto("hebrew", None, "NotoSansHebrew-Regular.ttf"),
+    ]
+}
+
+fn print_text(
+    page: usize,
+    text: &str,
+    left: f32,
+    baseline: f32,
+    width: f32,
+) -> crate::PrintItem<'_> {
+    crate::PrintItem {
+        page,
+        mark: crate::PrintMark::Text {
+            text,
+            left,
+            baseline,
+            size: 12.0,
+            width,
+            spacing: 0.0,
+            family: FontFamily::Helvetica,
+            bold: false,
+            italic: false,
+            color: 0x112233,
+        },
+        opacity: 1.0,
+        clip: None,
+    }
+}
+
+fn print_document<'a>(
+    pages: &'a [crate::PrintPage],
+    items: &'a [crate::PrintItem<'a>],
+    headings: &'a [crate::Heading<'a>],
+) -> crate::PrintDocument<'a> {
+    crate::PrintDocument {
+        pages,
+        items,
+        images: &[],
+        headings,
+        title: "Report",
+        language: "en",
+    }
+}
+
+const PRINT_A4: crate::PrintPage = crate::PrintPage {
+    width: 595.28,
+    height: 841.89,
+};
+
+#[test]
+fn print_sets_latin_text_in_the_supplied_fonts_where_the_browser_put_it() {
+    let fonts = print_fonts();
+    let pages = [PRINT_A4];
+    let items = [print_text(0, "Hello world", 72.0, 100.0, 0.0)];
+    let output = crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).unwrap();
+    // Measured in Noto by the browser, so drawn in Noto, never Helvetica.
+    assert!(!page_contents(&output).concat().contains("/F0"));
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    assert_eq!(page.text.concat(), "Hello world");
+    let [left, ..] = page.boxes[0];
+    assert!((left * 595.28 - 72.0).abs() < 1.0, "{left}");
+    let baseline = page.styles[0].baseline * 841.89;
+    assert!((baseline - 100.0).abs() < 0.5, "{baseline}");
+    assert!((page.styles[0].size - 12.0).abs() < 0.01);
+
+    // Fitted to the measured width, which a slightly different shaper or
+    // letter spacing would otherwise miss.
+    let natural = page.boxes.last().unwrap()[2] * 595.28 - 72.0;
+    let items = [print_text(0, "Hello world", 72.0, 100.0, natural * 1.05)];
+    let output = crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).unwrap();
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    let right = page.boxes.last().unwrap()[2] * 595.28;
+    assert!((right - (72.0 + natural * 1.05)).abs() < 0.5, "{right}");
+
+    // A width far from the text's own is a measuring mistake, not a fit.
+    let items = [print_text(0, "Hello world", 72.0, 100.0, natural * 3.0)];
+    let output = crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).unwrap();
+    let page = glyph_texts(&output, "").unwrap().remove(0);
+    let right = page.boxes.last().unwrap()[2] * 595.28;
+    assert!((right - (72.0 + natural)).abs() < 0.5, "{right}");
+}
+
+#[test]
+fn print_draws_boxes_clips_and_transparency() {
+    let fonts = print_fonts();
+    let pages = [PRINT_A4];
+    let area = crate::Area {
+        left: 50.0,
+        top: 60.0,
+        width: 200.0,
+        height: 100.0,
+    };
+    let items = [
+        crate::PrintItem {
+            page: 0,
+            mark: crate::PrintMark::Fill {
+                area,
+                radii: [8.0, 8.0, 8.0, 8.0],
+                color: 0xF5F5F5,
+            },
+            opacity: 1.0,
+            clip: None,
+        },
+        crate::PrintItem {
+            page: 0,
+            mark: crate::PrintMark::Outline {
+                area,
+                radii: [0.0; 4],
+                width: 1.0,
+                dash: crate::Dash::Dashed,
+                color: 0xCCCCCC,
+            },
+            opacity: 0.5,
+            clip: Some(crate::Clip {
+                area,
+                radii: [0.0; 4],
+            }),
+        },
+        crate::PrintItem {
+            page: 0,
+            mark: crate::PrintMark::Line {
+                from: (50.0, 200.0),
+                to: (250.0, 200.0),
+                width: 2.0,
+                dash: crate::Dash::Dotted,
+                color: 0xFF0000,
+            },
+            opacity: 1.0,
+            clip: None,
+        },
+    ];
+    let output = crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).unwrap();
+    let content = page_contents(&output).concat();
+    // Rounded corners are curves; the clipped outline sits inside q/Q with a
+    // half-transparent state and a dash three widths long.
+    assert!(content.contains(" c\n"), "{content}");
+    assert!(content.contains("0.9608 0.9608 0.9608 rg"), "{content}");
+    assert!(content.contains("50 681.89 200 100 re\nW n"), "{content}");
+    assert!(content.contains("/G500 gs"), "{content}");
+    assert!(content.contains("[3 3] 0 d"), "{content}");
+    assert!(content.contains("[0 4] 0 d 1 J"), "{content}");
+    assert!(content.contains("50 641.89 m 250 641.89 l S"), "{content}");
+    let document = Document::load_mem(&output).unwrap();
+    let page = document.get_pages()[&1];
+    let resources = document
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let state = resources
+        .get(b"ExtGState")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"G500")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let state = document.get_dictionary(state).unwrap();
+    assert_eq!(state.get(b"ca").unwrap().as_float().unwrap(), 0.5);
+}
+
+#[test]
+fn print_links_and_bookmarks_find_their_pages() {
+    let fonts = print_fonts();
+    let pages = [PRINT_A4, PRINT_A4];
+    let area = crate::Area {
+        left: 72.0,
+        top: 90.0,
+        width: 100.0,
+        height: 14.0,
+    };
+    let items = [
+        print_text(0, "Intro", 72.0, 100.0, 0.0),
+        crate::PrintItem {
+            page: 0,
+            mark: crate::PrintMark::Link {
+                area,
+                target: crate::LinkTarget::Uri("https://example.com/a?b=c"),
+            },
+            opacity: 1.0,
+            clip: None,
+        },
+        crate::PrintItem {
+            page: 0,
+            mark: crate::PrintMark::Link {
+                area,
+                target: crate::LinkTarget::Page {
+                    page: 1,
+                    top: 41.89,
+                },
+            },
+            opacity: 1.0,
+            clip: None,
+        },
+        print_text(1, "שלום עולם", 72.0, 60.0, 0.0),
+    ];
+    let headings = [
+        crate::Heading {
+            level: 1,
+            title: "Intro",
+            page: 0,
+            top: 80.0,
+        },
+        crate::Heading {
+            level: 2,
+            title: "Détails",
+            page: 0,
+            top: 300.0,
+        },
+        crate::Heading {
+            level: 3,
+            title: "Deeper",
+            page: 1,
+            top: 10.0,
+        },
+        crate::Heading {
+            level: 1,
+            title: "Next",
+            page: 1,
+            top: 400.0,
+        },
+    ];
+    let output =
+        crate::print_pdf_bytes(&print_document(&pages, &items, &headings), &fonts).unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let page_ids = document.get_pages();
+    let annotations = document
+        .get_dictionary(page_ids[&1])
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|link| {
+            document
+                .get_dictionary(link.as_reference().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(annotations.len(), 2);
+    let uri = annotations[0].get(b"A").unwrap().as_dict().unwrap();
+    assert_eq!(
+        uri.get(b"URI").unwrap().as_str().unwrap(),
+        b"https://example.com/a?b=c"
+    );
+    let rect = annotations[0].get(b"Rect").unwrap().as_array().unwrap();
+    assert_eq!(rect[1].as_float().unwrap(), 841.89 - 104.0);
+    let dest = annotations[1].get(b"Dest").unwrap().as_array().unwrap();
+    assert_eq!(dest[0].as_reference().unwrap(), page_ids[&2]);
+    assert_eq!(dest[3].as_float().unwrap(), 800.0);
+
+    let catalog = document.catalog().unwrap();
+    assert_eq!(catalog.get(b"Lang").unwrap().as_str().unwrap(), b"en");
+    let outlines = document
+        .get_dictionary(catalog.get(b"Outlines").unwrap().as_reference().unwrap())
+        .unwrap();
+    assert_eq!(outlines.get(b"Count").unwrap().as_i64().unwrap(), 4);
+    let entry = |id: &Object| document.get_dictionary(id.as_reference().unwrap()).unwrap();
+    let intro = entry(outlines.get(b"First").unwrap());
+    let next = entry(intro.get(b"Next").unwrap());
+    assert_eq!(next.get(b"Title").unwrap().as_str().unwrap(), b"Next");
+    assert!(!next.has(b"First"));
+    // Intro holds Détails, which holds Deeper.
+    assert_eq!(intro.get(b"Count").unwrap().as_i64().unwrap(), 2);
+    let details = entry(intro.get(b"First").unwrap());
+    assert_eq!(
+        details.get(b"Title").unwrap().as_str().unwrap(),
+        b"\xFE\xFF\x00D\x00\xE9\x00t\x00a\x00i\x00l\x00s"
+    );
+    let deeper = entry(details.get(b"First").unwrap());
+    let dest = deeper.get(b"Dest").unwrap().as_array().unwrap();
+    assert_eq!(dest[0].as_reference().unwrap(), page_ids[&2]);
+    assert_eq!(outlines.get(b"Last").unwrap(), intro.get(b"Next").unwrap());
+
+    let second = glyph_texts(&output, "").unwrap().remove(1);
+    assert_eq!(second.text.concat().replace(' ', ""), "םלועםולש");
+}
+
+#[test]
+fn print_refuses_a_layout_that_points_nowhere() {
+    let fonts = print_fonts();
+    let pages = [PRINT_A4];
+    let items = [print_text(1, "Lost", 72.0, 100.0, 0.0)];
+    assert!(crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).is_err());
+    let items = [crate::PrintItem {
+        page: 0,
+        mark: crate::PrintMark::Image {
+            area: crate::Area {
+                left: 0.0,
+                top: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            image: 0,
+        },
+        opacity: 1.0,
+        clip: None,
+    }];
+    assert!(crate::print_pdf_bytes(&print_document(&pages, &items, &[]), &fonts).is_err());
+    assert!(crate::print_pdf_bytes(&print_document(&[], &[], &[]), &fonts).is_err());
+}
+
+#[test]
+fn print_lists_the_characters_no_supplied_font_draws() {
+    let fonts = print_fonts();
+    let typesetter = crate::text::Typesetter::new(&fonts).unwrap();
+    assert_eq!(typesetter.missing("Hi → שלום 😀 é\u{301} ✓✓\n"), "→😀✓");
+}
+
+#[test]
+fn print_draws_images_once_and_leaves_out_ones_it_cannot_read() {
+    let fonts = print_fonts();
+    let pages = [PRINT_A4, PRINT_A4];
+    let png = rgba_png();
+    let images: [&[u8]; 2] = [&png, b"\xFF\xD8 not really a jpeg"];
+    let image = |page: usize, index: usize| crate::PrintItem {
+        page,
+        mark: crate::PrintMark::Image {
+            area: crate::Area {
+                left: 72.0,
+                top: 72.0,
+                width: 100.0,
+                height: 50.0,
+            },
+            image: index,
+        },
+        opacity: 1.0,
+        clip: None,
+    };
+    let items = [image(0, 0), image(1, 0), image(1, 1)];
+    let output = crate::print_pdf_bytes(
+        &crate::PrintDocument {
+            images: &images,
+            ..print_document(&pages, &items, &[])
+        },
+        &fonts,
+    )
+    .unwrap();
+    let document = Document::load_mem(&output).unwrap();
+    let pictures = document
+        .objects
+        .values()
+        .filter(|object| {
+            object.as_stream().is_ok_and(|stream| {
+                stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image")
+                    && !stream.dict.has(b"Decode")
+            })
+        })
+        .count();
+    // One picture shared by both pages; the unreadable one draws nothing.
+    assert_eq!(pictures, 1);
+    let contents = page_contents(&output);
+    assert!(
+        contents[0].contains("100 0 0 50 72 719.89 cm\n/Im0 Do"),
+        "{}",
+        contents[0]
+    );
+    assert!(contents[1].contains("/Im0 Do"));
+    assert!(!contents[1].contains("/Im1"));
+}

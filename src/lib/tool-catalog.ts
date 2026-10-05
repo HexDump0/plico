@@ -76,7 +76,9 @@ const supportedToolIds = new Set([
 	'ocr',
 	'scan-to-pdf',
 	'repair',
-	'translate'
+	'translate',
+	'html-to-pdf',
+	'markdown-to-pdf'
 ]);
 
 export function isToolSupported(id: string): boolean {
@@ -156,6 +158,7 @@ export const toolColumns = [
 				{ id: 'powerpoint-to-pdf', label: 'PowerPoint to PDF', icon: IconPresentation },
 				{ id: 'excel-to-pdf', label: 'Excel to PDF', icon: IconTable },
 				{ id: 'html-to-pdf', label: 'HTML to PDF', icon: IconHtml },
+				{ id: 'markdown-to-pdf', label: 'Markdown to PDF', icon: IconMarkdown },
 				{ id: 'scan-to-pdf', label: 'Scan to PDF', icon: IconScan }
 			]
 		},
@@ -227,6 +230,8 @@ const nextToolIds: Record<string, string[]> = {
 	'excel-to-pdf': ['compress', 'merge', 'sign'],
 	compare: ['annotate', 'compress', 'protect'],
 	repair: ['compress', 'merge', 'organize'],
+	'html-to-pdf': ['compress', 'merge', 'page-numbers'],
+	'markdown-to-pdf': ['page-numbers', 'merge', 'protect'],
 	translate: ['compress', 'sign', 'merge']
 };
 

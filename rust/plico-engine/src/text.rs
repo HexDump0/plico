@@ -88,6 +88,19 @@ pub(crate) struct Glyph {
 }
 
 impl SetLine {
+    /// Adds `extra` thousandths of the font size after each character, as
+    /// CSS letter-spacing does. Standard lines are left as they are.
+    pub(crate) fn space_letters(&mut self, extra: f32) {
+        let SetLine::Shaped { glyphs, width } = self else {
+            return;
+        };
+        for glyph in glyphs.iter_mut() {
+            let characters = glyph.text.chars().filter(|&c| !follows(c)).count();
+            glyph.advance += extra * characters as f32;
+        }
+        *width = glyphs.iter().map(|glyph| glyph.advance).sum();
+    }
+
     /// Points at `size`.
     pub(crate) fn width(&self, size: f32) -> f32 {
         match self {
@@ -150,6 +163,21 @@ impl<'a> Typesetter<'a> {
         if drawn().all(|character| win_ansi(character).is_some()) {
             return Ok(Setting::Standard { family, bold });
         }
+        let setting = self.embedded(family, bold);
+        if let Setting::Embedded { fonts, .. } = &setting
+            && let Some(missing) = drawn().find(|&character| {
+                !follows(character) && !fonts.iter().any(|&index| self.has(index, character))
+            })
+        {
+            return Err(missing);
+        }
+        Ok(setting)
+    }
+
+    /// Text set in the supplied fonts whatever it says, for text something
+    /// else has already measured in them. A character none of them has is
+    /// drawn as the first font's missing glyph.
+    pub(crate) fn embedded(&self, family: FontFamily, bold: bool) -> Setting {
         let mut groups = Vec::<(&str, Vec<usize>)>::new();
         for (index, font) in self.fonts.iter().enumerate() {
             if font.supplied.family.is_some_and(|only| only != family) {
@@ -173,11 +201,6 @@ impl<'a> Typesetter<'a> {
                     .unwrap_or(members[0])
             })
             .collect::<Vec<_>>();
-        if let Some(missing) = drawn().find(|&character| {
-            !follows(character) && !fonts.iter().any(|&index| self.has(index, character))
-        }) {
-            return Err(missing);
-        }
         // The family's own font sets the line, whatever script fills it.
         let cap = fonts
             .iter()
@@ -185,7 +208,26 @@ impl<'a> Typesetter<'a> {
             .find(|font| font.supplied.family == Some(family))
             .and_then(|font| Some(font.face.capital_height()? as f32 * font.scale / 1000.0))
             .unwrap_or_else(|| cap_height(family, bold));
-        Ok(Setting::Embedded { fonts, cap })
+        Setting::Embedded { fonts, cap }
+    }
+
+    /// The characters of `text` no supplied font has, each once, in order.
+    /// Spaces, controls and marks are left out: they draw nothing alone.
+    pub(crate) fn missing(&self, text: &str) -> String {
+        let mut missing = String::new();
+        for character in text.chars() {
+            if character.is_whitespace()
+                || character.is_control()
+                || follows(character)
+                || missing.contains(character)
+            {
+                continue;
+            }
+            if !(0..self.fonts.len()).any(|font| self.has(font, character)) {
+                missing.push(character);
+            }
+        }
+        missing
     }
 
     fn has(&self, font: usize, character: char) -> bool {
@@ -195,6 +237,12 @@ impl<'a> Typesetter<'a> {
     /// `text`, one line with no breaks, shaped as `setting` says.
     pub(crate) fn line(&self, text: &str, setting: &Setting) -> SetLine {
         let fonts = match setting {
+            Setting::Embedded { fonts, .. } if fonts.is_empty() => {
+                return SetLine::Shaped {
+                    glyphs: Vec::new(),
+                    width: 0.0,
+                };
+            }
             Setting::Standard { family, bold } => {
                 let codes = text.chars().filter_map(win_ansi).collect::<Vec<_>>();
                 let width = text_width(*family, *bold, &codes);

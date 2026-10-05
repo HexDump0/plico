@@ -1,19 +1,21 @@
 use js_sys::{Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
+use crate::text::Typesetter;
 use crate::{
-    Annotation, AnnotationKind, CompressOptions, Condition, EditOptions, Erasure, FieldFill,
-    FieldValue, FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord,
-    OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
+    Annotation, AnnotationKind, Area, Clip, CompressOptions, Condition, Dash, EditOptions, Erasure,
+    FieldFill, FieldValue, FlattenScope, FontFamily, Heading, ImageMove, ImagePdfOptions,
+    LinkTarget, Markup, OcrPage, OcrWord, OrganizeItem, PageCrop, PageImage, PageNumberOptions,
+    PageOrientation, PdfALevel, Position, PrintDocument, PrintItem, PrintMark, PrintPage,
     ProtectOptions, Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape,
     SignaturePlacement, SplitMode, StandardFont, SuppliedFont, TextAlign, TextRemoval, TextStyle,
     Unremovable, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
     add_text_layer_bytes, add_watermark_bytes, annotate_pdf_bytes,
     compress_pdf_bytes_with_password, condition_of, convert_to_pdfa_bytes, crop_pdf_bytes,
     edit_pdf_bytes, fill_form_bytes, find_page, flatten_pdf_bytes, images_to_pdf_bytes,
-    merge_pdf_bytes_with_options, organize_pdf_items, page_texts, protect_pdf_bytes, protection_of,
-    redact_pdf_bytes, scan_image_bytes, scans_to_pdf_bytes, split_pdf_bytes_with_password,
-    standard_fonts_for_pdfa, unlock_pdf_bytes,
+    merge_pdf_bytes_with_options, organize_pdf_items, page_texts, print_pdf_bytes,
+    protect_pdf_bytes, protection_of, redact_pdf_bytes, scan_image_bytes, scans_to_pdf_bytes,
+    split_pdf_bytes_with_password, standard_fonts_for_pdfa, unlock_pdf_bytes,
 };
 
 /// Marks an organize instruction as a blank page; its page number then indexes
@@ -1223,4 +1225,195 @@ fn annotations<'a>(
         });
     }
     Ok(annotations)
+}
+
+/// Numbers per item in `print_pdf`'s `numbers`.
+const PRINT_STRIDE: usize = 20;
+
+#[wasm_bindgen]
+/// Draws new pages from a layout the browser measured (see `print.rs`).
+/// `pages` holds each page's width and height in points. Each item has a
+/// kind (0 fill, 1 line, 2 outline, 3 text, 4 image, 5 link), a page from 0,
+/// a colour, a text (what a text item says, a link's address) and twenty
+/// numbers: 0 to 3 its box (left, top, width, height; a line's two ends; a
+/// text's left, baseline, size and measured width), 4 to 7 corner radii, 8
+/// opacity, 9 to 12 a clip box (NaN for none) and 13 to 16 its radii, 17 a
+/// stroke width, a text's letter spacing or the top a link goes to, 18 a
+/// dash (0 solid, 1 dashed, 2 dotted) or a text's family (0 sans, 1 serif,
+/// 2 mono), and 19 a text's style (1 bold, 2 italic), an image's index or
+/// the page a link goes to (NaN for an address). Images arrive end to end in
+/// `images`, cut by `image_lengths`; headings become bookmarks.
+#[allow(clippy::too_many_arguments)]
+pub fn print_pdf(
+    pages: &[f32],
+    kinds: &[u8],
+    item_pages: &[u32],
+    colors: &[u32],
+    texts: Vec<String>,
+    numbers: &[f32],
+    images: &[u8],
+    image_lengths: &[u32],
+    heading_levels: &[u8],
+    heading_pages: &[u32],
+    heading_tops: &[f32],
+    heading_titles: Vec<String>,
+    title: &str,
+    language: &str,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
+) -> Result<Vec<u8>, JsValue> {
+    let incomplete = || JsValue::from_str("The document's layout could not be read.");
+    let (sizes, remainder) = pages.as_chunks::<2>();
+    let count = kinds.len();
+    if !remainder.is_empty()
+        || item_pages.len() != count
+        || colors.len() != count
+        || texts.len() != count
+        || numbers.len() != count * PRINT_STRIDE
+        || heading_pages.len() != heading_levels.len()
+        || heading_tops.len() != heading_levels.len()
+        || heading_titles.len() != heading_levels.len()
+    {
+        return Err(incomplete());
+    }
+    let page_sizes = sizes
+        .iter()
+        .map(|&[width, height]| PrintPage { width, height })
+        .collect::<Vec<_>>();
+    let mut cut = Vec::with_capacity(image_lengths.len());
+    let mut offset = 0usize;
+    for &length in image_lengths {
+        let end = offset
+            .checked_add(length as usize)
+            .filter(|&end| end <= images.len())
+            .ok_or_else(incomplete)?;
+        cut.push(&images[offset..end]);
+        offset = end;
+    }
+    let area = |values: &[f32]| Area {
+        left: values[0],
+        top: values[1],
+        width: values[2],
+        height: values[3],
+    };
+    let radii = |values: &[f32]| [values[0], values[1], values[2], values[3]];
+    let dash = |value: f32| match value as u8 {
+        1 => Dash::Dashed,
+        2 => Dash::Dotted,
+        _ => Dash::Solid,
+    };
+    let mut items = Vec::with_capacity(count);
+    for (index, values) in numbers.as_chunks::<PRINT_STRIDE>().0.iter().enumerate() {
+        let color = colors[index];
+        let geometry = &values[0..4];
+        let mark = match kinds[index] {
+            0 => PrintMark::Fill {
+                area: area(geometry),
+                radii: radii(&values[4..8]),
+                color,
+            },
+            1 => PrintMark::Line {
+                from: (values[0], values[1]),
+                to: (values[2], values[3]),
+                width: values[17],
+                dash: dash(values[18]),
+                color,
+            },
+            2 => PrintMark::Outline {
+                area: area(geometry),
+                radii: radii(&values[4..8]),
+                width: values[17],
+                dash: dash(values[18]),
+                color,
+            },
+            3 => {
+                let style = values[19] as u8;
+                PrintMark::Text {
+                    text: &texts[index],
+                    left: values[0],
+                    baseline: values[1],
+                    size: values[2],
+                    width: values[3],
+                    spacing: values[17],
+                    family: match values[18] as u8 {
+                        1 => FontFamily::Times,
+                        2 => FontFamily::Courier,
+                        _ => FontFamily::Helvetica,
+                    },
+                    bold: style & 1 != 0,
+                    italic: style & 2 != 0,
+                    color,
+                }
+            }
+            4 => PrintMark::Image {
+                area: area(geometry),
+                image: if values[19] >= 0.0 {
+                    values[19] as usize
+                } else {
+                    usize::MAX
+                },
+            },
+            5 => PrintMark::Link {
+                area: area(geometry),
+                target: if values[19].is_nan() {
+                    LinkTarget::Uri(&texts[index])
+                } else if values[19] >= 0.0 {
+                    LinkTarget::Page {
+                        page: values[19] as usize,
+                        top: values[17],
+                    }
+                } else {
+                    return Err(incomplete());
+                },
+            },
+            _ => return Err(incomplete()),
+        };
+        let clip = (!values[9].is_nan()).then(|| Clip {
+            area: area(&values[9..13]),
+            radii: radii(&values[13..17]),
+        });
+        items.push(PrintItem {
+            page: item_pages[index] as usize,
+            mark,
+            opacity: values[8],
+            clip,
+        });
+    }
+    let headings = heading_levels
+        .iter()
+        .enumerate()
+        .map(|(index, &level)| Heading {
+            level,
+            title: &heading_titles[index],
+            page: heading_pages[index] as usize,
+            top: heading_tops[index],
+        })
+        .collect::<Vec<_>>();
+    let fonts = supplied_fonts(font_programs, font_lengths, &font_roles)?;
+    print_pdf_bytes(
+        &PrintDocument {
+            pages: &page_sizes,
+            items: &items,
+            images: &cut,
+            headings: &headings,
+            title,
+            language,
+        },
+        &fonts,
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+/// The characters of `text` none of the fonts has, each once.
+pub fn missing_characters(
+    text: &str,
+    font_programs: &[u8],
+    font_lengths: &[u32],
+    font_roles: Vec<String>,
+) -> Result<String, JsValue> {
+    let fonts = supplied_fonts(font_programs, font_lengths, &font_roles)?;
+    let typesetter = Typesetter::new(&fonts).map_err(|error| JsValue::from_str(&error))?;
+    Ok(typesetter.missing(text))
 }

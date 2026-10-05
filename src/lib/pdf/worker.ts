@@ -27,7 +27,9 @@ import init, {
 	redaction_text,
 	find_scan_page,
 	scan_image,
-	scans_to_pdf
+	scans_to_pdf,
+	print_pdf,
+	missing_characters
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
 import { fontRequests, type TextItem } from './unicode-fonts';
@@ -55,8 +57,8 @@ const fontFiles = new Map<string, Promise<Uint8Array>>();
 
 /// The fonts `items` need, back to back as the engine takes them. Each file
 /// is fetched once per worker.
-async function suppliedFonts(items: TextItem[]) {
-	const requests = fontRequests(items);
+async function suppliedFonts(items: TextItem[], always = false) {
+	const requests = fontRequests(items, always);
 	const programs = await Promise.all(
 		requests.map(({ file }) => {
 			let program = fontFiles.get(file);
@@ -725,6 +727,47 @@ self.onmessage = async (event: MessageEvent<PdfWorkerRequest>) => {
 				id,
 				await exportPdfImages(request.files[0], request.passwords[0] ?? '', request.options)
 			);
+			return;
+		}
+		if (request.operation === 'print') {
+			const { layout } = request;
+			const fonts = await suppliedFonts(request.fonts, true);
+			const lengths = Uint32Array.from(request.files, (file) => file.byteLength);
+			const images = new Uint8Array(lengths.reduce((total, length) => total + length, 0));
+			let offset = 0;
+			for (const file of request.files) {
+				images.set(new Uint8Array(file), offset);
+				offset += file.byteLength;
+			}
+			postOutput(id, {
+				format: 'pdf',
+				bytes: print_pdf(
+					layout.pages,
+					layout.kinds,
+					layout.itemPages,
+					layout.colors,
+					layout.texts,
+					layout.numbers,
+					images,
+					lengths,
+					Uint8Array.from(layout.headings, (heading) => heading.level),
+					Uint32Array.from(layout.headings, (heading) => heading.page),
+					Float32Array.from(layout.headings, (heading) => heading.top),
+					layout.headings.map((heading) => heading.title),
+					layout.title,
+					layout.language,
+					fonts.bytes,
+					fonts.lengths,
+					fonts.roles
+				)
+			});
+			return;
+		}
+		if (request.operation === 'missing-characters') {
+			const fonts = await suppliedFonts(request.fonts, true);
+			const text = missing_characters(request.text, fonts.bytes, fonts.lengths, fonts.roles);
+			const response: PdfWorkerResponse = { id, ok: true, text };
+			self.postMessage(response);
 			return;
 		}
 		if (request.operation === 'protection') {

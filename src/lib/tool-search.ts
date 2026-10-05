@@ -20,7 +20,8 @@ const keywords: Record<string, string> = {
 	'word-to-pdf': 'document',
 	'powerpoint-to-pdf': 'slides presentation',
 	'excel-to-pdf': 'spreadsheet sheet',
-	'html-to-pdf': 'website webpage',
+	'html-to-pdf': 'website webpage web page save print',
+	'markdown-to-pdf': 'md readme notes document print',
 	'scan-to-pdf': 'scanner camera',
 	repair: 'fix damaged broken corrupt recover',
 	ocr: 'recognize scanned text searchable recognition',
@@ -47,7 +48,9 @@ const formats: Record<string, string> = {
 	ppt: 'powerpoint',
 	pptx: 'powerpoint',
 	xls: 'excel',
-	xlsx: 'excel'
+	xlsx: 'excel',
+	htm: 'html',
+	md: 'markdown'
 };
 const formatNames = new Set([
 	'pdf',
