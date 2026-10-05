@@ -109,6 +109,7 @@ const annotationKind = {
 } as const;
 
 const NO_FILL = 0xffffffff;
+const alignIndex = { left: 0, center: 1, right: 2 } as const;
 
 /// Annotations as the flat arrays `annotate_pdf` and `edit_pdf` take, with
 /// `files[1 + image]` holding each image.
@@ -156,7 +157,11 @@ function packAnnotations(files: ArrayBuffer[], annotations: PageAnnotation[]) {
 			'fill' in annotation && annotation.fill !== null ? annotation.fill : NO_FILL
 		),
 		fonts: Uint8Array.from(annotations, (annotation) =>
-			annotation.kind === 'text' ? fontIndex[annotation.family] * 2 + Number(annotation.bold) : 0
+			annotation.kind === 'text'
+				? fontIndex[annotation.family] * 2 +
+					Number(annotation.bold) +
+					alignIndex[annotation.align ?? 'left'] * 8
+				: 0
 		),
 		lengths: Uint32Array.from(points, (values) => values.length),
 		points: Float32Array.from(points.flat()),

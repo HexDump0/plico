@@ -4669,6 +4669,7 @@ fn text_boxes_wrap_in_the_box_and_keep_their_font() {
                     bold: false,
                     size: 10.0,
                     fill: Some([1.0, 1.0, 0.0]),
+                    align: crate::TextAlign::Left,
                 },
             )
         }],
@@ -4700,6 +4701,7 @@ fn text_boxes_wrap_in_the_box_and_keep_their_font() {
                 bold: false,
                 size: 10.0,
                 fill: None,
+                align: crate::TextAlign::Left,
             },
         )],
         &[],
@@ -4710,12 +4712,71 @@ fn text_boxes_wrap_in_the_box_and_keep_their_font() {
 }
 
 #[test]
+fn text_box_lines_sit_where_their_alignment_puts_them() {
+    use crate::{AnnotationKind, FontFamily, TextAlign};
+    let input = pdf_with_pages(&[("", square_page(200))], dictionary! {});
+    // 100 points wide, 96 inside the padding; Courier at 10 points is 6
+    // points a letter, so "Hello" is 30 wide and leaves 66.
+    let drawn = |align| {
+        let output = crate::annotate_pdf_bytes(
+            &input,
+            "",
+            &[annotation(
+                1,
+                AnnotationKind::Text {
+                    area: [0.0, 0.0, 0.5, 0.5],
+                    text: "Hello",
+                    family: FontFamily::Courier,
+                    bold: false,
+                    size: 10.0,
+                    fill: None,
+                    align,
+                },
+            )],
+            &[],
+            false,
+            &[],
+        )
+        .unwrap();
+        page_annotations(&output, 1)[0].1.clone()
+    };
+    assert!(
+        drawn(TextAlign::Left).contains("1 0 0 1 2 "),
+        "{}",
+        drawn(TextAlign::Left)
+    );
+    assert!(
+        drawn(TextAlign::Center).contains("1 0 0 1 35 "),
+        "{}",
+        drawn(TextAlign::Center)
+    );
+    assert!(
+        drawn(TextAlign::Right).contains("1 0 0 1 68 "),
+        "{}",
+        drawn(TextAlign::Right)
+    );
+}
+
+#[test]
 fn wraps_long_words_inside_and_keeps_line_breaks() {
     // Courier at 10 points: every character 6 points wide.
     let lines = crate::annotate::wrap("ab\n\nabcdefgh", 30.0, |line| {
         line.chars().count() as f32 * 6.0
     });
     assert_eq!(lines, ["ab", "", "abcde", "fgh"]);
+}
+
+#[test]
+fn text_without_spaces_fills_the_line_it_starts_on() {
+    // Every character 6 points wide, so five fit in 30.
+    let measure = |line: &str| line.chars().count() as f32 * 6.0;
+    let lines = crate::annotate::wrap("ab 日本語の文章です", 30.0, measure);
+    assert_eq!(lines, ["ab 日本", "語の文章で", "す"]);
+    // Words with spaces still break before a long word.
+    assert_eq!(
+        crate::annotate::wrap("ab abcdefgh", 30.0, measure),
+        ["ab", "abcde", "fgh"]
+    );
 }
 
 #[test]
@@ -5645,6 +5706,7 @@ fn editing_replaces_text_and_leaves_what_is_behind_it() {
             bold: false,
             size: 20.0,
             fill: None,
+            align: crate::TextAlign::Left,
         },
     );
     let edited = edit(&input, &[world([0.0, 0.0, 1.0])], &[], &[replacement]);

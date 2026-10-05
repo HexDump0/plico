@@ -6,8 +6,8 @@ use crate::{
     FieldValue, FlattenScope, FontFamily, ImageMove, ImagePdfOptions, Markup, OcrPage, OcrWord,
     OrganizeItem, PageCrop, PageImage, PageNumberOptions, PageOrientation, PdfALevel, Position,
     ProtectOptions, Protection, RedactOptions, Redacted, Redaction, ScanLook, ScanPaper, Shape,
-    SignaturePlacement, SplitMode, StandardFont, SuppliedFont, TextRemoval, TextStyle, Unremovable,
-    WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
+    SignaturePlacement, SplitMode, StandardFont, SuppliedFont, TextAlign, TextRemoval, TextStyle,
+    Unremovable, WatermarkContent, WatermarkOptions, add_page_numbers_bytes, add_signature_bytes,
     add_text_layer_bytes, add_watermark_bytes, annotate_pdf_bytes,
     compress_pdf_bytes_with_password, condition_of, convert_to_pdfa_bytes, crop_pdf_bytes,
     edit_pdf_bytes, fill_form_bytes, find_page, flatten_pdf_bytes, images_to_pdf_bytes,
@@ -870,7 +870,8 @@ const NO_FILL: u32 = u32::MAX;
 /// left, top and width for images. `colors` and `fills` are 0xRRGGBB, with
 /// `fills` 0xFFFFFFFF for none. `sizes` is the stroke width in points, or the
 /// font size for text. `fonts` is the family (0 Helvetica, 1 Times, 2
-/// Courier) times two, plus one for bold. `texts` and `comments` hold one
+/// Courier) times two, plus one for bold, plus eight for centred text or
+/// sixteen for text set against the right edge. `texts` and `comments` hold one
 /// string each. Images take their bytes from `images` in order, split by
 /// `image_lengths`. `remove` deletes the annotations already in the file with
 /// those object numbers (pdf.js reports them as "41R"). `flatten` draws
@@ -1181,7 +1182,7 @@ fn annotations<'a>(
             9 => AnnotationKind::Text {
                 area: quad(values)?,
                 text: &texts[index],
-                family: match fonts[index] / 2 {
+                family: match fonts[index] / 2 % 4 {
                     1 => FontFamily::Times,
                     2 => FontFamily::Courier,
                     _ => FontFamily::Helvetica,
@@ -1189,6 +1190,11 @@ fn annotations<'a>(
                 bold: fonts[index] % 2 == 1,
                 size,
                 fill,
+                align: match fonts[index] / 8 {
+                    1 => TextAlign::Center,
+                    2 => TextAlign::Right,
+                    _ => TextAlign::Left,
+                },
             },
             10 => AnnotationKind::Note { at: pair(values)? },
             11 => {

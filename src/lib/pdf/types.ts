@@ -327,9 +327,13 @@ export type AnnotationMark =
 			bold: boolean;
 			size: number;
 			fill: number | null;
+			/// Left when absent.
+			align?: TextAlign;
 	  }
 	| { kind: 'note'; at: PagePoint }
 	| { kind: 'image'; place: [number, number, number]; image: number };
+
+export type TextAlign = 'left' | 'center' | 'right';
 
 /// `color` is 0xRRGGBB; `comment` is what readers show when it is opened.
 export type PageAnnotation = AnnotationMark & {

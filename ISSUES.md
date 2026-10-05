@@ -213,8 +213,8 @@ corpus harness has been run with embedded fonts.
 Limits, each deliberate for now:
 
 - Scripts: Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Bengali, Tamil,
-  Thai and Chinese, Japanese and Korean. Other characters (emoji, Ethiopic,
-  Georgian, the other Indic scripts) are refused by name ("“😀” cannot be drawn
+  Gujarati, Kannada, Malayalam, Telugu, Thai and Chinese, Japanese and Korean.
+  Other characters (emoji, Ethiopic, Georgian, the other Indic scripts) are refused by name ("“😀” cannot be drawn
   with the fonts Plico has."). Adding a script is a font file plus a row in
   `src/lib/pdf/unicode-fonts.ts`.
 - The CJK fonts come in one weight, so bold CJK text is drawn regular. Nothing
@@ -476,9 +476,9 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-four tools exist, the catalogue advertises thirty-seven
+### Thirty-five tools exist, the catalogue advertises thirty-seven
 
-HTML to PDF, Summarize and Translate are the three left.
+HTML to PDF and Summarize are the two left.
 
 Tools that exist in the catalogue but have no implementation yet now render a
 "not available yet" panel in the workspace, rather than falling through to the
@@ -546,6 +546,42 @@ on the main thread: about 0.4 s for 60,000 words with 300 edits, measured on
 generated pages. Past 2,000 edits in one stretch of unmatched lines, that
 stretch is reported as one change. Removing the original moves the changed
 PDF into the Original side, since sides are positions in the file list.
+
+### What Translate PDF changes, and its limits
+
+Translate is Edit underneath (old glyphs out with `text_only`, the translation
+drawn as a text box), so Edit's limits apply, plus its own. Checked headless
+only: `tracemonkey.pdf` page 1 into French, Japanese and Arabic through the
+real layout code, Bergamot and `edit_pdf`, rendered with poppler (21 blocks,
+none overflowing, none painted over). Not run in a browser, and no corpus
+harness exists for it yet.
+
+- Paragraphs are guessed from line spacing, edges, size and weight
+  (`continues` in `translate-layout.ts`). A first-line indent or a line that
+  stops short after a full stop starts a paragraph; a bullet always does.
+  Two-column text with uneven gutters, drop caps and text in tables whose
+  cells line up can be joined or split wrongly.
+- Each paragraph is drawn in one style: its commonest family and weight.
+  Bold run-in labels, italics and links inside it are lost; first-line
+  indents are not kept. Bergamot keeps `<b>` through translation (verified),
+  so sending lines as HTML would fix the first.
+- A translation is set at the original size while it fits the room down to
+  the next thing below it, then shrinks to at most 60%; past that it overlaps.
+  Paragraphs of one style on a page share the size most of them fit at
+  (`setPage`), so body text stays even.
+- Lines without two letters (page numbers, figures, formulas) and addresses,
+  links and code-like tokens are left as they are. Superscript markers are
+  separate runs and stay where the original words were.
+- Wrapping Chinese, Japanese and Thai fills each line (the engine's `wrap`
+  now breaks them anywhere, for every text box); a Latin word inside them can
+  break mid-word. Thai breaks between any characters, not at syllables.
+- Simplified and Traditional Chinese share the CJK font choice in
+  `unicode-fonts.ts`, which follows the browser's language, not the target;
+  Traditional output on a non-Taiwanese browser uses the Simplified subset
+  and may refuse characters it lacks.
+- Scanned pages have no text and are skipped with a note pointing to OCR PDF.
+- Models come from a third-party mirror (decision 0003); if it goes away,
+  every language needs a new host.
 
 ### What OCR reads, and its limits
 

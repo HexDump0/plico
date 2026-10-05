@@ -68,6 +68,11 @@ scripts/ocr-check.mjs                                       Tesseract and popple
 src/lib/pdf/opened-pdf.svelte.ts                            a PDF opened with pdf.js and its page sizes, for Compare's two views
 src/lib/pdf/repair.ts                                       MuPDF repair of files the engine cannot open, and what it fixed
 src/lib/pdf/repair-worker.ts                                MuPDF (mupdf.js, AGPL) in its own worker, loaded only to repair
+src/lib/pdf/translate.svelte.ts                             Translate's languages, pinned models, their download and store, language detection
+src/lib/pdf/translate-worker.ts                             Bergamot (Firefox's translation engine, MPL-2.0) in its own worker
+src/lib/pdf/translator.ts                                   that worker seen from the page
+src/lib/pdf/translate-layout.ts                             paragraphs from Edit's runs, and translations set where they were
+src/lib/pdf/translate-document.svelte.ts                    Translate's state and run
 testing/                                                    local corpus, gitignored
 ```
 

@@ -18,7 +18,8 @@ mod tests;
 mod text;
 
 pub use annotate::{
-    Annotation, AnnotationKind, Markup, NOTE_SIZE, Shape, TEXT_PADDING, annotate_pdf_bytes,
+    Annotation, AnnotationKind, Markup, NOTE_SIZE, Shape, TEXT_PADDING, TextAlign,
+    annotate_pdf_bytes,
 };
 pub use archive::{PdfALevel, StandardFont, convert_to_pdfa_bytes, standard_fonts_for_pdfa};
 pub use bindings::{

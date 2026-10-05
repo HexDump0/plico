@@ -42,6 +42,9 @@ function pdfjsAssets(): Plugin {
 }
 
 export default defineConfig({
+	// Every worker is started with `type: 'module'`, and MuPDF's uses top-level
+	// await, which the default iife format cannot hold.
+	worker: { format: 'es' },
 	ssr: {
 		// GSAP's ESM entry is not loadable through Vercel's CommonJS function wrapper.
 		// Bundle it into the server output so Vite normalizes the module format.

@@ -71,6 +71,30 @@ const scriptFaces: FontFace[] = [
 		covers: /\p{Script=Tamil}/u
 	},
 	{
+		group: 'gujarati',
+		regular: 'NotoSansGujarati-Regular.ttf',
+		bold: 'NotoSansGujarati-Bold.ttf',
+		covers: /\p{Script=Gujarati}/u
+	},
+	{
+		group: 'kannada',
+		regular: 'NotoSansKannada-Regular.ttf',
+		bold: 'NotoSansKannada-Bold.ttf',
+		covers: /\p{Script=Kannada}/u
+	},
+	{
+		group: 'malayalam',
+		regular: 'NotoSansMalayalam-Regular.ttf',
+		bold: 'NotoSansMalayalam-Bold.ttf',
+		covers: /\p{Script=Malayalam}/u
+	},
+	{
+		group: 'telugu',
+		regular: 'NotoSansTelugu-Regular.ttf',
+		bold: 'NotoSansTelugu-Bold.ttf',
+		covers: /\p{Script=Telugu}/u
+	},
+	{
 		group: 'thai',
 		regular: 'NotoSansThai-Regular.ttf',
 		bold: 'NotoSansThai-Bold.ttf',

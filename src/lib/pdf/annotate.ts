@@ -245,8 +245,14 @@ export function scaled<T extends Drawn>(mark: T, factor: number, page: PreviewPa
 	return refit(mark, from, [cx - halfWidth, cy - halfHeight, cx + halfWidth, cy + halfHeight]);
 }
 
+// Scripts written without spaces between words, as `breaks_anywhere` in
+// `annotate.rs` lists them.
+const breaksAnywhere =
+	/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/u;
+
 /// Lines as `annotate::wrap` breaks them: greedily at spaces, and inside a
-/// word only when the word alone is wider than the box.
+/// word only when the word alone is wider than the box, or when it is
+/// Chinese, Japanese or Thai, which fills the line it starts on.
 export function wrapText(
 	text: string,
 	family: FontFamily,
@@ -266,8 +272,11 @@ export function wrapText(
 				continue;
 			}
 			if (line) {
-				lines.push(line);
-				line = '';
+				if (breaksAnywhere.test(word) && measure(`${line} `) < width) line += ' ';
+				else {
+					lines.push(line);
+					line = '';
+				}
 			}
 			for (const character of word) {
 				const longer = line + character;
@@ -304,12 +313,10 @@ export function textLines(mark: Extract<AnnotationMark, { kind: 'text' }>, page:
 	for (const [index, text] of lines.entries()) {
 		const y = first + index * LEADING * mark.size;
 		if (y > bottom + mark.size) break;
-		placed.push({
-			text,
-			x: left + TEXT_PADDING,
-			y,
-			width: textWidth(text, mark.family, mark.bold, mark.size, embedded)
-		});
+		const width = textWidth(text, mark.family, mark.bold, mark.size, embedded);
+		const room = right - left - 2 * TEXT_PADDING - width;
+		const shift = mark.align === 'center' ? room / 2 : mark.align === 'right' ? room : 0;
+		placed.push({ text, x: left + TEXT_PADDING + shift, y, width });
 	}
 	return placed;
 }

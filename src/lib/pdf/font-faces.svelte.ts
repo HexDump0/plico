@@ -50,3 +50,14 @@ export function embeddedWidth(text: string, family: FontFamily, bold: boolean, s
 	context.font = `${bold ? 700 : 400} 100px ${stack}`;
 	return (context.measureText(text).width / 100) * size;
 }
+
+/// Resolves once the fonts that draw `text` in `family` have loaded, so it
+/// measures as the engine will draw it. Laying out before then measures in
+/// whatever font the browser falls back to.
+export async function fontsLoaded(text: string, family: FontFamily) {
+	if (typeof document === 'undefined') return;
+	const stack = fontStack(text, family);
+	await Promise.all(
+		['400', '700'].map((weight) => document.fonts.load(`${weight} 16px ${stack}`, text))
+	).catch(() => {});
+}

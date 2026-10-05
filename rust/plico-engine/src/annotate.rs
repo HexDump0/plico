@@ -41,6 +41,15 @@ pub enum Shape {
     Ellipse,
 }
 
+/// Where a text box's lines sit across it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
 /// Points and boxes are fractions of the visible page's width and height,
 /// measured from its top left as the reader sees it. Boxes are left, top,
 /// right and bottom.
@@ -73,6 +82,7 @@ pub enum AnnotationKind<'a> {
         bold: bool,
         size: f32,
         fill: Option<[f32; 3]>,
+        align: TextAlign,
     },
     /// A note icon with its top left at `at`; the comment is the note.
     Note { at: [f32; 2] },
@@ -657,6 +667,7 @@ impl Sketch {
                 bold,
                 size,
                 fill,
+                align,
             } => {
                 entries.set("Subtype", "FreeText");
                 entries.remove(b"C");
@@ -714,8 +725,15 @@ impl Sketch {
                     }
                     let line = typesetter.line(line, &setting);
                     typesetter.name_fonts(document, &line, &mut fonts);
-                    let shown =
-                        typesetter.show(&line, *size, [1.0, 0.0, 0.0, 1.0, x0 + TEXT_PADDING, y]);
+                    let room = x1 - x0 - 2.0 * TEXT_PADDING - line.width(*size);
+                    let x = x0
+                        + TEXT_PADDING
+                        + match align {
+                            TextAlign::Left => 0.0,
+                            TextAlign::Center => room / 2.0,
+                            TextAlign::Right => room,
+                        };
+                    let shown = typesetter.show(&line, *size, [1.0, 0.0, 0.0, 1.0, x, y]);
                     self.push(&shown);
                 }
                 resources.set("Font", fonts);
@@ -860,8 +878,10 @@ pub(crate) fn ellipse(x0: f32, y0: f32, x1: f32, y1: f32) -> String {
 }
 
 /// Lines no wider than `width` points by `measure`, broken at spaces where
-/// possible and inside a word only when the word alone is too wide. Line
-/// breaks in the text are kept; the spaces a break replaces are not drawn.
+/// possible and inside a word only when the word alone is too wide, or when
+/// it is Chinese, Japanese or Thai, which break between any two characters
+/// and so fill the line they start on. Line breaks in the text are kept; the
+/// spaces a break replaces are not drawn.
 pub(crate) fn wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
@@ -877,7 +897,11 @@ pub(crate) fn wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec
                 continue;
             }
             if !line.is_empty() {
-                lines.push(std::mem::take(&mut line));
+                if word.chars().any(breaks_anywhere) && measure(&format!("{line} ")) < width {
+                    line.push(' ');
+                } else {
+                    lines.push(std::mem::take(&mut line));
+                }
             }
             for character in word.chars() {
                 line.push(character);
@@ -890,6 +914,15 @@ pub(crate) fn wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec
         lines.push(line);
     }
     lines
+}
+
+/// Characters of scripts written without spaces between words.
+fn breaks_anywhere(character: char) -> bool {
+    matches!(character as u32,
+        0x0E00..=0x0E7F // Thai
+        | 0x3040..=0x30FF // kana
+        | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF // Han
+        | 0x3000..=0x303F | 0xFF00..=0xFFEF) // their punctuation and full widths
 }
 
 fn add_to_page(document: &mut Document, page_id: ObjectId, id: ObjectId) -> Result<(), String> {

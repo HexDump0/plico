@@ -75,7 +75,8 @@ const supportedToolIds = new Set([
 	'compare',
 	'ocr',
 	'scan-to-pdf',
-	'repair'
+	'repair',
+	'translate'
 ]);
 
 export function isToolSupported(id: string): boolean {
@@ -225,7 +226,8 @@ const nextToolIds: Record<string, string[]> = {
 	'powerpoint-to-pdf': ['compress', 'merge', 'sign'],
 	'excel-to-pdf': ['compress', 'merge', 'sign'],
 	compare: ['annotate', 'compress', 'protect'],
-	repair: ['compress', 'merge', 'organize']
+	repair: ['compress', 'merge', 'organize'],
+	translate: ['compress', 'sign', 'merge']
 };
 
 export function nextTools(id: string) {
