@@ -5,6 +5,7 @@
 
 import glue from '@mkljczk/bergamot-translator/worker/bergamot-translator-worker.js?raw';
 import wasmUrl from '@mkljczk/bergamot-translator/worker/bergamot-translator-worker.wasm?url';
+import { offlineReason } from '$lib/offline-files';
 
 export type TranslateWorkerRequest =
 	| {
@@ -100,7 +101,10 @@ function start() {
 				);
 				WebAssembly.instantiateStreaming(fetch(wasmUrl), { ...imports, wasm_gemm: linked })
 					.then(({ instance }) => accept(instance))
-					.catch(reject);
+					.catch((cause) => {
+						const reason = offlineReason('Translation');
+						reject(reason ? new Error(reason) : cause);
+					});
 				return {};
 			},
 			onRuntimeInitialized: () => resolve(scope.Module as Bergamot)

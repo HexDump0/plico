@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { WasmPdfDocument } from 'pdf-oxide-wasm/web';
+import { offlineReason } from '$lib/offline-files';
 import type { MarkdownOptions, OfficeOperation } from './office-conversion';
 
 type Request = {
@@ -41,7 +42,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
 	try {
 		// This import keeps the large Office engine out of the ordinary PDF worker.
 		const { default: init, WasmPdfDocument } = await import('pdf-oxide-wasm/web');
-		await init();
+		await init().catch((cause) => {
+			throw new Error(offlineReason('The Office converter') ?? String(cause), { cause });
+		});
 		self.postMessage({ id, ready: true } satisfies Response);
 		const data = new Uint8Array(input);
 		const document =

@@ -76,6 +76,10 @@ src/lib/pdf/translate-layout.ts                             paragraphs from Edit
 src/lib/pdf/translate-document.svelte.ts                    Translate's state and run
 src/lib/pdf/html-print.ts                                   HTML laid out in a sandboxed frame, cut into pages and measured for print.rs
 src/lib/pdf/markdown-print.ts                               Markdown made into an HTML document with Plico's print stylesheet
+src/service-worker.ts                                       saves the core on install, serves saved files first, keeps packs
+src/lib/offline-files.ts                                    the offline manifest's shape and helpers, shared by the worker and page
+src/lib/offline.svelte.ts                                   registration, what is saved, pack downloads, installing as an app
+src/lib/components/OfflineDialog.svelte                     the Offline panel the header opens
 testing/                                                    local corpus, gitignored
 ```
 
@@ -103,6 +107,11 @@ npm run test:edit     # needs a corpus and poppler, replaces a line on every pag
 npm run test:ocr      # needs a corpus and poppler, slow and memory-heavy, reads scans
 npm run test:pdfa     # needs a corpus and veraPDF, validates PDF/A output
 ```
+
+Offline support only exists in a production build: the service worker is
+registered there and nowhere else, and `_app/offline.json` is written by the
+build. Test it with `npm run build && npm run preview`; under `npm run dev`
+the header has no Offline button.
 
 First-time requirements beyond node: `rustup target add wasm32-unknown-unknown`,
 `brew install wasm-pack`, and Xcode Command Line Tools. The wasm target links

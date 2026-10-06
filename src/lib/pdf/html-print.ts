@@ -9,6 +9,7 @@
 // break rules, and each column becomes a page. Text, boxes, borders, images
 // and links are then read off the layout in paint order.
 
+import { CJK_OFFLINE } from '$lib/offline-files';
 import { missingCharacters } from './processor';
 import type { FontFamily } from './standard-fonts';
 import type { PrintLayout } from './types';
@@ -537,10 +538,17 @@ const fontFiles = new Map<string, Promise<ArrayBuffer>>();
 function fontFile(file: string) {
 	let data = fontFiles.get(file);
 	if (!data) {
-		data = fetch(`/fonts/${file}`).then((response) => {
-			if (!response.ok) throw new Error('The fonts for this document could not be loaded.');
-			return response.arrayBuffer();
-		});
+		data = fetch(`/fonts/${file}`).then(
+			(response) => {
+				if (!response.ok) throw new Error('The fonts for this document could not be loaded.');
+				return response.arrayBuffer();
+			},
+			() => {
+				throw new Error(
+					navigator.onLine ? 'The fonts for this document could not be loaded.' : CJK_OFFLINE
+				);
+			}
+		);
 		data.catch(() => fontFiles.delete(file));
 		fontFiles.set(file, data);
 	}

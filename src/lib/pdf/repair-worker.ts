@@ -1,5 +1,7 @@
 /// <reference lib="webworker" />
 
+import { offlineReason } from '$lib/offline-files';
+
 type Request = { id: number; input: ArrayBuffer; password: string };
 export type RepairResponse =
 	| { id: number; ok: true; bytes: ArrayBuffer; pages: number; warnings: string[] }
@@ -13,7 +15,10 @@ self.onmessage = async (event: MessageEvent<Request>) => {
 	const warnings = new Set<string>();
 	try {
 		// MuPDF is a ~10 MB module, so it loads only once a file needs repairing.
-		const mupdf = await import('mupdf');
+		const mupdf = await import('mupdf').catch((cause) => {
+			const reason = offlineReason('The repair engine');
+			throw reason ? new Refusal(reason) : cause;
+		});
 		mupdf.setLog({
 			warning: (message) => warnings.size < 500 && warnings.add(message),
 			error: (message) => warnings.size < 500 && warnings.add(message)

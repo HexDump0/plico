@@ -306,18 +306,20 @@ export class TranslateModels {
 	private pending: Record<string, Promise<void> | undefined> = {};
 
 	/// Resolves once the pair's model is stored, fetching it first when it is not.
+	/// The store is asked each time, since the Offline panel can remove it.
 	ensure(pair: string): Promise<void> {
-		if (this.states.get(pair)?.status === 'ready') return Promise.resolve();
 		return (this.pending[pair] ??= this.load(pair).finally(() => delete this.pending[pair]));
 	}
 
 	private async load(pair: string) {
-		this.states.set(pair, { status: 'loading', received: 0, total: modelBytes([pair]) });
 		try {
 			const stored = await withStore('readonly', (store) => store.count(modelKey(pair))).catch(
 				() => 0
 			);
-			if (!stored) await this.download(pair);
+			if (!stored) {
+				this.states.set(pair, { status: 'loading', received: 0, total: modelBytes([pair]) });
+				await this.download(pair);
+			}
 			this.states.set(pair, { status: 'ready' });
 		} catch (cause) {
 			this.states.set(pair, { status: 'failed' });
@@ -370,4 +372,31 @@ export class TranslateModels {
 		if (!stored) throw new Error('The translation model is missing.');
 		return stored;
 	}
+}
+
+/// What a pair translates between, for the Offline panel. Some models serve
+/// several languages, Bosnian, Croatian and Serbian one.
+export function pairName(pair: string) {
+	const [from, to] = pair.startsWith('en-') ? ['en', pair.slice(3)] : [pair.slice(0, -3), 'en'];
+	const names = (side: 'from' | 'to', code: string) =>
+		TRANSLATE_LANGUAGES.filter((language) => language[side] === code)
+			.map((language) => language.name)
+			.join(', ') || code;
+	return `${names('from', from)} → ${names('to', to)}`;
+}
+
+/// The pairs stored on this device and their sizes.
+export async function storedPairs() {
+	const keys = await withStore('readonly', (store) => store.getAllKeys()).catch(() => []);
+	const revision = modelKey('');
+	return keys
+		.map(String)
+		.filter((key) => key.endsWith(revision))
+		.map((key) => key.slice(0, -revision.length))
+		.filter((pair) => MODEL_SIZES[pair])
+		.map((pair) => ({ pair, size: modelBytes([pair]) }));
+}
+
+export function removePair(pair: string) {
+	return withStore('readwrite', (store) => store.delete(modelKey(pair)));
 }

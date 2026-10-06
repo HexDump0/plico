@@ -10,6 +10,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import type { CropArea, OcrText } from './types';
 import { closeOcrDocument, ocrPageImage } from './processor';
+import { offlineReason } from '$lib/offline-files';
 
 export const OCR_LANGUAGES = [
 	['afr', 'Afrikaans'],
@@ -176,18 +177,20 @@ export class OcrModels {
 	private pending: Record<string, Promise<void> | undefined> = {};
 
 	/// Resolves once the model is stored, fetching it first when it is not.
+	/// The store is asked each time, since the Offline panel can remove it.
 	ensure(code: string): Promise<void> {
-		if (this.states.get(code)?.status === 'ready') return Promise.resolve();
 		return (this.pending[code] ??= this.load(code).finally(() => delete this.pending[code]));
 	}
 
 	private async load(code: string) {
-		this.states.set(code, { status: 'loading', received: 0, total: 0 });
 		try {
 			const stored = await withStore('readonly', (store) => store.count(modelKey(code))).catch(
 				() => 0
 			);
-			if (!stored) await this.download(code);
+			if (!stored) {
+				this.states.set(code, { status: 'loading', received: 0, total: 0 });
+				await this.download(code);
+			}
 			this.states.set(code, { status: 'ready' });
 		} catch (cause) {
 			this.states.set(code, { status: 'failed' });
@@ -231,16 +234,22 @@ type Block = NonNullable<
 
 /// Where tesseract.js finds its worker and engine: this site's own copies,
 /// the fastest engine build the browser runs.
+export async function engineVariant() {
+	const detect = await import('wasm-feature-detect');
+	return (await detect.relaxedSimd()) ? 'relaxedsimd' : (await detect.simd()) ? 'simd' : 'lstm';
+}
+
 async function assetPaths() {
-	const [worker, detect] = await Promise.all([
+	const [worker, variant] = await Promise.all([
 		import('tesseract.js/dist/worker.min.js?url'),
-		import('wasm-feature-detect')
+		engineVariant()
 	]);
-	const core = (await detect.relaxedSimd())
-		? await import('tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js?url')
-		: (await detect.simd())
-			? await import('tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url')
-			: await import('tesseract.js-core/tesseract-core-lstm.wasm.js?url');
+	const core =
+		variant === 'relaxedsimd'
+			? await import('tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js?url')
+			: variant === 'simd'
+				? await import('tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url')
+				: await import('tesseract.js-core/tesseract-core-lstm.wasm.js?url');
 	// The worker loads both through importScripts from a blob, which has no
 	// base to resolve a path against.
 	return {
@@ -279,6 +288,11 @@ export class OcrReader {
 			import('tesseract.js'),
 			assetPaths()
 		]);
+		// A Tesseract worker that cannot load never answers, so a missing engine
+		// is caught here rather than left starting forever.
+		const reason = offlineReason('Text recognition');
+		if (reason && !((await caches.match(paths.worker)) && (await caches.match(paths.core))))
+			throw new Error(reason);
 		const key = languages.join('+');
 		const started = await Promise.all(
 			Array.from({ length: count }, async () => {
@@ -286,6 +300,9 @@ export class OcrReader {
 				lane.worker = await createWorker(languages, OEM.LSTM_ONLY, {
 					workerPath: paths.worker,
 					corePath: paths.core,
+					// From its own URL rather than a blob, so the service worker
+					// answers its requests and OCR runs offline.
+					workerBlobURL: false,
 					// Models come from the store `OcrModels` fills. Should it be
 					// unavailable, the worker fetches them itself from here.
 					cacheMethod: 'readOnly',
@@ -443,4 +460,21 @@ export function ocrText({
 	space
 }: OcrWord): OcrText {
 	return { page, text, left, width, baseline, size, angle, space };
+}
+
+/// The language models stored on this device and their sizes.
+export async function storedLanguages() {
+	const keys = await withStore('readonly', (store) => store.getAllKeys()).catch(() => []);
+	const languages: { code: string; size: number }[] = [];
+	for (const key of keys) {
+		const code = String(key).match(/^\.\/(.+)\.traineddata$/)?.[1];
+		if (!code) continue;
+		const model = await withStore<Uint8Array | undefined>('readonly', (store) => store.get(key));
+		if (model) languages.push({ code, size: model.byteLength });
+	}
+	return languages;
+}
+
+export function removeLanguage(code: string) {
+	return withStore('readwrite', (store) => store.delete(modelKey(code)));
 }

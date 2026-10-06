@@ -581,6 +581,28 @@ columns (backgrounds and borders across a page break), and that a `Range`'s
 box height is the font's ascent plus descent (baselines; `Reader.ratio`
 measures it the same way, so a different meaning would cancel out).
 
+### What works offline, and its limits
+
+Every page is prerendered and the service worker saves the core on the first
+visit: 325 files, 16.5 MB uncompressed (the engine, pdf.js and its cmaps,
+every route, every Noto font but CJK, the PDF/A fonts). Five packs are saved
+only when downloaded from the Offline panel or first used: Office conversion
+(17.6 MB), Repair (10.4 MB), Text recognition (one 3.9 MB Tesseract engine for
+the browser's wasm features, plus English), Translation (5.2 MB, the engine
+only), and CJK fonts (23.2 MB). Translation pairs and OCR languages other than
+English stay in IndexedDB, where they always were; the panel lists and removes
+them but cannot add them. An engine missing offline says so instead of
+failing with a fetch error.
+
+Not verified in a browser at all. Open questions: whether Tesseract's worker,
+now started from its URL rather than a blob, is controlled by the service
+worker in every browser; whether Vercel serves prerendered tool pages at
+`/tools/merge` without a trailing-slash redirect (a redirected response is
+stored as a plain one, but it is untested). A new release takes over at once
+(`skipWaiting`), keeping the previous core for pages still open on it; two
+releases in a row while a tab stays open could leave that tab's lazy chunks
+unsaved. Safari has no install prompt, so Install app never shows there.
+
 ### Compare reads text in content order
 
 Compare diffs the engine's glyphs in the order pages draw them, which is

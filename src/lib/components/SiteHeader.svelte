@@ -4,14 +4,20 @@
 	import {
 		IconChevronDown,
 		IconBrandGithub,
+		IconCloudCheck,
+		IconCloudDownload,
+		IconCloudOff,
 		IconCurrencyDollar,
 		IconX
 	} from '@tabler/icons-svelte-runes';
+	import { offline } from '$lib/offline.svelte';
+	import OfflineDialog from './OfflineDialog.svelte';
 	import { linkMotion } from '$lib/motion/link';
 	import logo from '$lib/assets/plico.svg';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import ToolsDialog from './ToolsDialog.svelte';
 	let toolsDialog: ToolsDialog;
+	let offlineDialog: OfflineDialog;
 	import gsap from 'gsap';
 
 	let { onselect }: { onselect: (tool: CatalogTool) => void } = $props();
@@ -22,6 +28,16 @@
 		github: 'Open by design',
 		donate: 'Support Plico'
 	};
+
+	const offlineState = $derived(
+		!offline.online ? 'offline' : offline.core.status === 'ready' ? 'ready' : 'saving'
+	);
+	// The ring shows real bytes saved, only while the core is being saved.
+	const ring = $derived(
+		offline.core.status === 'saving' && offline.core.total
+			? Math.min(1, offline.core.received / offline.core.total)
+			: undefined
+	);
 
 	export function openTools(source?: HTMLElement) {
 		toolsDialog.open(source ?? toolsButton);
@@ -82,11 +98,51 @@
 		</a>
 	</nav>
 	<div
-		class="hidden items-center gap-8 text-base font-medium sm:flex lg:gap-10 lg:justify-self-end"
+		class="items-center gap-8 text-base font-medium lg:gap-10 lg:justify-self-end {offline.available
+			? 'flex'
+			: 'hidden sm:flex'}"
 	>
+		{#if offline.available}
+			<button
+				use:linkMotion={{ hover: false, pressScale: 0.95 }}
+				class="flex min-h-11 items-center rounded-md transition-colors hover:text-brand"
+				onclick={() => offlineDialog.open()}
+				aria-haspopup="dialog"
+				title="Offline"
+				><span class="flex items-center gap-1.5"
+					><span class="relative grid size-8 place-items-center" aria-hidden="true">
+						{#if ring !== undefined}<svg
+								viewBox="0 0 32 32"
+								class="absolute inset-0 -rotate-90"
+								fill="none"
+								stroke-width="2"
+								><circle cx="16" cy="16" r="15" class="stroke-white/10" /><circle
+									cx="16"
+									cy="16"
+									r="15"
+									pathLength="1"
+									stroke-dasharray="1"
+									stroke-dashoffset={1 - ring}
+									stroke-linecap="round"
+									class="stroke-brand motion-safe:transition-[stroke-dashoffset] motion-safe:duration-300"
+								/></svg
+							>{/if}
+						{#each [{ state: 'ready', Icon: IconCloudCheck }, { state: 'offline', Icon: IconCloudOff }, { state: 'saving', Icon: IconCloudDownload }] as { state, Icon } (state)}
+							<Icon
+								size={ring === undefined ? 21 : 16}
+								class="col-start-1 row-start-1 motion-safe:transition-[opacity,transform] motion-safe:duration-200 {offlineState ===
+								state
+									? 'scale-100 opacity-100'
+									: 'scale-50 opacity-0'}"
+							/>
+						{/each}
+					</span><span class="sr-only">Offline</span></span
+				></button
+			>
+		{/if}
 		<button
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
-			class="flex min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand"
+			class="hidden min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand sm:flex"
 			onclick={() => open('github')}
 			aria-haspopup="dialog"
 			><span class="flex items-center gap-1.5"
@@ -96,7 +152,7 @@
 		>
 		<button
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
-			class="flex min-h-11 items-center gap-1 rounded-xl bg-brand px-4 py-2.5 text-panel transition-colors hover:bg-violet-300"
+			class="hidden min-h-11 items-center gap-1 rounded-xl bg-brand px-4 py-2.5 text-panel transition-colors hover:bg-violet-300 sm:flex"
 			onclick={() => {
 				if (page.url.pathname === resolve('/about')) {
 					document.getElementById('support')?.scrollIntoView({
@@ -144,7 +200,8 @@
 	</div>
 	{#if content === 'github'}
 		<p class="leading-relaxed text-muted">
-			Plico is being built in the open. A link to the public repository will be available here when it launches.
+			Plico is being built in the open. A link to the public repository will be available here when
+			it launches.
 		</p>
 	{:else}
 		<p class="leading-relaxed text-muted">
@@ -154,3 +211,4 @@
 </dialog>
 
 <ToolsDialog bind:this={toolsDialog} {onselect} selectionTarget={() => toolsButton} />
+<OfflineDialog bind:this={offlineDialog} />

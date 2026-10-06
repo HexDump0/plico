@@ -32,6 +32,7 @@ import init, {
 	missing_characters
 } from './wasm/plico_engine.js';
 import { contentBounds, padArea } from './crop-area';
+import { CJK_OFFLINE } from '$lib/offline-files';
 import { fontRequests, type TextItem } from './unicode-fonts';
 import type {
 	AnnotateOptions,
@@ -63,10 +64,17 @@ async function suppliedFonts(items: TextItem[], always = false) {
 		requests.map(({ file }) => {
 			let program = fontFiles.get(file);
 			if (!program) {
-				program = fetch(new URL(`/fonts/${file}`, location.href)).then(async (response) => {
-					if (!response.ok) throw new Error('The fonts for this text could not be loaded.');
-					return new Uint8Array(await response.arrayBuffer());
-				});
+				program = fetch(new URL(`/fonts/${file}`, location.href)).then(
+					async (response) => {
+						if (!response.ok) throw new Error('The fonts for this text could not be loaded.');
+						return new Uint8Array(await response.arrayBuffer());
+					},
+					() => {
+						throw new Error(
+							navigator.onLine ? 'The fonts for this text could not be loaded.' : CJK_OFFLINE
+						);
+					}
+				);
 				program.catch(() => fontFiles.delete(file));
 				fontFiles.set(file, program);
 			}
