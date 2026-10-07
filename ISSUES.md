@@ -480,9 +480,10 @@ that memory for the session, so terminating it is the only way to reclaim it.
 
 ## Open, architecture
 
-### Thirty-seven tools exist, the catalogue advertises thirty-eight
+### Every catalogue tool exists
 
-Summarize is the one left. HTML to PDF and Markdown to PDF were added on
+Summarize PDF, the last one, was added on 2026-10-06 (see "What Summarize
+reads, and its limits" below). HTML to PDF and Markdown to PDF were added on
 2026-10-05 (see "What HTML and Markdown to PDF draw" below).
 
 Tools that exist in the catalogue but have no implementation yet now render a
@@ -581,12 +582,54 @@ columns (backgrounds and borders across a page break), and that a `Range`'s
 box height is the font's ascent plus descent (baselines; `Reader.ratio`
 measures it the same way, so a different meaning would cancel out).
 
+### What Summarize reads, and its limits
+
+Qwen3 0.6B (Apache-2.0) runs in the browser through Transformers.js 4.3:
+q4f16 weights on WebGPU with 16-bit shaders (578 MB with the tokenizer),
+q4 weights with 32-bit maths on WebGPU without them (928 MB), 8-bit weights
+on the CPU through WebAssembly with no WebGPU at all (627 MB). On the CPU it
+runs on one thread, since the site is not cross-origin isolated: about 3
+tokens a second on an i3-12100F. Chromium on Linux enables WebGPU only on
+some GPUs; elsewhere it needs `chrome://flags/#enable-unsafe-webgpu`. The weights
+come from a pinned onnx-community revision on Hugging Face, once, and stay in
+Transformers.js's cache; the document never leaves. ONNX Runtime's 26 MB wasm
+is served by Plico (the Summaries offline pack), never jsDelivr.
+
+The text is Translate's paragraphs, so scanned pages need OCR first, and
+two-column pages are read paragraph by paragraph down the page rather than
+column by column. Short paragraphs repeated on three or more pages are
+dropped as running heads. Parts of about 5,000 characters each give one to
+three points; the overview is written from the points (or from the text when
+it fits in one part). Long documents keep at most 5, 10 or 20 points, chosen
+by how many of their words the whole document shares, not by the model.
+
+A 0.6B model can state things the text does not say. Each point is traced to
+the paragraph of its part that holds at least 30% of its words; a point
+nothing holds shows its part's first page and no highlight, which is itself a
+hint to check it. On the CPU, with no cross-origin isolation and so one
+thread, a part takes tens of seconds.
+
+Ask answers from excerpts, not the whole document: the paragraphs that best
+match the question and the one before it (BM25 with each word counted once),
+up to 10,000 characters on WebGPU and 5,000 on the CPU, plus the overview
+when there is one and the last three exchanges. A question whose answer is
+spread thinly across a long document, or worded unlike the text, finds the
+wrong paragraphs; a document that fits the budget is given whole. Sources
+are the excerpts sharing at least 20% of the answer's words, at most three.
+Nothing is kept between visits; the conversation goes when the file does.
+
+The user ran Summarize in a browser on 2026-10-06 (it reads), and asked for
+tokens a second; quality, speed and memory are otherwise unmeasured. Running
+it locally means a 600 MB download and a heavy run; ask first.
+
 ### What works offline, and its limits
 
 Every page is prerendered and the service worker saves the core on the first
 visit: 325 files, 16.5 MB uncompressed (the engine, pdf.js and its cmaps,
 every route, every Noto font but CJK, the PDF/A fonts). Five packs are saved
-only when downloaded from the Offline panel or first used: Office conversion
+only when downloaded from the Offline panel or first used: Summaries (the
+26 MB runtime plus the model, which the panel saves into Transformers.js's
+cache), Office conversion
 (17.6 MB), Repair (10.4 MB), Text recognition (one 3.9 MB Tesseract engine for
 the browser's wasm features, plus English), Translation (5.2 MB, the engine
 only), and CJK fonts (23.2 MB). Translation pairs and OCR languages other than

@@ -11,6 +11,7 @@
 		IconLanguage,
 		IconLanguageHiragana,
 		IconRefresh,
+		IconSparkles,
 		IconTextScan2,
 		IconTool,
 		IconX
@@ -87,14 +88,24 @@
 			border: 'border-split'
 		},
 		{
-			id: 'cjk',
-			label: 'CJK fonts',
-			detail: 'Chinese, Japanese, Korean text',
-			icon: IconLanguageHiragana,
+			id: 'summarize',
+			label: 'Summaries',
+			detail: 'Summarize PDF, with its model',
+			icon: IconSparkles,
 			tone: 'text-brand',
 			solid: 'bg-brand',
 			soft: 'bg-brand/15',
 			border: 'border-brand'
+		},
+		{
+			id: 'cjk',
+			label: 'CJK fonts',
+			detail: 'Chinese, Japanese, Korean text',
+			icon: IconLanguageHiragana,
+			tone: 'text-muted',
+			solid: 'bg-muted',
+			soft: 'bg-muted/15',
+			border: 'border-muted'
 		}
 	];
 
@@ -119,7 +130,7 @@
 	const segments = $derived([
 		{
 			id: 'core',
-			solid: 'bg-tool-label',
+			solid: 'bg-white',
 			bytes: core.status === 'ready' ? offline.coreSize : core.received,
 			total: offline.coreSize || core.total
 		},
@@ -240,7 +251,7 @@
 						type="button"
 						onclick={() => void offline.remove(pack.id)}
 						aria-label="Remove {pack.label}, {formatSize(state.total)}"
-						title="Remove · {formatSize(state.total)}"
+						title="Remove"
 						class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-canvas"
 						><IconX size={16} /></button
 					>

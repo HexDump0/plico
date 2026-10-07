@@ -121,6 +121,10 @@
 	import OcrOverlay from './OcrOverlay.svelte';
 	import TranslateSettings from './TranslateSettings.svelte';
 	import TranslateOverlay from './TranslateOverlay.svelte';
+	import SummarizeSettings from './SummarizeSettings.svelte';
+	import SummaryOverlay from './SummaryOverlay.svelte';
+	import AskInput from './AskInput.svelte';
+	import { SummarizeDocument } from '$lib/pdf/summarize.svelte';
 	import { TranslateDocument } from '$lib/pdf/translate-document.svelte';
 	import { translateLanguageName } from '$lib/pdf/translate.svelte';
 	import ScanSettings from './ScanSettings.svelte';
@@ -183,6 +187,7 @@
 	const isCompare = $derived(tool.id === 'compare');
 	const isOcr = $derived(tool.id === 'ocr');
 	const isTranslate = $derived(tool.id === 'translate');
+	const isSummarize = $derived(tool.id === 'summarize');
 	const isScan = $derived(tool.id === 'scan-to-pdf');
 	// Tools that show the pages and draw their result over them.
 	const isPagePreview = $derived(
@@ -195,7 +200,8 @@
 			isForms ||
 			isEdit ||
 			isOcr ||
-			isTranslate
+			isTranslate ||
+			isSummarize
 	);
 	const isPdfToImage = $derived(
 		tool.id === 'pdf-to-jpg' ||
@@ -569,6 +575,58 @@
 		const [glyphs, sizes] = [pageText, translateSizes];
 		if (glyphs.length === sizes.length) untrack(() => void translate.read(glyphs, sizes));
 	});
+	const summary = new SummarizeDocument();
+	$effect(() => {
+		if (!isSummarize || typeof pageText === 'string' || !translateSizes.length) return;
+		const [glyphs, sizes] = [pageText, translateSizes];
+		if (glyphs.length === sizes.length) untrack(() => summary.read(glyphs, sizes));
+	});
+	$effect(() => {
+		if (isSummarize) untrack(() => void summary.check());
+	});
+	// Picking a point or an answer's page shows the paragraph it came from.
+	$effect(() => {
+		const focus = summary.focus;
+		if (isSummarize && focus) untrack(() => scroller?.reveal(focus.page, focus.box?.[1] ?? 0));
+	});
+	const askMode = $derived(isSummarize && summary.mode === 'ask');
+	function askQuestion(question: string) {
+		if (currentFile && !processing) void summary.ask(question, currentFile.name);
+	}
+	const summarizeValid = $derived(
+		!!currentFile && summary.hasText && !summary.pagesInvalid && summary.model.status !== 'checking'
+	);
+	const summarizeStatus = $derived.by(() => {
+		const model = summary.model;
+		if (summary.stage === 'model')
+			return model.status === 'loading' && model.total
+				? `Downloading model ${Math.min(99, Math.floor((model.received / model.total) * 100))}%`
+				: 'Loading model...';
+		if (summary.stage === 'starting') return 'Starting model...';
+		const doing =
+			summary.stage === 'writing'
+				? 'Writing overview'
+				: summary.total > 1
+					? `Reading part ${Math.min(summary.done + 1, summary.total)} of ${summary.total}`
+					: 'Reading';
+		// Until the first words, the model is reading its prompt; then the
+		// button shows its speed beside this.
+		return summary.speed > 0 ? doing : `${doing}...`;
+	});
+	async function summarizePdf() {
+		if (processing || !summarizeValid || !currentFile) return;
+		const title = currentFile.name;
+		await job.run(
+			async (signal) => {
+				await summary.run(signal);
+				markdownText = summary.markdown(title);
+				return { bytes: new TextEncoder().encode(markdownText), format: 'md' };
+			},
+			'Could not summarize this PDF.',
+			// Read here first; saving is the next press.
+			() => {}
+		);
+	}
 	// The models come down as soon as there is something to translate.
 	$effect(() => {
 		if (!isTranslate || !translate.hasText) return;
@@ -1333,56 +1391,58 @@
 					? !ocrValid || processing
 					: isTranslate
 						? !translateValid || processing
-						: isCompare
-							? !compareValid || processing
-							: isProtect
-								? !protectValid || processing
-								: isUnlock
-									? !unlockValid || processing
-									: isPdfA || isRepair
-										? !currentFile || processing
-										: isFlatten
-											? !flattenValid || processing
-											: isForms
-												? !formsValid || processing
-												: isEdit
-													? !editValid || processing
-													: isAnnotate
-														? !annotateValid || processing
-														: isRedact
-															? !redactValid || processing
-															: isSign
-																? !signValid || processing
-																: isCrop
-																	? !cropValid || processing
-																	: isStamp
-																		? !stampValid || processing
-																		: printTool
-																			? !printOutput || printBusy || processing
-																			: officeTool
-																				? !currentFile || processing
-																				: isMerge
-																					? workspace.files.length < 2 ||
-																						processing ||
-																						!!dragged ||
-																						!!keyboardPicked
-																					: isSplit
-																						? !splitValid || processing
-																						: isPageTool
-																							? !pageToolValid || processing
-																							: isCompress
-																								? workspace.files.length === 0 ||
-																									processing ||
-																									!!dragged ||
-																									!!keyboardPicked
-																								: isPdfToImage
-																									? !pdfToImageValid || processing
-																									: isImageToPdf
-																										? !imagePdfValid ||
-																											processing ||
-																											!!dragged ||
-																											!!keyboardPicked
-																										: true
+						: isSummarize
+							? !summarizeValid || processing || summary.answering
+							: isCompare
+								? !compareValid || processing
+								: isProtect
+									? !protectValid || processing
+									: isUnlock
+										? !unlockValid || processing
+										: isPdfA || isRepair
+											? !currentFile || processing
+											: isFlatten
+												? !flattenValid || processing
+												: isForms
+													? !formsValid || processing
+													: isEdit
+														? !editValid || processing
+														: isAnnotate
+															? !annotateValid || processing
+															: isRedact
+																? !redactValid || processing
+																: isSign
+																	? !signValid || processing
+																	: isCrop
+																		? !cropValid || processing
+																		: isStamp
+																			? !stampValid || processing
+																			: printTool
+																				? !printOutput || printBusy || processing
+																				: officeTool
+																					? !currentFile || processing
+																					: isMerge
+																						? workspace.files.length < 2 ||
+																							processing ||
+																							!!dragged ||
+																							!!keyboardPicked
+																						: isSplit
+																							? !splitValid || processing
+																							: isPageTool
+																								? !pageToolValid || processing
+																								: isCompress
+																									? workspace.files.length === 0 ||
+																										processing ||
+																										!!dragged ||
+																										!!keyboardPicked
+																									: isPdfToImage
+																										? !pdfToImageValid || processing
+																										: isImageToPdf
+																											? !imagePdfValid ||
+																												processing ||
+																												!!dragged ||
+																												!!keyboardPicked
+																											: true
 	);
 	const actionUnavailable = $derived(
 		locked
@@ -1393,53 +1453,55 @@
 					? !ocrValid
 					: isTranslate
 						? !translateValid
-						: isCompare
-							? !compareValid
-							: isProtect
-								? !protectValid
-								: isUnlock
-									? !unlockValid
-									: isPdfA || isRepair
-										? !currentFile
-										: isFlatten
-											? !flattenValid
-											: isForms
-												? !formsValid
-												: isEdit
-													? !editValid
-													: isAnnotate
-														? !annotateValid
-														: isRedact
-															? !redactValid
-															: isSign
-																? !signValid
-																: isCrop
-																	? !cropValid
-																	: isStamp
-																		? !stampValid
-																		: printTool
-																			? !printOutput || printBusy
-																			: officeTool
-																				? !currentFile
-																				: isMerge
-																					? workspace.files.length < 2 ||
-																						!!dragged ||
-																						!!keyboardPicked
-																					: isSplit
-																						? !splitValid
-																						: isPageTool
-																							? !pageToolValid
-																							: isCompress
-																								? workspace.files.length === 0 ||
-																									!!dragged ||
-																									!!keyboardPicked
-																								: isPdfToImage
-																									? !pdfToImageValid
-																									: isImageToPdf
-																										? !imagePdfValid ||
-																											!!dragged ||
-																											!!keyboardPicked
-																										: true
+						: isSummarize
+							? !summarizeValid
+							: isCompare
+								? !compareValid
+								: isProtect
+									? !protectValid
+									: isUnlock
+										? !unlockValid
+										: isPdfA || isRepair
+											? !currentFile
+											: isFlatten
+												? !flattenValid
+												: isForms
+													? !formsValid
+													: isEdit
+														? !editValid
+														: isAnnotate
+															? !annotateValid
+															: isRedact
+																? !redactValid
+																: isSign
+																	? !signValid
+																	: isCrop
+																		? !cropValid
+																		: isStamp
+																			? !stampValid
+																			: printTool
+																				? !printOutput || printBusy
+																				: officeTool
+																					? !currentFile
+																					: isMerge
+																						? workspace.files.length < 2 ||
+																							!!dragged ||
+																							!!keyboardPicked
+																						: isSplit
+																							? !splitValid
+																							: isPageTool
+																								? !pageToolValid
+																								: isCompress
+																									? workspace.files.length === 0 ||
+																										!!dragged ||
+																										!!keyboardPicked
+																									: isPdfToImage
+																										? !pdfToImageValid
+																										: isImageToPdf
+																											? !imagePdfValid ||
+																												!!dragged ||
+																												!!keyboardPicked
+																											: true
 	);
 	const baseName = $derived(currentFile?.name.replace(/\.[^.]+$/, '') || 'document');
 	const autoName = $derived(
@@ -1449,80 +1511,84 @@
 				? `${baseName}-ocr`
 				: isTranslate
 					? `${baseName}-${translate.to.toLowerCase()}`
-					: isCompare
-						? `${compareChanged?.name.replace(/\.[^.]+$/, '') || 'document'}-compared`
-						: officeTool || printTool
-							? baseName
-							: isProtect
-								? `${baseName}-protected`
-								: isUnlock
-									? `${baseName}-unlocked`
-									: isPdfA
-										? `${baseName}-pdfa`
-										: isRepair
-											? `${baseName}-repaired`
-											: isFlatten
-												? `${baseName}-flattened`
-												: isForms
-													? `${baseName}-filled`
-													: isEdit
-														? `${baseName}-edited`
-														: isAnnotate
-															? `${baseName}-annotated`
-															: isRedact
-																? `${baseName}-redacted`
-																: isSign
-																	? `${baseName}-signed`
-																	: isCrop
-																		? `${baseName}-cropped`
-																		: isPageNumbers
-																			? `${baseName}-numbered`
-																			: isWatermark
-																				? `${baseName}-watermarked`
-																				: isMerge
-																					? 'plico-merged'
-																					: isImageToPdf
-																						? 'plico-images'
-																						: isSplit
-																							? `${baseName}-split`
-																							: isOrganize
-																								? `${baseName}-organized`
-																								: isExtract
-																									? `${baseName}-extracted`
-																									: isRemove
-																										? `${baseName}-pages-removed`
-																										: isRotate
-																											? `${baseName}-rotated`
-																											: isCompress
-																												? `${baseName}-compressed`
-																												: `${baseName}-images`
+					: isSummarize
+						? `${baseName}-summary`
+						: isCompare
+							? `${compareChanged?.name.replace(/\.[^.]+$/, '') || 'document'}-compared`
+							: officeTool || printTool
+								? baseName
+								: isProtect
+									? `${baseName}-protected`
+									: isUnlock
+										? `${baseName}-unlocked`
+										: isPdfA
+											? `${baseName}-pdfa`
+											: isRepair
+												? `${baseName}-repaired`
+												: isFlatten
+													? `${baseName}-flattened`
+													: isForms
+														? `${baseName}-filled`
+														: isEdit
+															? `${baseName}-edited`
+															: isAnnotate
+																? `${baseName}-annotated`
+																: isRedact
+																	? `${baseName}-redacted`
+																	: isSign
+																		? `${baseName}-signed`
+																		: isCrop
+																			? `${baseName}-cropped`
+																			: isPageNumbers
+																				? `${baseName}-numbered`
+																				: isWatermark
+																					? `${baseName}-watermarked`
+																					: isMerge
+																						? 'plico-merged'
+																						: isImageToPdf
+																							? 'plico-images'
+																							: isSplit
+																								? `${baseName}-split`
+																								: isOrganize
+																									? `${baseName}-organized`
+																									: isExtract
+																										? `${baseName}-extracted`
+																										: isRemove
+																											? `${baseName}-pages-removed`
+																											: isRotate
+																												? `${baseName}-rotated`
+																												: isCompress
+																													? `${baseName}-compressed`
+																													: `${baseName}-images`
 	);
 	// Several parts or images arrive as a ZIP; predict which before processing
 	// so the filename field shows the extension that will actually download.
 	const expectedFormat = $derived(
-		officeTool
-			? officeTools[officeTool].output
-			: isSplit
-				? (
-						splitMode === 'ranges'
-							? splitCombine || splitRanges.length === 1
-							: pageCount > 0 && splitInterval >= pageCount
-					)
-					? 'pdf'
-					: 'zip'
-				: isExtract && extractOutput === 'images'
-					? selectedPages.length === 1
-						? extractImageFormat
+		isSummarize
+			? 'md'
+			: officeTool
+				? officeTools[officeTool].output
+				: isSplit
+					? (
+							splitMode === 'ranges'
+								? splitCombine || splitRanges.length === 1
+								: pageCount > 0 && splitInterval >= pageCount
+						)
+						? 'pdf'
 						: 'zip'
-					: isExtract && extractOutput === 'separate' && selectedPages.length > 1
-						? 'zip'
-						: isPdfToImage
-							? (parsePageRange(pdfToImagePageRange, pageCount)?.length ?? pageCount) === 1
-								? pdfToImageFormat
-								: 'zip'
-							: isCompress && workspace.files.length > 1
-								? 'zip'
-								: 'pdf'
+					: isExtract && extractOutput === 'images'
+						? selectedPages.length === 1
+							? extractImageFormat
+							: 'zip'
+						: isExtract && extractOutput === 'separate' && selectedPages.length > 1
+							? 'zip'
+							: isPdfToImage
+								? (parsePageRange(pdfToImagePageRange, pageCount)?.length ?? pageCount) === 1
+									? pdfToImageFormat
+									: 'zip'
+								: isCompress && workspace.files.length > 1
+									? 'zip'
+									: 'pdf'
 	);
 	// Compare shows its result as soon as both PDFs are in; the action saves it.
 	const idleLabel = $derived(isCompare ? 'Mark up changes' : tool.label);
@@ -1566,6 +1632,7 @@
 		void pdfaPart;
 		void ocrSignature;
 		void translate.signature;
+		void summary.signature;
 		void scanSignature;
 		untrack(() => {
 			job.clear();
@@ -1620,6 +1687,7 @@
 		ocrReading = {};
 		ocrPages = '';
 		translate.reset();
+		summary.reset();
 		translateSizes = [];
 		translateEmpty = [];
 		translateCovered = [];
@@ -1717,6 +1785,7 @@
 		edit.destroy();
 		ocrReader.destroy();
 		translate.destroy();
+		summary.destroy();
 		scan.destroy();
 	});
 	async function protect() {
@@ -2230,7 +2299,16 @@
 {/snippet}
 
 {#snippet stampOverlay(page: PreviewPage)}
-	{#if isTranslate}
+	{#if isSummarize}
+		<SummaryOverlay
+			points={askMode ? [] : summary.points}
+			page={page.number}
+			current={summary.current}
+			focus={summary.focus}
+			{reducedMotion}
+			onpick={(index) => summary.pick(index)}
+		/>
+	{:else if isTranslate}
 		{@const placed = translate.set(page.number)}
 		<TranslateOverlay
 			{page}
@@ -2505,7 +2583,7 @@
 											onremove={() => workspace.remove(currentFile)}
 										/>{/key}
 								</div>
-							{:else if (isAnnotate || isForms || isEdit || isOcr || isTranslate) && currentFile}
+							{:else if (isAnnotate || isForms || isEdit || isOcr || isTranslate || isSummarize) && currentFile}
 								<div class="w-full py-6 lg:pb-0">
 									{#key currentFile}<PageScroller
 											bind:this={scroller}
@@ -2519,7 +2597,7 @@
 												pageCount = count;
 												if (isForms) void readForm(pdf);
 												else void readPageText(currentFile, pdf);
-												if (isTranslate) {
+												if (isTranslate || isSummarize) {
 													translatePdfProxy = pdf;
 													void readPageSizes(pdf);
 												}
@@ -2746,6 +2824,16 @@
 							models={ocrModels}
 							{reducedMotion}
 							disabled={processing}
+						/>
+					{:else if isSummarize}
+						<SummarizeSettings
+							{summary}
+							title={currentFile?.name ?? ''}
+							{pageCount}
+							{processing}
+							{reducedMotion}
+							disabled={processing}
+							onask={askQuestion}
 						/>
 					{:else if isTranslate}
 						<TranslateSettings
@@ -3095,211 +3183,230 @@
 						tabindex="-1"
 						aria-hidden="true">Download {formatLabel(resultFormat)}</a
 					>
-					<div class="flex">
-						<button
-							disabled={actionDisabled}
-							onclick={() =>
-								result
-									? downloadLink?.click()
-									: isScan
-										? void scanToPdf()
-										: isOcr
-											? void readText()
-											: isTranslate
-												? void translatePdf()
-												: isCompare
-													? void markChanges()
-													: isProtect
-														? void protect()
-														: isUnlock
-															? void unlock()
-															: isPdfA
-																? void convertPdfA()
-																: isRepair
-																	? void repair()
-																	: isFlatten
-																		? void flatten()
-																		: isForms
-																			? void fillForm()
-																			: isEdit
-																				? void applyEdits()
-																				: isAnnotate
-																					? void addAnnotations()
-																					: isRedact
-																						? void redact()
-																						: isSign
-																							? void sign()
-																							: isCrop
-																								? void crop()
-																								: isPageNumbers
-																									? void addPageNumbers()
-																									: isWatermark
-																										? void addWatermark()
-																										: isSplit
-																											? void split()
-																											: isPageTool
-																												? void organize()
-																												: printTool
-																													? void convertPrint()
-																													: officeTool
-																														? void convertOffice()
-																														: isCompress
-																															? void compress()
-																															: isPdfToImage
-																																? void convertPdfToImage()
-																																: isImageToPdf
-																																	? void convertImagesToPdf()
-																																	: void merge()}
-							aria-label={result
-								? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
-								: processing
-									? job.repairing || isRepair
-										? 'Repairing PDF'
+					{#if askMode}
+						<AskInput
+							answering={summary.answering}
+							disabled={!currentFile || !summary.hasText || summary.pagesInvalid || processing}
+							onask={askQuestion}
+							onstop={() => summary.stop()}
+						/>
+					{:else}<div class="flex">
+							<button
+								disabled={actionDisabled}
+								onclick={() =>
+									result
+										? downloadLink?.click()
 										: isScan
-											? scanStatus
+											? void scanToPdf()
 											: isOcr
-												? ocrStatus
+												? void readText()
 												: isTranslate
-													? translateStatus
-													: isCompare
-														? 'Marking up changes'
-														: isProtect
-															? 'Protecting PDF'
-															: isUnlock
-																? 'Unlocking PDF'
-																: isPdfA
-																	? 'Converting to PDF/A'
-																	: isFlatten
-																		? 'Flattening PDF'
-																		: isForms
-																			? 'Filling form'
-																			: isEdit
-																				? 'Editing PDF'
-																				: isAnnotate
-																					? 'Annotating PDF'
-																					: isRedact
-																						? 'Redacting PDF'
-																						: isSign
-																							? 'Signing PDF'
-																							: isCrop
-																								? 'Cropping PDF'
-																								: isPageNumbers
-																									? 'Adding page numbers'
-																									: isWatermark
-																										? 'Adding watermark'
-																										: isSplit
-																											? 'Splitting PDF'
-																											: isPageTool
-																												? `${tool.label} in progress`
-																												: printTool
-																													? 'Converting to PDF...'
-																													: officeTool
-																														? officeStage === 'loading'
-																															? 'Loading converter...'
-																															: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
-																														: isCompress
-																															? 'Compressing PDF'
-																															: isPdfToImage
-																																? `Converting to ${pdfToImageFormat.toUpperCase()}...`
-																																: isImageToPdf
-																																	? 'Converting images to PDF...'
-																																	: 'Merging PDF'
-									: idleLabel}
-							class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
-								? 'opacity-40'
-								: ''}"
-						>
-							<span
-								class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
-									? 'scale-x-100'
-									: 'scale-x-0'}"
-								aria-hidden="true"
-							></span>
-							<span class="relative z-10 grid place-items-center">
-								<span
-									aria-hidden={!!result}
-									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
-										? '-translate-y-2 opacity-0'
-										: 'translate-y-0 opacity-100'}"
-									>{#if processing}<IconLoader2 class="animate-spin" size={20} />{job.repairing ||
-										isRepair
-											? 'Repairing...'
+													? void translatePdf()
+													: isSummarize
+														? void summarizePdf()
+														: isCompare
+															? void markChanges()
+															: isProtect
+																? void protect()
+																: isUnlock
+																	? void unlock()
+																	: isPdfA
+																		? void convertPdfA()
+																		: isRepair
+																			? void repair()
+																			: isFlatten
+																				? void flatten()
+																				: isForms
+																					? void fillForm()
+																					: isEdit
+																						? void applyEdits()
+																						: isAnnotate
+																							? void addAnnotations()
+																							: isRedact
+																								? void redact()
+																								: isSign
+																									? void sign()
+																									: isCrop
+																										? void crop()
+																										: isPageNumbers
+																											? void addPageNumbers()
+																											: isWatermark
+																												? void addWatermark()
+																												: isSplit
+																													? void split()
+																													: isPageTool
+																														? void organize()
+																														: printTool
+																															? void convertPrint()
+																															: officeTool
+																																? void convertOffice()
+																																: isCompress
+																																	? void compress()
+																																	: isPdfToImage
+																																		? void convertPdfToImage()
+																																		: isImageToPdf
+																																			? void convertImagesToPdf()
+																																			: void merge()}
+								aria-label={result
+									? `Download ${formatLabel(resultFormat)} again${savedPercent > 0 ? `, ${savedPercent}% smaller` : ''}`
+									: processing
+										? job.repairing || isRepair
+											? 'Repairing PDF'
 											: isScan
 												? scanStatus
 												: isOcr
 													? ocrStatus
 													: isTranslate
 														? translateStatus
-														: printTool
-															? 'Converting...'
-															: officeTool
-																? officeStage === 'loading'
-																	? 'Loading converter...'
-																	: 'Converting...'
-																: isCompare
-																	? 'Marking up...'
-																	: isProtect
-																		? 'Protecting...'
-																		: isUnlock
-																			? 'Unlocking...'
-																			: isPdfA
-																				? 'Converting...'
-																				: isFlatten
-																					? 'Flattening...'
-																					: isForms
-																						? 'Filling...'
-																						: isEdit
-																							? 'Editing...'
-																							: isAnnotate
-																								? 'Annotating...'
-																								: isRedact
-																									? 'Redacting...'
-																									: isSign
-																										? 'Signing...'
-																										: isCrop
-																											? 'Cropping...'
-																											: isPageNumbers
-																												? 'Numbering...'
-																												: isWatermark
-																													? 'Watermarking...'
-																													: isSplit
-																														? 'Splitting...'
-																														: isPageTool
-																															? 'Processing...'
-																															: isCompress
-																																? 'Compressing...'
-																																: isPdfToImage
-																																	? 'Converting...'
-																																	: isImageToPdf
-																																		? 'Converting...'
-																																		: 'Merging...'}{:else}
-										{idleLabel}<IconArrowRight size={20} />{/if}</span
-								>
-								<span
-									aria-hidden={!result}
-									class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
-										? 'translate-y-0 opacity-100 motion-safe:delay-100'
-										: 'translate-y-2 opacity-0'}"
-									><IconDownload size={20} />Download {formatLabel(
-										resultFormat
-									)}{#if savedPercent > 0}<span
-											class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold"
-											>−{savedPercent}%</span
-										>{/if}</span
-								>
-							</span></button
-						>
-						{#if isMarkdown && result && markdownText}<div
-								transition:slide={{
-									axis: 'x',
-									duration: reducedMotion ? 0 : 260,
-									easing: cubicOut
-								}}
-								class="shrink-0 pl-3"
+														: isSummarize
+															? summarizeStatus
+															: isCompare
+																? 'Marking up changes'
+																: isProtect
+																	? 'Protecting PDF'
+																	: isUnlock
+																		? 'Unlocking PDF'
+																		: isPdfA
+																			? 'Converting to PDF/A'
+																			: isFlatten
+																				? 'Flattening PDF'
+																				: isForms
+																					? 'Filling form'
+																					: isEdit
+																						? 'Editing PDF'
+																						: isAnnotate
+																							? 'Annotating PDF'
+																							: isRedact
+																								? 'Redacting PDF'
+																								: isSign
+																									? 'Signing PDF'
+																									: isCrop
+																										? 'Cropping PDF'
+																										: isPageNumbers
+																											? 'Adding page numbers'
+																											: isWatermark
+																												? 'Adding watermark'
+																												: isSplit
+																													? 'Splitting PDF'
+																													: isPageTool
+																														? `${tool.label} in progress`
+																														: printTool
+																															? 'Converting to PDF...'
+																															: officeTool
+																																? officeStage === 'loading'
+																																	? 'Loading converter...'
+																																	: `Converting to ${formatLabel(officeTools[officeTool].output)}...`
+																																: isCompress
+																																	? 'Compressing PDF'
+																																	: isPdfToImage
+																																		? `Converting to ${pdfToImageFormat.toUpperCase()}...`
+																																		: isImageToPdf
+																																			? 'Converting images to PDF...'
+																																			: 'Merging PDF'
+										: idleLabel}
+								class="group relative isolate flex min-h-14 w-full items-center justify-center overflow-hidden rounded-xl px-4 py-4 text-sm font-bold text-canvas transition-[background-color,filter,transform] duration-200 enabled:hover:brightness-110 disabled:cursor-not-allowed motion-safe:enabled:active:scale-[0.985] {buttonColor} {actionUnavailable
+									? 'opacity-40'
+									: ''}"
 							>
-								<CopyButton text={markdownText} label="Copy Markdown" />
-							</div>{/if}
-					</div>
+								<span
+									class="pointer-events-none absolute inset-0 origin-left bg-white/15 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {result
+										? 'scale-x-100'
+										: 'scale-x-0'}"
+									aria-hidden="true"
+								></span>
+								<span class="relative z-10 grid place-items-center">
+									<span
+										aria-hidden={!!result}
+										class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-200 {result
+											? '-translate-y-2 opacity-0'
+											: 'translate-y-0 opacity-100'}"
+										>{#if processing}<IconLoader2 class="animate-spin" size={20} />{job.repairing ||
+											isRepair
+												? 'Repairing...'
+												: isScan
+													? scanStatus
+													: isOcr
+														? ocrStatus
+														: isTranslate
+															? translateStatus
+															: isSummarize
+																? summarizeStatus
+																: printTool
+																	? 'Converting...'
+																	: officeTool
+																		? officeStage === 'loading'
+																			? 'Loading converter...'
+																			: 'Converting...'
+																		: isCompare
+																			? 'Marking up...'
+																			: isProtect
+																				? 'Protecting...'
+																				: isUnlock
+																					? 'Unlocking...'
+																					: isPdfA
+																						? 'Converting...'
+																						: isFlatten
+																							? 'Flattening...'
+																							: isForms
+																								? 'Filling...'
+																								: isEdit
+																									? 'Editing...'
+																									: isAnnotate
+																										? 'Annotating...'
+																										: isRedact
+																											? 'Redacting...'
+																											: isSign
+																												? 'Signing...'
+																												: isCrop
+																													? 'Cropping...'
+																													: isPageNumbers
+																														? 'Numbering...'
+																														: isWatermark
+																															? 'Watermarking...'
+																															: isSplit
+																																? 'Splitting...'
+																																: isPageTool
+																																	? 'Processing...'
+																																	: isCompress
+																																		? 'Compressing...'
+																																		: isPdfToImage
+																																			? 'Converting...'
+																																			: isImageToPdf
+																																				? 'Converting...'
+																																				: 'Merging...'}{#if isSummarize && summary.speed > 0}<span
+													class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold tabular-nums"
+													>{Math.round(summary.speed)} tok/s</span
+												>{/if}{:else}
+											{idleLabel}<IconArrowRight size={20} />{/if}</span
+									>
+									<span
+										aria-hidden={!result}
+										class="col-start-1 row-start-1 flex items-center justify-center gap-3 whitespace-nowrap motion-safe:transition-[opacity,transform] motion-safe:duration-300 {result
+											? 'translate-y-0 opacity-100 motion-safe:delay-100'
+											: 'translate-y-2 opacity-0'}"
+										><IconDownload size={20} />Download {formatLabel(
+											resultFormat
+										)}{#if savedPercent > 0}<span
+												class="rounded-md bg-canvas/15 px-1.5 py-0.5 text-xs font-semibold"
+												>−{savedPercent}%</span
+											>{/if}</span
+									>
+								</span></button
+							>
+							{#if (isMarkdown || isSummarize) && result && markdownText}<div
+									transition:slide={{
+										axis: 'x',
+										duration: reducedMotion ? 0 : 260,
+										easing: cubicOut
+									}}
+									class="shrink-0 pl-3"
+								>
+									<CopyButton
+										text={markdownText}
+										label={isSummarize ? 'Copy summary' : 'Copy Markdown'}
+									/>
+								</div>{/if}
+						</div>{/if}
 					{#if error}<p role="alert" class="text-sm text-convert">{error}</p>{/if}
 					{#if isOcr && result && ocrNotice}<p
 							role="status"

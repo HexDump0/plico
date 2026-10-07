@@ -77,6 +77,7 @@ const supportedToolIds = new Set([
 	'scan-to-pdf',
 	'repair',
 	'translate',
+	'summarize',
 	'html-to-pdf',
 	'markdown-to-pdf'
 ]);

@@ -55,6 +55,7 @@ const packPatterns: [string, RegExp][] = [
 		/\/tesseract-core-[^/]+\.wasm\.[^/]+\.js$|\/assets\/worker\.min\.[^/]+\.js$|^\/tessdata\/eng\.traineddata\.gz$/
 	],
 	['translate', /\/bergamot-translator-worker-[^/]+\.wasm$/],
+	['summarize', /\/ort-wasm-simd-threaded\.asyncify-[^/]+\.wasm$/],
 	['cjk', /^\/fonts\/NotoSans(JP|KR|SC|TC)-/]
 ];
 
@@ -109,6 +110,18 @@ export default defineConfig({
 	// Every worker is started with `type: 'module'`, and MuPDF's uses top-level
 	// await, which the default iife format cannot hold.
 	worker: { format: 'es' },
+	resolve: {
+		alias: [
+			// ONNX Runtime's exports hide its wasm, which Summarize serves itself.
+			// A pattern, since a plain alias does not match with `?url` after it.
+			{
+				find: /^onnxruntime-web-wasm(?=\?|$)/,
+				replacement: path.resolve(
+					'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm'
+				)
+			}
+		]
+	},
 	ssr: {
 		// GSAP's ESM entry is not loadable through Vercel's CommonJS function wrapper.
 		// Bundle it into the server output so Vite normalizes the module format.

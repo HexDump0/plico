@@ -76,6 +76,11 @@ src/lib/pdf/translate-layout.ts                             paragraphs from Edit
 src/lib/pdf/translate-document.svelte.ts                    Translate's state and run
 src/lib/pdf/html-print.ts                                   HTML laid out in a sandboxed frame, cut into pages and measured for print.rs
 src/lib/pdf/markdown-print.ts                               Markdown made into an HTML document with Plico's print stylesheet
+src/lib/pdf/summarize.svelte.ts                             Summarize's state and run: parts, key points, the overview
+src/lib/pdf/summary-text.ts                                 paragraphs without running heads, parts, listed points, tracing a point to its paragraph
+src/lib/pdf/summary-model.ts                                the pinned Qwen3 0.6B build for this browser, and its cache
+src/lib/pdf/summarize-worker.ts                             Transformers.js (Apache-2.0) and the model in their own worker
+src/lib/pdf/summarizer.ts                                   that worker seen from the page
 src/service-worker.ts                                       saves the core on install, serves saved files first, keeps packs
 src/lib/offline-files.ts                                    the offline manifest's shape and helpers, shared by the worker and page
 src/lib/offline.svelte.ts                                   registration, what is saved, pack downloads, installing as an app

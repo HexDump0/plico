@@ -15,11 +15,17 @@ import {
 	json,
 	packFiles,
 	readJson,
-	storedBytes,
-	type OfflineFile,
 	type OfflineManifest,
 	type PackId
 } from './offline-files';
+
+import {
+	MODEL_CACHE,
+	modelBuild,
+	modelFiles,
+	removeBuild,
+	type ModelBuild
+} from './pdf/summary-model';
 
 export type { PackId } from './offline-files';
 
@@ -37,7 +43,7 @@ export type SaveState = {
 export type StoredModel = { kind: 'ocr' | 'translate'; id: string; name: string; size: number };
 
 const CORE = `${CORE_PREFIX}${version}`;
-const sum = (files: OfflineFile[]) => files.reduce((total, file) => total + file.size, 0);
+const sum = (files: { size: number }[]) => files.reduce((total, file) => total + file.size, 0);
 
 class Offline {
 	available = $state(false);
@@ -50,6 +56,22 @@ class Offline {
 	private prompt: InstallPrompt | undefined;
 	private manifest: OfflineManifest | undefined;
 	private variant: string | undefined;
+	private build: ModelBuild | undefined;
+
+	/// A pack's files for this browser, each with the cache it is kept in. The
+	/// summary model belongs to its pack, kept where Transformers.js reads it.
+	private async files(id: PackId) {
+		const files = packFiles(this.manifest?.packs[id] ?? [], this.variant).map((file) => ({
+			...file,
+			cache: PACKS
+		}));
+		if (id !== 'summarize') return files;
+		this.build ??= await modelBuild();
+		return [
+			...files,
+			...modelFiles(this.build.dtype).map((file) => ({ ...file, cache: MODEL_CACHE }))
+		];
+	}
 
 	start() {
 		if (dev || this.available || !('serviceWorker' in navigator) || !('caches' in window)) return;
@@ -97,12 +119,13 @@ class Offline {
 		if (this.manifest) {
 			this.coreSize = sum(this.manifest.core);
 			this.variant ??= await (await import('./pdf/ocr.svelte')).engineVariant();
-			const packs = await caches.open(PACKS);
 			for (const id of PACK_IDS) {
 				if (this.packs.get(id)?.status === 'saving') continue;
-				const files = packFiles(this.manifest.packs[id] ?? [], this.variant);
+				const files = await this.files(id);
 				const total = sum(files);
-				const received = await storedBytes(packs, files);
+				let received = 0;
+				for (const file of files)
+					if (await (await caches.open(file.cache)).match(file.url)) received += file.size;
 				this.packs.set(id, {
 					status: received >= total ? 'ready' : received ? 'partial' : 'missing',
 					received,
@@ -145,19 +168,22 @@ class Offline {
 
 	async download(id: PackId) {
 		if (!this.manifest || this.packs.get(id)?.status === 'saving') return;
-		const files = packFiles(this.manifest.packs[id] ?? [], this.variant);
-		const total = sum(files);
+		const total = this.packs.get(id)?.total ?? 0;
 		let received = 0;
 		const report = () => this.packs.set(id, { status: 'saving', received, total });
 		report();
 		void navigator.storage?.persist?.();
 		try {
-			const cache = await caches.open(PACKS);
+			const files = await this.files(id);
 			for (const file of files) {
+				const cache = await caches.open(file.cache);
 				if (!(await cache.match(file.url))) {
+					const before = received;
 					const response = await fetch(file.url, {
 						cache: 'reload',
-						headers: { [PACK_HEADER]: '1' }
+						// Only on this site's files: on another site's, a custom
+						// header would need its permission first.
+						headers: file.cache === PACKS ? { [PACK_HEADER]: '1' } : {}
 					});
 					if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 					const reader = response.body.getReader();
@@ -172,13 +198,15 @@ class Offline {
 					const type = response.headers.get('content-type') ?? '';
 					await cache.put(
 						file.url,
-						new Response(new Blob(chunks, { type }), { headers: { 'content-type': type } })
+						new Response(new Blob(chunks, { type }), {
+							headers: { 'content-type': type, 'content-length': String(received - before) }
+						})
 					);
 				} else received += file.size;
 				report();
 			}
 			await this.forget(id);
-			this.packs.set(id, { status: 'ready', received: total, total });
+			this.packs.set(id, { status: 'ready', received: sum(files), total: sum(files) });
 		} catch {
 			this.packs.set(id, { status: 'failed', received, total });
 		}
@@ -187,6 +215,7 @@ class Offline {
 	async remove(id: PackId) {
 		const cache = await caches.open(PACKS);
 		for (const file of this.manifest?.packs[id] ?? []) await cache.delete(file.url);
+		if (id === 'summarize') await removeBuild((this.build ??= await modelBuild()).dtype);
 		await this.forget(id);
 		const total = this.packs.get(id)?.total ?? 0;
 		this.packs.set(id, { status: 'missing', received: 0, total });

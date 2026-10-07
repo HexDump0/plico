@@ -3,7 +3,7 @@
 // needs, saved on the first visit, and packs, the large engines and fonts only
 // some tools load, saved when someone downloads them or first uses them.
 
-export const PACK_IDS = ['office', 'repair', 'ocr', 'translate', 'cjk'] as const;
+export const PACK_IDS = ['office', 'repair', 'ocr', 'translate', 'summarize', 'cjk'] as const;
 export type PackId = (typeof PACK_IDS)[number];
 
 export type OfflineFile = {
@@ -30,12 +30,6 @@ export const PACK_HEADER = 'x-plico-pack';
 /// variants, which `isStored` accepts any one of.
 export function packFiles(files: OfflineFile[], variant?: string) {
 	return files.filter((file) => !file.variant || file.variant === variant);
-}
-
-export async function storedBytes(cache: Cache, files: OfflineFile[]) {
-	let stored = 0;
-	for (const file of files) if (await cache.match(file.url)) stored += file.size;
-	return stored;
 }
 
 export async function isStored(cache: Cache, files: OfflineFile[]) {

@@ -382,7 +382,7 @@ export function pairName(pair: string) {
 		TRANSLATE_LANGUAGES.filter((language) => language[side] === code)
 			.map((language) => language.name)
 			.join(', ') || code;
-	return `${names('from', from)} → ${names('to', to)}`;
+	return `${names('from', from)} to ${names('to', to)}`;
 }
 
 /// The pairs stored on this device and their sizes.
