@@ -637,7 +637,8 @@ English stay in IndexedDB, where they always were; the panel lists and removes
 them but cannot add them. An engine missing offline says so instead of
 failing with a fetch error.
 
-Not verified in a browser at all. Open questions: whether Tesseract's worker,
+The user reported it working in their browser (2026-10-08, from memory
+rather than a fresh run). Still open: whether Tesseract's worker,
 now started from its URL rather than a blob, is controlled by the service
 worker in every browser; whether Vercel serves prerendered tool pages at
 `/tools/merge` without a trailing-slash redirect (a redirected response is

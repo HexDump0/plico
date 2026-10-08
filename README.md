@@ -37,3 +37,9 @@ npm run build        # production build
 npm run test:engine  # Rust engine tests
 npm run test:corpus  # structural checks against a local PDF corpus
 ```
+
+## License
+
+Plico is licensed under the [GNU Affero General Public License v3.0 or later](./LICENSE).
+It includes AGPL components (MuPDF for repair, Ghostscript's ICC profiles for PDF/A),
+so the app as a whole is distributed under the AGPL.
