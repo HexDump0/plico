@@ -167,6 +167,31 @@ Rewriting references walked nested arrays and dictionaries recursively, so a
 deep enough nesting could overflow the wasm stack, a trap rather than an
 error. `rewrite_references` walks with a stack instead.
 
+### lopdf loaded some damaged files with part of a page missing
+
+Five corpus files load without an error and without part of a page, and every
+tool wrote that page out blank or shifted: a stream with no `/Length` is left
+empty (`operator-in-TJ-array.pdf`, `issue1293r.pdf`); one whose `/Length` is
+too short fails to parse and lopdf keeps only its dictionary
+(`xobject-image.pdf`, whose page contents became `<</Length 14>>`); an object
+that fails to parse is left out, so what names it reads null
+(`issue11549_reduced.pdf`, fonts with a space in `/BaseFont`); and a failed
+decryption is ignored, leaving ciphertext as the content (`issue7665.pdf`,
+AES-256 with `/CF` as a reference). `load_document` now looks for all four
+and calls the file unreadable (`lost_in_loading`), which sends it to Repair.
+`issue7229.pdf` is refused the same way now, since its xref lists the missing
+kid as in use.
+
+MuPDF's copies of `xobject-image.pdf`, `operator-in-TJ-array.pdf`,
+`issue1293r.pdf` and `issue7229.pdf` (both pages) load in full. MuPDF will not
+save `issue11549_reduced.pdf`, and its copy of `issue7665.pdf` keeps the same
+encryption, so those two are refused outright. Checked on those six files
+only; the corpus baselines have not been re-run, and will move: more files
+refused, fewer raster failures. Tests:
+`refuses_files_lopdf_loads_with_part_of_a_page_missing`,
+`opens_a_file_whose_only_broken_object_is_unused`,
+`refuses_an_encrypted_file_whose_streams_do_not_decrypt`.
+
 ### Smaller ones
 
 `Document::load_mem` applied no decompression limit, so a small file could
@@ -751,11 +776,13 @@ byte-identical. The 9 differences fall into four buckets:
   content stream lopdf cannot decode (a wrong `/Length`, an empty decode, or a
   filter handled differently than pdf.js), so the merge writes back empty or
   altered bytes and the page renders blank or shifted. The structural harness
-  passed all of these. The fix is to detect a failed decode and refuse the
-  merge rather than silently ship an empty page.
+  passed all of these. Now refused on load and sent to Repair (see "lopdf
+  loaded some damaged files with part of a page missing" under Fixed); this
+  baseline predates that.
 - malformed page tree (1): `issue7229.pdf`. lopdf counts one fewer page than
   pdf.js because the source's `/Kids` names a missing object, so the merge
-  ships one fewer page than a viewer shows.
+  shipped one fewer page than a viewer shows. Now refused the same way; the
+  repaired copy has both pages.
 - geometry rounding (1): `freeculture.pdf` page 2 is one pixel shorter after
   merging, from lopdf's f32 float serialisation of an inherited `/CropBox`.
 - identical content, different render (2): `issue13147.pdf`, `issue5954.pdf`

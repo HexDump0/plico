@@ -253,6 +253,13 @@ engine cannot take it out does it paint over, and then it says on which
 pages. Replacing text removes glyphs only (`text_only`), never the paths and
 images behind them.
 
+A file lopdf loads with part of it missing is unreadable, never written out
+without it. lopdf drops objects it cannot parse, leaves streams without a
+`/Length` empty, keeps only the dictionary of a stream whose `/Length` is too
+short, and ignores a failed decryption, all without an error. `load_document`
+checks for each (`lost_in_loading`), and its "could not be read" wording is
+what sends a file to Repair.
+
 New objects never take an id something already references. lopdf numbers
 them from `max_id`, which only counts objects that exist, so a dangling
 reference would come to name whatever was added next. `load_document` raises

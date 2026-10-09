@@ -432,6 +432,143 @@ fn survives_a_page_tree_kid_that_does_not_exist() {
     assert_eq!(document.get_pages().len(), 2);
 }
 
+/// A one-page PDF written by hand, so an object can be as broken as real files
+/// are: `contents` is object 4, the page's content stream, between `obj` and
+/// `endobj`, and `font` is object 5, which the page uses only when `uses_font`.
+fn handwritten_pdf(contents: &str, font: &str, uses_font: bool) -> Vec<u8> {
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
+         /Resources << /Font << {} >> >> >>",
+        if uses_font { "/F1 5 0 R" } else { "" }
+    );
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &page,
+        contents,
+        font,
+    ];
+    let mut bytes = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    bytes
+}
+
+const FONT: &str = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+const BROKEN_FONT: &str = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica ) >>";
+const CONTENT: &str = "BT /F1 12 Tf 20 100 Td (kept) Tj ET";
+
+fn content_stream() -> String {
+    format!(
+        "<< /Length {} >>\nstream\n{CONTENT}\nendstream",
+        CONTENT.len()
+    )
+}
+
+/// lopdf loads each of these without an error and without part of the page,
+/// so every tool used to write out a blank page that parsed cleanly. They are
+/// refused as unreadable instead, which sends them to Repair.
+#[test]
+fn refuses_files_lopdf_loads_with_part_of_a_page_missing() {
+    let intact = handwritten_pdf(&content_stream(), FONT, true);
+    assert_eq!(condition_of(&intact, ""), Condition::Readable { pages: 1 });
+    assert_eq!(
+        page_contents(&split_pdf_bytes(&intact, SplitMode::Every(1)).unwrap()[0]),
+        [CONTENT]
+    );
+
+    let broken = [
+        // operator-in-TJ-array.pdf: no /Length, so the stream is left empty.
+        handwritten_pdf(&format!("<< >>\nstream\n{CONTENT}\nendstream"), FONT, true),
+        // xobject-image.pdf: too short a /Length, so only the dictionary loads.
+        handwritten_pdf(
+            &format!("<< /Length 9 >>\nstream\n{CONTENT}\nendstream"),
+            FONT,
+            true,
+        ),
+        // The same, with a dictionary inside the content itself.
+        handwritten_pdf(
+            &format!("<< /Length 9 >>\nstream\n/P << /MCID 0 >> BDC {CONTENT} EMC\nendstream"),
+            FONT,
+            true,
+        ),
+        // issue11549_reduced.pdf: the font fails to parse and is left out.
+        handwritten_pdf(&content_stream(), BROKEN_FONT, true),
+    ];
+    for bytes in broken {
+        let error = split_pdf_bytes(&bytes, SplitMode::Every(1)).unwrap_err();
+        assert!(error.starts_with("PDF 1 could not be read:"), "{error}");
+        assert_eq!(condition_of(&bytes, ""), Condition::Damaged);
+    }
+}
+
+/// An object nothing uses is not part of any page, so failing to parse it
+/// loses nothing and the file still opens.
+#[test]
+fn opens_a_file_whose_only_broken_object_is_unused() {
+    let bytes = handwritten_pdf(&content_stream(), BROKEN_FONT, false);
+    assert_eq!(condition_of(&bytes, ""), Condition::Readable { pages: 1 });
+}
+
+/// issue7665.pdf: lopdf ignores a decryption that fails and keeps the
+/// ciphertext, which merging then wrote out as the page's content. A stream
+/// that decrypts into something that cannot be inflated is the same case.
+#[test]
+fn refuses_an_encrypted_file_whose_streams_do_not_decrypt() {
+    let mut document = Document::load_mem(&one_page_pdf(&CONTENT.repeat(20))).unwrap();
+    document.compress();
+    document.trailer.set(
+        "ID",
+        vec![
+            Object::string_literal(b"plico-fixture".to_vec()),
+            Object::string_literal(b"plico-fixture".to_vec()),
+        ],
+    );
+    let state = EncryptionState::try_from(EncryptionVersion::V2 {
+        document: &document,
+        owner_password: "owner",
+        user_password: "",
+        key_length: 128,
+        permissions: Permissions::all(),
+    })
+    .unwrap();
+    document.encrypt(&state).unwrap();
+    let mut readable = Vec::new();
+    document.clone().save_to(&mut readable).unwrap();
+
+    let content_id = document.get_page_contents(document.page_iter().next().unwrap())[0];
+    let stream = document
+        .get_object_mut(content_id)
+        .unwrap()
+        .as_stream_mut()
+        .unwrap();
+    stream.content.iter_mut().for_each(|byte| *byte ^= 0x5a);
+    let mut garbled = Vec::new();
+    document.save_to(&mut garbled).unwrap();
+
+    assert_eq!(
+        condition_of(&readable, ""),
+        Condition::Readable { pages: 1 }
+    );
+    let error = merge_pdf_bytes(&[&garbled, &one_page_pdf("second")]).unwrap_err();
+    assert!(error.starts_with("PDF 1 could not be read:"), "{error}");
+}
+
 #[test]
 fn merges_more_than_two_documents() {
     let files = [

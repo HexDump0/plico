@@ -1,7 +1,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, dictionary};
+use flate2::{Decompress, FlushDecompress, Status};
+use lopdf::xref::XrefEntry;
+use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, Stream, dictionary};
 use md5::{Digest, Md5};
 
 use crate::compression::packed_options;
@@ -485,23 +487,168 @@ pub(crate) fn load_document(
         }
     }
 
+    let referenced = referenced_ids(&document);
+    if let Some(loss) = lost_in_loading(&document, bytes, &referenced) {
+        return Err(format!("PDF {position} could not be read: {loss}."));
+    }
     if document.get_pages().is_empty() {
         return Err(format!("PDF {position} has no pages."));
     }
-    reserve_referenced_ids(&mut document);
+    if let Some(&highest) = referenced.iter().next_back() {
+        document.max_id = document.max_id.max(highest);
+    }
 
     Ok(document)
 }
 
-/// lopdf gives each new object the id after `max_id`, which only counts objects
-/// that exist. A reference to one that does not can name an id past all of
-/// them, and an object added there answers it: annotating gave two popups whose
-/// parents were missing the new highlight and its appearance as parents
-/// (pdf.js corpus: ZapfDingbats.pdf). Every tool that edits in place adds
-/// objects, so new ids start past every id referenced, keeping such references
-/// dangling. Merge renumbers instead and sets its own `max_id`.
-fn reserve_referenced_ids(document: &mut Document) {
-    let mut highest = document.max_id;
+/// lopdf loads some damaged files without an error and without part of them,
+/// and every tool would then write that part out missing or wrong: a blank or
+/// shifted page that parses cleanly (pdf.js corpus: the five files in
+/// ISSUES.md's raster section). Calling such a file unreadable sends it to
+/// Repair, whose MuPDF copy reads in full.
+fn lost_in_loading(
+    document: &Document,
+    bytes: &[u8],
+    referenced: &BTreeSet<u32>,
+) -> Option<&'static str> {
+    // An object that failed to parse is left out of `objects`, so whatever
+    // names it reads null (issue11549_reduced.pdf: fonts whose /BaseFont has a
+    // space in it). One the file never claimed to have is only dangling, and
+    // lopdf removes /Encrypt itself, which a cross-reference stream still names.
+    let mut loaded = document
+        .objects
+        .keys()
+        .map(|id| id.0)
+        .collect::<BTreeSet<_>>();
+    if let Some((id, _)) = document
+        .encryption_state
+        .as_ref()
+        .and_then(|state| state.encrypt_object_id())
+    {
+        loaded.insert(id);
+    }
+    let unloaded = |id: &u32| {
+        !loaded.contains(id)
+            && matches!(
+                document.reference_table.get(*id),
+                Some(XrefEntry::Normal { .. } | XrefEntry::Compressed { .. })
+            )
+    };
+    if referenced.iter().any(unloaded) {
+        return Some("some of its objects are damaged");
+    }
+
+    for (id, object) in &document.objects {
+        match object {
+            // A stream without /Length is read later, from its position, and
+            // left empty when that fails (operator-in-TJ-array.pdf,
+            // issue1293r.pdf). Encrypted files never read it at all.
+            Object::Stream(stream)
+                if stream.start_position.is_some()
+                    && stream.content.is_empty()
+                    && stream_length(document, stream) != Some(0) =>
+            {
+                return Some("a stream has no length");
+            }
+            // A /Length too short for the data makes the stream fail to parse,
+            // and lopdf keeps its dictionary as the whole object
+            // (xobject-image.pdf: a page whose contents became <</Length 14>>).
+            Object::Dictionary(dictionary)
+                if dictionary.has(b"Length") && was_stream(document, bytes, *id) =>
+            {
+                return Some("a stream has the wrong length");
+            }
+            // lopdf ignores a failed decryption and keeps the ciphertext,
+            // which the output would then present as plain content
+            // (issue7665.pdf: an AES-256 file whose /CF is a reference).
+            Object::Stream(stream) if document.was_encrypted() && !starts_inflating(stream) => {
+                return Some("it could not be decrypted");
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn stream_length(document: &Document, stream: &Stream) -> Option<i64> {
+    let length = stream.dict.get(b"Length").ok()?;
+    document.dereference(length).ok()?.1.as_i64().ok()
+}
+
+/// Whether the file's own text for object `id` is a stream: a dictionary
+/// followed by the `stream` keyword, before `endobj` or the next object.
+fn was_stream(document: &Document, bytes: &[u8], id: ObjectId) -> bool {
+    let Some(XrefEntry::Normal { offset, .. }) = document.reference_table.get(id.0) else {
+        return false;
+    };
+    let Some(text) = bytes.get(*offset as usize..) else {
+        return false;
+    };
+    let body = find(text, b"obj").map_or(0, |at| at + 3);
+    let end = [b"endobj".as_slice(), b" obj"]
+        .iter()
+        .filter_map(|keyword| find(&text[body..], keyword))
+        .min()
+        .map_or(text.len(), |at| body + at);
+    let text = &text[..end];
+    let Some(at) = find(text, b"stream") else {
+        return false;
+    };
+    text[..at].trim_ascii_end().ends_with(b">>") && matches!(text.get(at + 6), Some(b'\r' | b'\n'))
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Whether a FlateDecode stream's first few kilobytes inflate, with a zlib
+/// header or without one. Ciphertext fails within a few bytes; checking a
+/// prefix keeps this cheap on large images.
+fn starts_inflating(stream: &Stream) -> bool {
+    let flate = match stream.dict.get(b"Filter") {
+        Ok(Object::Name(name)) => name == b"FlateDecode",
+        Ok(Object::Array(filters)) => filters
+            .first()
+            .is_some_and(|filter| filter.as_name().is_ok_and(|name| name == b"FlateDecode")),
+        _ => false,
+    };
+    if !flate || stream.content.is_empty() {
+        return true;
+    }
+    let prefix = &stream.content[..stream.content.len().min(4096)];
+    inflates(prefix, true) || inflates(prefix, false)
+}
+
+fn inflates(input: &[u8], zlib_header: bool) -> bool {
+    let mut inflater = Decompress::new(zlib_header);
+    let mut sink = [0; 4096];
+    loop {
+        let (read, written) = (inflater.total_in(), inflater.total_out());
+        let rest = &input[read as usize..];
+        match inflater.decompress(rest, &mut sink, FlushDecompress::None) {
+            Err(_) => return false,
+            Ok(Status::StreamEnd) => return true,
+            Ok(_) if inflater.total_in() as usize == input.len() => return true,
+            Ok(_) if (inflater.total_in(), inflater.total_out()) == (read, written) => return true,
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Every object id something in the document refers to.
+///
+/// `load_document` also raises `max_id` past all of them. lopdf gives each new
+/// object the id after `max_id`, which only counts objects that exist. A
+/// reference to one that does not can name an id past all of them, and an
+/// object added there answers it: annotating gave two popups whose parents were
+/// missing the new highlight and its appearance as parents (pdf.js corpus:
+/// ZapfDingbats.pdf). Every tool that edits in place adds objects, so new ids
+/// start past every id referenced, keeping such references dangling. Merge
+/// renumbers instead and sets its own `max_id`.
+fn referenced_ids(document: &Document) -> BTreeSet<u32> {
+    let mut referenced = BTreeSet::new();
     let mut pending = document
         .objects
         .values()
@@ -509,7 +656,9 @@ fn reserve_referenced_ids(document: &mut Document) {
         .collect::<Vec<_>>();
     while let Some(object) = pending.pop() {
         match object {
-            Object::Reference((id, _)) => highest = highest.max(*id),
+            Object::Reference((id, _)) => {
+                referenced.insert(*id);
+            }
             Object::Array(items) => pending.extend(items),
             Object::Dictionary(dictionary) => {
                 pending.extend(dictionary.iter().map(|(_, value)| value))
@@ -518,7 +667,7 @@ fn reserve_referenced_ids(document: &mut Document) {
             _ => {}
         }
     }
-    document.max_id = highest;
+    referenced
 }
 
 fn merge_documents(documents: Vec<Document>) -> Result<Document, String> {
