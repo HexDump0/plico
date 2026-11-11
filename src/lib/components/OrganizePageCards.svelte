@@ -3,6 +3,7 @@
 	import { flushSync } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { IconRotate, IconRotateClockwise, IconX } from '@tabler/icons-svelte-runes';
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import type { OrganizePage } from '$lib/pdf/types';
@@ -31,6 +32,8 @@
 	let dragged = $state<string | null>(null);
 	let keyboardPicked = $state<string | null>(null);
 	let dropTarget = $state<string | null>(null);
+	// Released cards keep their place above the others until they land.
+	const settling = new SvelteSet<string>();
 	let trashHovered = $state(false);
 	let trashZone = $state<HTMLDivElement>();
 	let orderAnnouncement = $state('');
@@ -286,7 +289,8 @@
 			if (shouldCommit)
 				orderAnnouncement = `${describe(key)} moved to position ${finalIndex + 1} of ${pages.length}.`;
 			if (reducedMotion) gsap.set(surface, { clearProps: 'transform' });
-			else
+			else {
+				settling.add(key);
 				gsap.to(surface, {
 					x: 0,
 					y: 0,
@@ -295,8 +299,12 @@
 					duration: 0.48,
 					ease: 'elastic.out(1, 0.58)',
 					overwrite: true,
-					onComplete: () => gsap.set(surface, { clearProps: 'transform' })
+					onComplete: () => {
+						settling.delete(key);
+						gsap.set(surface, { clearProps: 'transform' });
+					}
 				});
+			}
 		}
 		function lift() {
 			active = true;
@@ -306,6 +314,7 @@
 				dragged = key;
 			});
 			gsap.killTweensOf(surface);
+			settling.delete(key);
 			baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
 			baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
 			angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
@@ -417,6 +426,7 @@
 				node.removeEventListener('touchmove', blockTouchScroll);
 				node.removeEventListener('contextmenu', blockContextMenu);
 				clearTimeout(holdTimer);
+				settling.delete(key);
 				if (dragged === key) {
 					dragOrder = null;
 					dragged = null;
@@ -447,7 +457,7 @@
 				class="group relative w-[calc((100%-1.25rem)/2)] min-w-0 rounded-xl sm:w-64 xl:w-72 {processing
 					? ''
 					: 'cursor-grab select-none [-webkit-touch-callout:none] active:cursor-grabbing'} {dragged ===
-				key
+					key || settling.has(key)
 					? 'z-40'
 					: ''}"
 			>

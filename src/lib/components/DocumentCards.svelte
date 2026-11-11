@@ -4,6 +4,7 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
+	import { SvelteSet } from 'svelte/reactivity';
 	import {
 		IconCamera,
 		IconPerspective,
@@ -65,6 +66,8 @@
 		isPdfToImage ? (workspace.files[0] ? [workspace.files[0]] : []) : [...visibleFiles, null]
 	);
 	let dropTarget = $state<File | null>(null);
+	// Released cards keep their place above the others until they land.
+	const settling = new SvelteSet<File>();
 	let trashHovered = $state(false);
 	let trashZone = $state<HTMLDivElement>();
 	let orderAnnouncement = $state('');
@@ -285,6 +288,7 @@
 			if (reducedMotion) {
 				gsap.set(surface, { clearProps: 'transform' });
 			} else {
+				settling.add(file);
 				gsap.to(surface, {
 					x: 0,
 					y: 0,
@@ -293,7 +297,10 @@
 					duration: 0.48,
 					ease: 'elastic.out(1, 0.58)',
 					overwrite: true,
-					onComplete: () => gsap.set(surface, { clearProps: 'transform' })
+					onComplete: () => {
+						settling.delete(file);
+						gsap.set(surface, { clearProps: 'transform' });
+					}
 				});
 			}
 		}
@@ -307,6 +314,7 @@
 				dragged = file;
 			});
 			gsap.killTweensOf(surface);
+			settling.delete(file);
 			baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
 			baseY = y = parseFloat(String(gsap.getProperty(surface, 'y'))) || 0;
 			angle = parseFloat(String(gsap.getProperty(surface, 'rotation'))) || 0;
@@ -420,6 +428,7 @@
 				node.removeEventListener('touchmove', blockTouchScroll);
 				node.removeEventListener('contextmenu', blockContextMenu);
 				clearTimeout(holdTimer);
+				settling.delete(file);
 				if (dragged === file) {
 					dragOrder = null;
 					dragged = null;
@@ -465,7 +474,7 @@
 				canOrder &&
 				!processing
 					? 'cursor-grab select-none [-webkit-touch-callout:none] active:cursor-grabbing'
-					: ''} {file && dragged === file ? 'z-40' : ''}"
+					: ''} {file && (dragged === file || settling.has(file)) ? 'z-40' : ''}"
 			>
 				{#if file}
 					{#if dragged === file}<div

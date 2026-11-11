@@ -1,6 +1,6 @@
 <script lang="ts">
 	import gsap from 'gsap';
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import {
 		IconUpload,
 		IconFileTypePdf,
@@ -46,6 +46,19 @@
 			selectedTool?.id === 'pdf-to-images'
 	);
 	let input: HTMLInputElement;
+	let list = $state<HTMLUListElement>();
+	let reducedMotion = $state(false);
+	// Files added to a list that is already showing scroll into view as they land.
+	let listedCount = 0;
+	$effect(() => {
+		const count = workspace.files.length;
+		if (list && listedCount > 0 && count > listedCount)
+			list.scrollTo({
+				top: list.scrollHeight,
+				behavior: untrack(() => reducedMotion) ? 'instant' : 'smooth'
+			});
+		listedCount = count;
+	});
 	let dragging = $state(false);
 	let depth = 0;
 	let transitioning = $state(false);
@@ -157,7 +170,9 @@
 	}
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+		reducedMotion = preference.matches;
 		const changed = () => {
+			reducedMotion = preference.matches;
 			if (preference.matches) {
 				finishTransition();
 				finishRemoval();
@@ -220,7 +235,7 @@
 	aria-label={`${formatName(inputType)} file selection`}
 	class="flex h-full min-h-64 w-full flex-col rounded-2xl bg-panel p-5 sm:p-6 {dragging
 		? 'ring-2 ring-brand'
-		: ''}"
+		: 'motion-safe:transition-[box-shadow] motion-safe:duration-200'}"
 	ondragenter={(event) => {
 		event.preventDefault();
 		depth++;
@@ -248,21 +263,26 @@
 					: ''}"
 				onclick={() => input.click()}
 			>
-				<IconUpload size={40} stroke={1.5} /><span class="text-xl font-medium"
-					>{dragging
-						? 'You can let go btw'
-						: isImageTool
+				<IconUpload size={40} stroke={1.5} /><span class="grid text-center text-xl font-medium"
+					><span
+						aria-hidden={dragging}
+						class="col-start-1 row-start-1 {dragging ? 'invisible' : ''}"
+						>{isImageTool
 							? 'Drop in your images'
 							: documentInput
 								? `Drop in your ${formatName(inputType)} file`
 								: 'Drop in your PDFs'}</span
+					><span
+						aria-hidden={!dragging}
+						class="col-start-1 row-start-1 {dragging ? '' : 'invisible'}">You can let go btw</span
+					></span
 				>
 			</button>
 		{/if}
 		{#if !emptyOnly && workspace.files.length}
 			<div bind:this={filePanel} class="flex min-h-0 flex-1 flex-col">
 				<div class="mb-3 flex items-center justify-between gap-2">
-					<h2 class="text-sm font-semibold">
+					<h2 class="text-sm font-semibold tabular-nums">
 						{workspace.files.length}
 						{isImageTool
 							? workspace.files.length === 1
@@ -277,7 +297,7 @@
 						onclick={() => input.click()}><IconPlus size={18} /> Add files</button
 					>
 				</div>
-				<ul class="min-h-0 flex-1 space-y-2 overflow-y-auto">
+				<ul bind:this={list} class="min-h-0 flex-1 space-y-2 overflow-y-auto">
 					{#each workspace.files as file (file)}
 						<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
 							{#if isImageTool}
