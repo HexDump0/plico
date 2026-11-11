@@ -1,5 +1,5 @@
 <script lang="ts">
-	import gsap from 'gsap';
+	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { scale, slide } from 'svelte/transition';
 	import {
@@ -18,21 +18,16 @@
 	} from '@tabler/icons-svelte-runes';
 	import { offline, type PackId, type SaveState } from '$lib/offline.svelte';
 	import { formatSize } from '$lib/workspace.svelte';
+	import { DialogMotion } from '$lib/motion/dialog';
+	import { spring } from '$lib/motion/link';
 
-	let dialog: HTMLDialogElement;
+	const panel = new DialogMotion();
 	let reducedMotion = $state(false);
 
-	export function open() {
+	export function open(trigger?: HTMLElement) {
 		reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		void offline.refresh();
-		dialog.showModal();
-		if (!reducedMotion) {
-			gsap.fromTo(
-				dialog,
-				{ y: 10, opacity: 0 },
-				{ y: 0, opacity: 1, duration: 0.2, ease: 'power2.out', clearProps: 'all' }
-			);
-		}
+		panel.open(trigger);
 	}
 
 	// Each pack has its own colour so its share of the bar reads at a glance.
@@ -149,22 +144,9 @@
 </script>
 
 <dialog
-	bind:this={dialog}
+	{@attach panel.attach}
 	aria-labelledby="offline-title"
-	class="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white backdrop:bg-black/50 sm:p-8"
-	onclick={(event) => {
-		if (event.target === dialog) {
-			const rect = dialog.getBoundingClientRect();
-			if (
-				event.clientX < rect.left ||
-				event.clientX > rect.right ||
-				event.clientY < rect.top ||
-				event.clientY > rect.bottom
-			)
-				dialog.close();
-		}
-	}}
-	onclose={() => gsap.killTweensOf(dialog)}
+	class="grows m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white sm:p-8"
 >
 	<div class="mb-6 flex items-center gap-3">
 		<h2 id="offline-title" class="flex-1 text-3xl font-semibold tracking-tight">Offline</h2>
@@ -178,7 +160,7 @@
 		{/if}
 		<button
 			aria-label="Close"
-			onclick={() => dialog.close()}
+			onclick={() => panel.close()}
 			class="flex size-12 items-center justify-center rounded-xl bg-canvas transition-colors hover:bg-panel-hover"
 			><IconX size={22} aria-hidden="true" /></button
 		>
@@ -235,70 +217,73 @@
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
 		{#each packs as pack (pack.id)}
 			{@const state = offline.packs.get(pack.id)}
-			<div class="relative">
-				{#if state?.status === 'ready'}
-					<div
-						in:scale={{ duration: reducedMotion ? 0 : 200, start: 0.96, easing: cubicOut }}
-						class="flex h-full min-h-32 flex-col gap-3 rounded-xl p-4 text-panel {pack.solid}"
-					>
-						<pack.icon size={24} stroke={1.8} aria-hidden="true" />
-						<div class="mt-auto">
-							<p class="text-sm font-bold">{pack.label}</p>
-							<p class="mt-0.5 text-xs text-panel/70">{pack.detail}</p>
-						</div>
+			{@const ready = state?.status === 'ready'}
+			<div class="grid">
+				<button
+					type="button"
+					inert={ready}
+					disabled={!state || state.status === 'saving' || !offline.online}
+					onclick={() => void offline.download(pack.id)}
+					aria-label="{state?.status === 'failed' ? 'Retry' : 'Download'} {pack.label}, {formatSize(
+						state?.total ?? 0
+					)}"
+					title={offline.online ? undefined : 'Needs a connection'}
+					class="group relative isolate col-start-1 row-start-1 flex h-full min-h-32 w-full flex-col gap-3 overflow-hidden rounded-xl border-2 border-dashed bg-canvas p-4 text-left motion-safe:transition-colors {state?.status ===
+						'saving' || state?.status === 'failed'
+						? state.status === 'failed'
+							? 'border-convert/60'
+							: pack.border
+						: 'border-white/10 enabled:hover:border-white/25'} disabled:cursor-default"
+				>
+					<!-- Real bytes received; the tile turns solid once they are all in. -->
+					{#if state?.status === 'saving'}<span
+							aria-hidden="true"
+							class="absolute inset-y-0 left-0 -z-10 {pack.soft} motion-safe:transition-[width] motion-safe:duration-300"
+							style:width="{percent(state)}%"
+						></span>{/if}
+					<div class="flex items-start justify-between gap-2">
+						<pack.icon size={24} stroke={1.8} class={pack.tone} aria-hidden="true" />
+						{#if state?.status === 'saving'}
+							<span class="text-xs font-semibold tabular-nums" role="status">{percent(state)}%</span
+							>
+						{:else if state?.status === 'failed'}
+							<span class="flex items-center gap-1 text-xs font-semibold text-convert"
+								><IconRefresh size={14} />Retry</span
+							>
+						{:else if state}
+							<span
+								class="flex items-center gap-1 text-xs text-muted tabular-nums group-enabled:group-hover:text-white motion-safe:transition-colors"
+								>{formatSize(state.total)}<IconDownload size={14} /></span
+							>
+						{/if}
 					</div>
-					<button
-						type="button"
-						onclick={() => void offline.remove(pack.id)}
-						aria-label="Remove {pack.label}, {formatSize(state.total)}"
-						title="Remove"
-						class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-canvas"
-						><IconX size={16} /></button
+					<div class="mt-auto {offline.online ? '' : 'opacity-50'}">
+						<p class="text-sm font-bold">{pack.label}</p>
+						<p class="mt-0.5 text-xs text-muted">{pack.detail}</p>
+					</div>
+				</button>
+				{#if ready && state}
+					<div
+						in:scale={{ duration: reducedMotion ? 0 : 320, start: 0.96, easing: spring }}
+						out:scale={{ duration: reducedMotion ? 0 : 200, start: 0.96, easing: cubicOut }}
+						class="relative col-start-1 row-start-1"
 					>
-				{:else}
-					<button
-						type="button"
-						disabled={!state || state.status === 'saving' || !offline.online}
-						onclick={() => void offline.download(pack.id)}
-						aria-label="{state?.status === 'failed'
-							? 'Retry'
-							: 'Download'} {pack.label}, {formatSize(state?.total ?? 0)}"
-						title={offline.online ? undefined : 'Needs a connection'}
-						class="group relative isolate flex h-full min-h-32 w-full flex-col gap-3 overflow-hidden rounded-xl border-2 border-dashed bg-canvas p-4 text-left motion-safe:transition-colors {state?.status ===
-							'saving' || state?.status === 'failed'
-							? state.status === 'failed'
-								? 'border-convert/60'
-								: pack.border
-							: 'border-white/10 enabled:hover:border-white/25'} disabled:cursor-default"
-					>
-						<!-- Real bytes received; the tile turns solid once they are all in. -->
-						{#if state?.status === 'saving'}<span
-								aria-hidden="true"
-								class="absolute inset-y-0 left-0 -z-10 {pack.soft} motion-safe:transition-[width] motion-safe:duration-300"
-								style:width="{percent(state)}%"
-							></span>{/if}
-						<div class="flex items-start justify-between gap-2">
-							<pack.icon size={24} stroke={1.8} class={pack.tone} aria-hidden="true" />
-							{#if state?.status === 'saving'}
-								<span class="text-xs font-semibold tabular-nums" role="status"
-									>{percent(state)}%</span
-								>
-							{:else if state?.status === 'failed'}
-								<span class="flex items-center gap-1 text-xs font-semibold text-convert"
-									><IconRefresh size={14} />Retry</span
-								>
-							{:else if state}
-								<span
-									class="flex items-center gap-1 text-xs text-muted tabular-nums group-enabled:group-hover:text-white motion-safe:transition-colors"
-									>{formatSize(state.total)}<IconDownload size={14} /></span
-								>
-							{/if}
+						<div class="flex h-full min-h-32 flex-col gap-3 rounded-xl p-4 text-panel {pack.solid}">
+							<pack.icon size={24} stroke={1.8} aria-hidden="true" />
+							<div class="mt-auto">
+								<p class="text-sm font-bold">{pack.label}</p>
+								<p class="mt-0.5 text-xs text-panel/70">{pack.detail}</p>
+							</div>
 						</div>
-						<div class="mt-auto {offline.online ? '' : 'opacity-50'}">
-							<p class="text-sm font-bold">{pack.label}</p>
-							<p class="mt-0.5 text-xs text-muted">{pack.detail}</p>
-						</div>
-					</button>
+						<button
+							type="button"
+							onclick={() => void offline.remove(pack.id)}
+							aria-label="Remove {pack.label}, {formatSize(state.total)}"
+							title="Remove"
+							class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-canvas"
+							><IconX size={16} /></button
+						>
+					</div>
 				{/if}
 			</div>
 		{/each}
@@ -310,6 +295,7 @@
 			<ul class="flex flex-wrap gap-2">
 				{#each offline.models as model (`${model.kind}:${model.id}`)}
 					<li
+						animate:flip={{ duration: reducedMotion ? 0 : 320, easing: spring }}
 						out:scale={{ duration: reducedMotion ? 0 : 160, start: 0.9, easing: cubicOut }}
 						class="flex h-10 max-w-full items-center gap-2 rounded-xl bg-canvas pr-1 pl-3 text-sm"
 					>

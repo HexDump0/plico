@@ -16,13 +16,13 @@
 	import logo from '$lib/assets/plico.svg';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import ToolsDialog from './ToolsDialog.svelte';
+	import { DialogMotion } from '$lib/motion/dialog';
 	let toolsDialog: ToolsDialog;
 	let offlineDialog: OfflineDialog;
-	import gsap from 'gsap';
 
 	let { onselect }: { onselect: (tool: CatalogTool) => void } = $props();
 	let toolsButton: HTMLButtonElement;
-	let dialog: HTMLDialogElement;
+	const infoPanel = new DialogMotion();
 	let content = $state<'github' | 'donate'>('github');
 	const titles = {
 		github: 'Open by design',
@@ -43,16 +43,9 @@
 		toolsDialog.open(source ?? toolsButton);
 	}
 
-	function open(view: typeof content) {
+	function open(view: typeof content, trigger: HTMLElement) {
 		content = view;
-		dialog.showModal();
-		if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			gsap.fromTo(
-				dialog,
-				{ y: 10, opacity: 0 },
-				{ y: 0, opacity: 1, duration: 0.2, ease: 'power2.out', clearProps: 'all' }
-			);
-		}
+		infoPanel.open(trigger);
 	}
 </script>
 
@@ -106,7 +99,7 @@
 			<button
 				use:linkMotion={{ hover: false, pressScale: 0.95 }}
 				class="flex min-h-11 items-center rounded-md transition-colors hover:text-brand"
-				onclick={() => offlineDialog.open()}
+				onclick={(event) => offlineDialog.open(event.currentTarget)}
 				aria-haspopup="dialog"
 				title="Offline"
 				><span class="flex items-center gap-1.5"
@@ -143,7 +136,7 @@
 		<button
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			class="hidden min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand sm:flex"
-			onclick={() => open('github')}
+			onclick={(event) => open('github', event.currentTarget)}
 			aria-haspopup="dialog"
 			><span class="flex items-center gap-1.5"
 				><IconBrandGithub size={21} aria-hidden="true" /><span class="hidden md:inline">Github</span
@@ -153,7 +146,7 @@
 		<button
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			class="hidden min-h-11 items-center gap-1 rounded-xl bg-brand px-4 py-2.5 text-panel transition-colors hover:bg-violet-300 sm:flex"
-			onclick={() => {
+			onclick={(event) => {
 				if (page.url.pathname === resolve('/about')) {
 					document.getElementById('support')?.scrollIntoView({
 						behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -162,7 +155,7 @@
 						block: 'center'
 					});
 					document.getElementById('support')?.focus({ preventScroll: true });
-				} else open('donate');
+				} else open('donate', event.currentTarget);
 			}}
 			aria-haspopup={page.url.pathname === resolve('/about') ? undefined : 'dialog'}
 			><span class="flex items-center gap-1"
@@ -173,28 +166,15 @@
 </header>
 
 <dialog
-	bind:this={dialog}
+	{@attach infoPanel.attach}
 	aria-labelledby="dialog-title"
-	class="fixed inset-4 m-auto w-auto max-w-lg overflow-y-auto rounded-3xl border border-white/10 bg-panel p-6 text-white shadow-2xl backdrop:bg-canvas/80 backdrop:backdrop-blur-sm sm:p-8"
-	onclick={(event) => {
-		if (event.target === dialog) {
-			const rect = dialog.getBoundingClientRect();
-			if (
-				event.clientX < rect.left ||
-				event.clientX > rect.right ||
-				event.clientY < rect.top ||
-				event.clientY > rect.bottom
-			)
-				dialog.close();
-		}
-	}}
-	onclose={() => gsap.killTweensOf(dialog)}
+	class="grows fixed inset-4 m-auto w-auto max-w-lg overflow-y-auto rounded-3xl bg-panel p-6 text-white sm:p-8"
 >
 	<div class="mb-6 flex items-center justify-between gap-4">
 		<h2 id="dialog-title" class="text-xl font-bold">{titles[content]}</h2>
 		<button
 			class="rounded-lg p-2 text-muted hover:bg-white/5 hover:text-white"
-			onclick={() => dialog.close()}
+			onclick={() => infoPanel.close()}
 			aria-label="Close dialog"><IconX size={22} aria-hidden="true" /></button
 		>
 	</div>

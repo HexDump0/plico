@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { onDestroy, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import gsap from 'gsap';
+	import { DialogMotion } from '$lib/motion/dialog';
+	import { spring } from '$lib/motion/link';
 	import { IconSearch, IconX } from '@tabler/icons-svelte-runes';
 	import { quickTools, toolColumns, type CatalogTool } from '$lib/tool-catalog';
 	import { searchTools } from '$lib/tool-search';
@@ -14,10 +16,7 @@
 	let dialog: HTMLDialogElement;
 	let search: HTMLInputElement;
 	let query = $state('');
-	let closing = false;
-	let previousOverflow: string | undefined;
-	let motion: gsap.core.Timeline | undefined;
-	let trigger: HTMLElement | undefined;
+	const panel = new DialogMotion();
 	let results: HTMLDivElement;
 	let departing: HTMLDivElement;
 	let searchMotion: gsap.core.Timeline | undefined;
@@ -38,16 +37,15 @@
 	//   return { destroy: () => (ghostLayer = undefined) };
 	// }
 
-
 	function resetSearchMotion() {
 		searchVersion += 1;
 		searchMotion?.kill();
-		departing?.replaceChildren(); // first we need to 
+		departing?.replaceChildren(); // first we need to
 		if (results) gsap.set(resultElements(), { clearProps: 'transform,opacity' });
 	}
 
 	async function filterTools(value: string) {
-		if (closing || query === value) return;
+		if (panel.closing || query === value) return;
 		const version = ++searchVersion;
 		searchMotion?.kill();
 		dialog.style.height = `${dialog.offsetHeight}px`;
@@ -66,7 +64,7 @@
 		gsap.set(resultElements(), { clearProps: 'transform,opacity' });
 		query = value;
 		await tick();
-		if (version !== searchVersion || closing || !dialog.open) return;
+		if (version !== searchVersion || panel.closing || !dialog.open) return;
 		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
 		const current = resultElements();
@@ -116,28 +114,6 @@
 		}
 	}
 
-	function spring(progress: number) {
-		const frequency = 9;
-		const time = frequency * progress;
-		const settled = 1 - (1 + frequency) * Math.exp(-frequency);
-		return (1 - (1 + time) * Math.exp(-time)) / settled;
-	}
-
-	function origin() {
-		const panel = dialog.getBoundingClientRect();
-		const source = trigger?.getBoundingClientRect();
-		const width = Math.min(source?.width ?? 80, panel.width);
-		const height = Math.min(source?.height ?? 44, panel.height);
-		const insetX = (panel.width - width) / 2;
-		const insetY = (panel.height - height) / 2;
-		const left = panel.left - Number(gsap.getProperty(dialog, 'x'));
-		const top = panel.top - Number(gsap.getProperty(dialog, 'y'));
-		return {
-			x: source ? source.left + source.width / 2 - left - panel.width / 2 : 0,
-			y: source ? source.top + source.height / 2 - top - panel.height / 2 : 0,
-			clipPath: `inset(${insetY}px ${insetX}px round 12px)`
-		};
-	}
 	const shortcuts = $derived(searchTools(quickTools, query));
 	const columns = $derived(
 		toolColumns.map((column) =>
@@ -155,119 +131,30 @@
 
 	export async function open(source?: HTMLElement) {
 		if (dialog.open) return;
-		trigger = source;
 		query = '';
-		closing = false;
 		await tick();
-		previousOverflow = document.body.style.overflow;
-		document.body.style.overflow = 'hidden';
-		dialog.showModal();
-		dialog.scrollTop = 0;
+		panel.open(source);
 		search.focus({ preventScroll: true });
-		motion?.kill();
-		if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			motion = gsap
-				.timeline()
-				.fromTo(
-					dialog,
-					{ ...origin(), '--backdrop-opacity': 0, filter: 'blur(0px)' },
-					{
-						x: 0,
-						y: 0,
-						clipPath: 'inset(0px 0px round 24px)',
-						'--backdrop-opacity': 0.5,
-						duration: 0.42,
-						ease: spring,
-						clearProps: 'transform,clipPath,--backdrop-opacity'
-					}
-				)
-				.to(dialog, { filter: 'blur(1px)', duration: 0.05, ease: 'sine.out' }, 0)
-				.to(
-					dialog,
-					{
-						filter: 'blur(0px)',
-						duration: 0.37,
-						ease: 'power2.out',
-						clearProps: 'filter'
-					},
-					0.05
-				);
-		}
 	}
 
-	function restore() {
-		motion?.kill();
+	function reset() {
 		resetSearchMotion();
 		dialog.style.removeProperty('height');
-		dialog.style.removeProperty('transform');
-		dialog.style.removeProperty('opacity');
-		dialog.style.removeProperty('clip-path');
-		dialog.style.removeProperty('--backdrop-opacity');
-		dialog.style.removeProperty('--content-opacity');
-		dialog.style.removeProperty('filter');
-		if (previousOverflow !== undefined) document.body.style.overflow = previousOverflow;
-		previousOverflow = undefined;
-		closing = false;
-		trigger?.focus({ preventScroll: true });
-		trigger = undefined;
-	}
-
-	function close() {
-		if (closing) return;
-		closing = true;
-		motion?.kill();
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			dialog.close();
-			return;
-		}
-		motion = gsap
-			.timeline({ onComplete: () => dialog.close() })
-			.to(dialog, {
-				...origin(),
-				'--backdrop-opacity': 0,
-				duration: 0.38,
-				ease: spring
-			})
-			.to(dialog, { filter: 'blur(0.8px)', duration: 0.04, ease: 'sine.out' }, 0)
-			.to(dialog, { filter: 'blur(0px)', duration: 0.34, ease: 'power2.out' }, 0.04)
-			.to(dialog, { '--content-opacity': 0, duration: 0.1, ease: 'sine.inOut' }, 0.02)
-			.to(dialog, { opacity: 0, duration: 0.14, ease: 'sine.inOut' }, 0.16);
 	}
 
 	function select(tool: CatalogTool) {
-		if (closing) return;
-		trigger = selectionTarget() ?? trigger;
+		if (panel.closing) return;
 		dialog.addEventListener('close', () => onselect(tool), { once: true });
-		close();
+		panel.close(selectionTarget());
 	}
-
-	function outside(event: MouseEvent) {
-		if (event.target !== dialog) return;
-		const { left, right, top, bottom } = dialog.getBoundingClientRect();
-		if (
-			event.clientX < left ||
-			event.clientX > right ||
-			event.clientY < top ||
-			event.clientY > bottom
-		)
-			close();
-	}
-
-	onDestroy(() => {
-		if (dialog) restore();
-	});
 </script>
 
 <dialog
 	bind:this={dialog}
+	{@attach panel.attach}
 	aria-labelledby="tools-title"
-	class="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-300 overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white sm:p-8 lg:p-12"
-	onclick={outside}
-	oncancel={(event) => {
-		event.preventDefault();
-		close();
-	}}
-	onclose={restore}
+	class="grows m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-300 overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white sm:p-8 lg:p-12"
+	onclose={reset}
 >
 	<div
 		class="mb-6 grid grid-cols-[1fr_auto] items-center gap-4 sm:grid-cols-[1fr_minmax(0,23.5rem)_auto]"
@@ -290,7 +177,7 @@
 		</label>
 		<button
 			aria-label="Close tools"
-			onclick={close}
+			onclick={() => panel.close()}
 			class="flex size-12 items-center justify-center rounded-xl bg-canvas transition-colors hover:bg-panel-hover"
 			><IconX size={22} aria-hidden="true" /></button
 		>
@@ -375,16 +262,6 @@
 
 <style>
 	dialog {
-		--backdrop-opacity: 0.5;
-		--content-opacity: 1;
 		scrollbar-gutter: stable;
-	}
-
-	dialog > div {
-		opacity: var(--content-opacity);
-	}
-
-	dialog::backdrop {
-		background: rgb(0 0 0 / var(--backdrop-opacity));
 	}
 </style>

@@ -55,6 +55,20 @@
 		background: var(--color-brand);
 		color: var(--color-canvas);
 	}
+
+	/* Dialogs driven by DialogMotion (src/lib/motion/dialog.ts). */
+	dialog.grows {
+		--backdrop-opacity: 0.5;
+		--content-opacity: 1;
+	}
+
+	dialog.grows > * {
+		opacity: var(--content-opacity);
+	}
+
+	dialog.grows::backdrop {
+		background: rgb(0 0 0 / var(--backdrop-opacity));
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
