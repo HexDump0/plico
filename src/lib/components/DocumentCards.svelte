@@ -276,7 +276,8 @@
 				dragOrder = null;
 				dragged = null;
 				dropTarget = null;
-				trashHovered = false;
+				// A zone that took the card fades out still lit, not as if it refused it.
+				trashHovered = removeFile;
 			});
 			if (removeFile) {
 				orderAnnouncement = `${file.name} removed.`;
@@ -312,6 +313,7 @@
 			flushSync(() => {
 				dragOrder = [...workspace.files];
 				dragged = file;
+				trashHovered = false;
 			});
 			gsap.killTweensOf(surface);
 			settling.delete(file);

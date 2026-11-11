@@ -132,7 +132,7 @@
 	}
 	export function flash() {
 		// not really a flash
-		// if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 		if (!emptyPanel) return;
 		gsap.killTweensOf(emptyPanel);
 		const computed = getComputedStyle(emptyPanel);

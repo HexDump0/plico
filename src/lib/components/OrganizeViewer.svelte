@@ -2,6 +2,8 @@
 	import { onDestroy, untrack } from 'svelte';
 	import gsap from 'gsap';
 	import { fade } from 'svelte/transition';
+	import { flip } from 'svelte/animate';
+	import { cubicOut } from 'svelte/easing';
 	import {
 		IconCheck,
 		IconDeselect,
@@ -334,10 +336,12 @@
 				class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2"
 				aria-label="PDFs in this project"
 			>
+				<!-- A removed name goes at once and the rest glide into its place;
+				fading it as well would leave it under the names sliding over it. -->
 				{#each sources as source, index (source.key)}
 					<li
+						animate:flip={{ duration: reducedMotion ? 0 : 300, easing: cubicOut }}
 						in:fade={{ duration: reducedMotion ? 0 : 240 }}
-						out:fade={{ duration: reducedMotion ? 0 : 140 }}
 						class="flex min-w-0 items-center gap-2 px-1"
 					>
 						{#if sources.length > 1}<span

@@ -1696,6 +1696,10 @@
 	});
 	// Pages are owned here but reconciled by the viewer as PDFs come and go, so
 	// drop selections that no longer name a live page.
+	// With every PDF gone, blank pages left behind would join the next PDF opened.
+	$effect(() => {
+		if (workspace.files.length === 0 && untrack(() => organizePages.length)) organizePages = [];
+	});
 	$effect(() => {
 		const keys = new Set(organizePages.map(pageKey));
 		if (selectedPages.some((key) => !keys.has(key)))
@@ -2509,11 +2513,12 @@
 					aria-hidden="true"
 					class="pointer-events-none absolute -right-48 -bottom-48 -z-10 w-240 max-w-none opacity-[0.07] select-none"
 				/>
+				<!-- The leaving state goes at once: fading out, it would hold this cell at
+				its height and the new state would jump when it finished. -->
 				<div class="grid min-h-0 flex-1">
 					{#if workspace.files.length === 0}
 						<div
 							in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}
-							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 mx-auto flex w-full max-w-xl flex-col justify-center py-12"
 						>
 							<div class="h-80"><PdfDropzone selectedTool={tool} emptyOnly /></div>
@@ -2526,7 +2531,6 @@
 					{:else}
 						<div
 							in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}
-							out:fade={{ duration: reducedMotion ? 0 : 150, easing: cubicIn }}
 							class="col-start-1 row-start-1 flex min-w-0 flex-col"
 						>
 							{#if isOrganize || (!isCompare && !isSplit && !isPageTool && !isPdfToImage && !isProtect && !isUnlock && !isPdfA && !isRepair && !isPagePreview && !officeTool && !printTool)}<input

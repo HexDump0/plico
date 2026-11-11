@@ -58,8 +58,11 @@
 	}
 
 	function deletePage(page: OrganizePage) {
-		if (pages.length === 1 && page.source !== BLANK_SOURCE) onremovesource(page.source);
-		else onpageschange(pages.filter((entry) => pageKey(entry) !== pageKey(page)));
+		const rest = pages.filter((entry) => pageKey(entry) !== pageKey(page));
+		onpageschange(rest);
+		// A PDF with none of its pages left goes too, rather than staying listed at 0 pages.
+		if (page.source !== BLANK_SOURCE && !rest.some((entry) => entry.source === page.source))
+			onremovesource(page.source);
 	}
 	function remove(page: OrganizePage) {
 		if (processing || dragged !== null) return;
@@ -280,7 +283,8 @@
 				dragOrder = null;
 				dragged = null;
 				dropTarget = null;
-				trashHovered = false;
+				// A zone that took the page fades out still lit, not as if it refused it.
+				trashHovered = removePage && !!page;
 			});
 			if (removePage) {
 				if (page) orderAnnouncement = `Removed ${nameOf(page)}.`;
@@ -312,6 +316,7 @@
 			flushSync(() => {
 				dragOrder = [...pages];
 				dragged = key;
+				trashHovered = false;
 			});
 			gsap.killTweensOf(surface);
 			settling.delete(key);
