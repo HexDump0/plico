@@ -7,8 +7,7 @@
 		IconCloudCheck,
 		IconCloudDownload,
 		IconCloudOff,
-		IconCurrencyDollar,
-		IconX
+		IconCurrencyDollar
 	} from '@tabler/icons-svelte-runes';
 	import { offline } from '$lib/offline.svelte';
 	import OfflineDialog from './OfflineDialog.svelte';
@@ -16,18 +15,12 @@
 	import logo from '$lib/assets/plico.svg';
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import ToolsDialog from './ToolsDialog.svelte';
-	import { DialogMotion } from '$lib/motion/dialog';
 	let toolsDialog: ToolsDialog;
 	let offlineDialog: OfflineDialog;
 
 	let { onselect }: { onselect: (tool: CatalogTool) => void } = $props();
 	let toolsButton: HTMLButtonElement;
-	const infoPanel = new DialogMotion();
-	let content = $state<'github' | 'donate'>('github');
-	const titles = {
-		github: 'Open by design',
-		donate: 'Support Plico'
-	};
+	const onAbout = $derived(page.url.pathname === resolve('/about'));
 
 	const offlineState = $derived(
 		!offline.online ? 'offline' : offline.core.status === 'ready' ? 'ready' : 'saving'
@@ -43,9 +36,18 @@
 		toolsDialog.open(source ?? toolsButton);
 	}
 
-	function open(view: typeof content, trigger: HTMLElement) {
-		content = view;
-		infoPanel.open(trigger);
+	// Already on About: scroll to the section in place rather than re-navigating to the hash.
+	function scrollToSupport(event: MouseEvent) {
+		if (!onAbout) return;
+		event.preventDefault();
+		const support = document.getElementById('support');
+		support?.scrollIntoView({
+			behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+				? 'instant'
+				: 'smooth',
+			block: 'center'
+		});
+		support?.focus({ preventScroll: true });
 	}
 </script>
 
@@ -78,11 +80,11 @@
 		<a
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
 			href={resolve('/about')}
-			aria-current={page.url.pathname === resolve('/about') ? 'page' : undefined}
+			aria-current={onAbout ? 'page' : undefined}
 			class="grid min-h-11 items-center rounded-xl transition-colors hover:text-brand"
 		>
 			<span class="z-10 col-start-1 row-start-1 px-4">About</span>
-			{#if page.url.pathname === resolve('/about')}
+			{#if onAbout}
 				<span
 					aria-hidden="true"
 					class="about-selection col-start-1 row-start-1 h-full w-full rounded-xl bg-panel-hover"
@@ -133,62 +135,31 @@
 				></button
 			>
 		{/if}
-		<button
+		<a
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
+			href="https://github.com/hexdump0/plico"
+			target="_blank"
+			rel="noopener noreferrer"
 			class="hidden min-h-11 items-center gap-1.5 rounded-md transition-colors hover:text-brand sm:flex"
-			onclick={(event) => open('github', event.currentTarget)}
-			aria-haspopup="dialog"
 			><span class="flex items-center gap-1.5"
 				><IconBrandGithub size={21} aria-hidden="true" /><span class="hidden md:inline">Github</span
 				><span class="sr-only md:hidden">Github</span></span
-			></button
+			></a
 		>
-		<button
+		<!-- The path is resolved; the lint rule only accepts a bare resolve() call, not one with a hash. -->
+		<!-- eslint-disable svelte/no-navigation-without-resolve -->
+		<a
 			use:linkMotion={{ hover: false, pressScale: 0.95 }}
+			href={`${resolve('/about')}#support`}
+			onclick={scrollToSupport}
 			class="hidden min-h-11 items-center gap-1 rounded-xl bg-brand px-4 py-2.5 text-panel transition-colors hover:bg-violet-300 sm:flex"
-			onclick={(event) => {
-				if (page.url.pathname === resolve('/about')) {
-					document.getElementById('support')?.scrollIntoView({
-						behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-							? 'instant'
-							: 'smooth',
-						block: 'center'
-					});
-					document.getElementById('support')?.focus({ preventScroll: true });
-				} else open('donate', event.currentTarget);
-			}}
-			aria-haspopup={page.url.pathname === resolve('/about') ? undefined : 'dialog'}
 			><span class="flex items-center gap-1"
 				><IconCurrencyDollar size={18} aria-hidden="true" />Donate</span
-			></button
+			></a
 		>
+		<!-- eslint-enable svelte/no-navigation-without-resolve -->
 	</div>
 </header>
-
-<dialog
-	{@attach infoPanel.attach}
-	aria-labelledby="dialog-title"
-	class="grows fixed inset-4 m-auto w-auto max-w-lg overflow-y-auto rounded-3xl bg-panel p-6 text-white sm:p-8"
->
-	<div class="mb-6 flex items-center justify-between gap-4">
-		<h2 id="dialog-title" class="text-xl font-bold">{titles[content]}</h2>
-		<button
-			class="rounded-lg p-2 text-muted hover:bg-white/5 hover:text-white"
-			onclick={() => infoPanel.close()}
-			aria-label="Close dialog"><IconX size={22} aria-hidden="true" /></button
-		>
-	</div>
-	{#if content === 'github'}
-		<p class="leading-relaxed text-muted">
-			Plico is being built in the open. A link to the public repository will be available here when
-			it launches.
-		</p>
-	{:else}
-		<p class="leading-relaxed text-muted">
-			Thanks for wanting to support Plico. Donations aren't set up yet.
-		</p>
-	{/if}
-</dialog>
 
 <ToolsDialog bind:this={toolsDialog} {onselect} selectionTarget={() => toolsButton} />
 <OfflineDialog bind:this={offlineDialog} />

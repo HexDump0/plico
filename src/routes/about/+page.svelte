@@ -6,18 +6,44 @@
 		IconCurrencyDollar,
 		IconHexagon,
 		IconLink,
+		IconBrandDiscord,
 		IconBrandX,
 		IconUsersGroup
 	} from '@tabler/icons-svelte-runes';
 	import { linkMotion } from '$lib/motion/link';
-	let linkNotice = $state('');
 	import SiteHeader from '$lib/components/SiteHeader.svelte';
 	import AboutPrinciple from '$lib/components/AboutPrinciple.svelte';
+	import CopyButton from '$lib/components/CopyButton.svelte';
 
+	// Discord has no username DM link; /users/<id> opens the profile with a Message button.
+	const PLASMA4_DISCORD_ID = '883838726386622524';
 	const creators = [
-		{ name: 'HexDump0', role: 'Frontend & design', avatar: '/hexdump0.png' },
-		{ name: 'Plasma4', role: 'Backend', avatar: '/plasma4.png' }
+		{
+			name: 'HexDump0',
+			avatar: '/hexdump0.png',
+			links: [
+				{ label: 'website', href: 'https://hexdump0.pw/', Icon: IconLink },
+				{ label: 'on X', href: 'https://x.com/HexDump0', Icon: IconBrandX }
+			]
+		},
+		{
+			name: 'Plasma4',
+			avatar: '/plasma4.png',
+			links: [
+				{ label: 'website', href: 'https://plasma4.org/', Icon: IconLink },
+				{
+					label: 'on Discord (1_e0)',
+					href: `https://discord.com/users/${PLASMA4_DISCORD_ID}`,
+					Icon: IconBrandDiscord
+				}
+			]
+		}
 	];
+	// Donation addresses: paste each one between the quotes. Empty shows "Not set up yet".
+	const donations = [{ currency: 'SOL', address: 'Hx15Q2Krg9uHzZ16orK4gjC1xcTJvJEzb5VnwU3SbzVa' }];
+	// Keep both ends visible: people check the start and end of an address, not the middle.
+	const shortAddress = (address: string) =>
+		address.length > 18 ? `${address.slice(0, 7)}...${address.slice(-8)}` : address;
 	const principles = [
 		{
 			id: 'local',
@@ -28,11 +54,6 @@
 			id: 'open',
 			title: 'Good tools should be open.',
 			body: 'Plico is an open-source project. We want people to be able to understand how it works, question the decisions, and help make it better.'
-		},
-		{
-			id: 'simple',
-			title: 'Less between you and done.',
-			body: "Choose your files, pick a tool, save the result. We're keeping the interface focused on those everyday tasks, with clear controls and fewer interruptions."
 		}
 	];
 </script>
@@ -63,13 +84,11 @@
 					PDF tools.<br />Made for people.
 				</h2>
 				<p class="mt-6 max-w-2xl text-base leading-7 text-muted">
-					Lorem ipsum dolor sit amet consectetur adipisicing elit. Ad voluptatibus veniam illum
-					numquam dolorum? Temporibus sint consequuntur quas. Iure esse fugiat saepe fuga minima
-					sunt qui amet nesciunt ex delectus?
+					PDfs were one of the thing that were for all their convenience, very annoying to edit and
+					modify. And the tools that were available (in my opinion) have terrible UI or push ads
+					into your face every second. Plico was made a good, simple, open source alternative to the
+					existing tools that runs entirely in your browser
 				</p>
-				<div class="mt-8">
-					{#each principles as principle (principle.id)}<AboutPrinciple {...principle} />{/each}
-				</div>
 			</div>
 		</section>
 		<div class="space-y-10 lg:order-first lg:col-span-4 lg:space-y-12">
@@ -88,40 +107,30 @@
 								height="48"
 								class="size-12 shrink-0 rounded-full"
 							/>
-							<div class="min-w-0 flex-1">
-								<h3 class="font-bold">
-									{#if creator.name === 'HexDump0'}HexDump<span class="creator-zero">0</span
-										>{:else}{creator.name}{/if}
-								</h3>
-								<p class="mt-1 text-xs text-muted">{creator.role}</p>
-							</div>
+							<h3 class="min-w-0 flex-1 font-bold">
+								{#if creator.name === 'HexDump0'}HexDump<span class="creator-zero">0</span
+									>{:else}{creator.name}{/if}
+							</h3>
 							<div class="flex shrink-0 items-center">
-								<button
-									type="button"
-									use:linkMotion
-									class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:text-brand focus-visible:text-brand"
-									aria-label={`${creator.name} website (not configured)`}
-									title="Website link not configured"
-									onclick={() =>
-										(linkNotice = `${creator.name}'s website link hasn't been added yet.`)}
-									><span class="flex"><IconLink size={24} aria-hidden="true" /></span></button
-								>
-								<button
-									type="button"
-									use:linkMotion
-									class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:text-brand focus-visible:text-brand"
-									aria-label={`${creator.name} on X (not configured)`}
-									title="X link not configured"
-									onclick={() => (linkNotice = `${creator.name}'s X link hasn't been added yet.`)}
-									><span class="flex"><IconBrandX size={24} aria-hidden="true" /></span></button
-								>
+								{#each creator.links as { label, href, Icon } (href)}
+									<!-- External profile links; resolve() only applies to app routes. -->
+									<!-- eslint-disable svelte/no-navigation-without-resolve -->
+									<a
+										{href}
+										target="_blank"
+										rel="noopener noreferrer"
+										use:linkMotion
+										class="flex size-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:text-brand focus-visible:text-brand"
+										aria-label={`${creator.name} ${label}`}
+										title={`${creator.name} ${label}`}
+										><span class="flex"><Icon size={24} aria-hidden="true" /></span></a
+									>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+								{/each}
 							</div>
 						</li>
 					{/each}
 				</ul>
-				<p role="status" class="text-sm leading-6 text-muted" class:mt-3={linkNotice !== ''}>
-					{linkNotice}
-				</p>
 			</section>
 			<section
 				id="support"
@@ -137,12 +146,19 @@
 						aria-hidden="true"
 					/>Donate
 				</h2>
-				<div class="mt-6 divide-y divide-white/10 rounded-2xl bg-panel px-6">
-					{#each ['XMR', 'ETH'] as currency (currency)}
-						<div class="flex items-center justify-between gap-4 py-5">
-							<span class="text-lg font-semibold">{currency}</span><span class="text-sm text-muted"
-								>Not set up yet</span
-							>
+				<div class="mt-6 divide-y divide-white/10 rounded-2xl bg-panel px-5 sm:px-6">
+					{#each donations as { currency, address } (currency)}
+						<div class="flex items-center justify-between gap-4 py-4">
+							<span class="shrink-0 text-base font-bold tracking-wide">{currency}</span>
+							{#if address}
+								<CopyButton
+									text={address}
+									label={`Copy ${currency} address`}
+									display={shortAddress(address)}
+								/>
+							{:else}
+								<span class="text-sm text-muted">Not set up yet</span>
+							{/if}
 						</div>
 					{/each}
 				</div>

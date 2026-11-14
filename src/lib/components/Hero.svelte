@@ -14,7 +14,6 @@
 	import FeatureStrip from './FeatureStrip.svelte';
 
 	let root: HTMLDivElement;
-	let dropzone: PdfDropzone;
 	const workspace = getWorkspace();
 	workspace.use('pdf');
 	function openTool(id: string) {
@@ -46,16 +45,7 @@
 
 	function selectTool(tool: ToolId) {
 		clearToolCue();
-		if (workspace.files.length || tool === 'convert') {
-			openTool(tool);
-			return;
-		}
-		if (selectedHeroTool === tool) {
-			selectedTool = null;
-			dropzone?.flash();
-			return;
-		}
-		selectedTool = tools.find((item) => item.id === tool) ?? null;
+		openTool(tool);
 	}
 
 	function clearToolCue() {
@@ -186,7 +176,6 @@
 					class="h-72 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%] max-lg:landscape:h-64"
 				>
 					<PdfDropzone
-						bind:this={dropzone}
 						{selectedTool}
 						onready={() => selectedTool && openTool(selectedTool.id)}
 						onneedstool={suggestTool}

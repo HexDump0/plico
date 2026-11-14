@@ -47,7 +47,7 @@
 			selectedTool?.id === 'pdf-to-images'
 	);
 	let input: HTMLInputElement;
-	let list = $state<HTMLUListElement>();
+	let list = $state<HTMLDivElement>();
 	let reducedMotion = $state(false);
 	// Files added to a list that is already showing scroll into view as they land.
 	let listedCount = 0;
@@ -151,44 +151,6 @@
 		if (filePanel) gsap.set(filePanel, { clearProps: 'opacity,transform' });
 		if (emptyPanel) gsap.set(emptyPanel, { clearProps: 'opacity,transform' });
 		transitioning = false;
-	}
-	export function flash() {
-		// not really a flash
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-		if (!emptyPanel) return;
-		gsap.killTweensOf(emptyPanel);
-		const computed = getComputedStyle(emptyPanel);
-		const r = parseFloat(computed.borderTopLeftRadius) || 12;
-		// const flashTint = lighten(tint(), 0.35);
-		gsap.set(emptyPanel, { transition: 'none' });
-		gsap
-			.timeline({
-				onComplete: () => {
-					if (emptyPanel)
-						gsap.set(emptyPanel, {
-							clearProps: 'transform,borderRadius,transition'
-						});
-				}
-			})
-
-			// "stomp" down: squash flat, pinch the corners, tilt
-			.to(emptyPanel, {
-				scale: 0.92,
-				scaleY: 0.74,
-				rotate: -1,
-				borderRadius: `${r * 1.9}px ${r * 0.5}px ${r * 1.9}px ${r * 0.5}px`,
-				duration: 0.14,
-				ease: 'power2.in'
-			})
-			// little teeny recoil after: overshoot back, corners should sway then settle
-			.to(emptyPanel, {
-				scale: 1,
-				scaleY: 1,
-				rotate: 0,
-				borderRadius: `${r}px`,
-				duration: 0.7,
-				ease: 'elastic.out(1, 0.35)'
-			});
 	}
 	onMount(() => {
 		const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -306,43 +268,43 @@
 		{/if}
 		{#if !emptyOnly && workspace.files.length}
 			<div bind:this={filePanel} class="flex min-h-0 flex-1 flex-col">
-				<div class="mb-3 flex items-center justify-between gap-2">
-					<h2 class="text-sm font-semibold tabular-nums">
-						{workspace.files.length}
-						{isImageTool
-							? workspace.files.length === 1
-								? 'image'
-								: 'images'
-							: workspace.files.length === 1
-								? 'PDF'
-								: 'PDFs'} added
-					</h2>
+				<h2 class="mb-3 text-sm font-semibold tabular-nums">
+					{workspace.files.length}
+					{isImageTool
+						? workspace.files.length === 1
+							? 'image'
+							: 'images'
+						: workspace.files.length === 1
+							? 'PDF'
+							: 'PDFs'} added
+				</h2>
+				<div bind:this={list} class="min-h-0 flex-1 overflow-y-auto">
+					<ul class="space-y-2">
+						{#each workspace.files as file (file)}
+							<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
+								{#if isImageTool}
+									<IconPhoto class="shrink-0 text-convert" size={26} />
+								{:else}
+									<IconFileTypePdf class="shrink-0 text-brand" size={26} />
+								{/if}
+								<div class="min-w-0 flex-1">
+									<p class="truncate text-sm" title={file.name}>{file.name}</p>
+									<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>
+								</div>
+								<button
+									class="rounded-md p-2 text-muted hover:text-white pointer-coarse:p-3"
+									aria-label={`Remove ${file.name}`}
+									data-remove
+									onclick={(event) => remove(file, event.currentTarget)}><IconX size={18} /></button
+								>
+							</li>
+						{/each}
+					</ul>
 					<button
-						class="flex min-h-11 items-center gap-1 rounded-lg px-3 text-sm text-brand hover:bg-brand/10"
-						onclick={() => input.click()}><IconPlus size={18} /> Add files</button
+						class="mt-2 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl p-3 text-sm font-medium text-brand transition-colors hover:bg-brand/10"
+						onclick={() => input.click()}><IconPlus size={18} aria-hidden="true" />Add files</button
 					>
 				</div>
-				<ul bind:this={list} class="min-h-0 flex-1 space-y-2 overflow-y-auto">
-					{#each workspace.files as file (file)}
-						<li class="flex items-center gap-3 rounded-xl bg-canvas/50 p-3">
-							{#if isImageTool}
-								<IconPhoto class="shrink-0 text-convert" size={26} />
-							{:else}
-								<IconFileTypePdf class="shrink-0 text-brand" size={26} />
-							{/if}
-							<div class="min-w-0 flex-1">
-								<p class="truncate text-sm" title={file.name}>{file.name}</p>
-								<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>
-							</div>
-							<button
-								class="rounded-md p-2 text-muted hover:text-white pointer-coarse:p-3"
-								aria-label={`Remove ${file.name}`}
-								data-remove
-								onclick={(event) => remove(file, event.currentTarget)}><IconX size={18} /></button
-							>
-						</li>
-					{/each}
-				</ul>
 			</div>
 		{/if}
 	</div>
