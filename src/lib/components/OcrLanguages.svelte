@@ -52,7 +52,9 @@
 		adding = true;
 		search = '';
 		await tick();
-		field?.focus();
+		// On a touch screen focusing the search would raise the keyboard over
+		// the list; the field is a tap away.
+		if (!window.matchMedia('(pointer: coarse)').matches) field?.focus();
 	}
 
 	function closePicker() {

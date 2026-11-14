@@ -218,7 +218,7 @@
 											<li data-result-key={tool.id}>
 												<button
 													onclick={() => select(tool)}
-													class="group -ml-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base lg:min-h-8.5 lg:py-1 {category.color}"
+													class="group -ml-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base lg:pointer-fine:min-h-8.5 lg:pointer-fine:py-1 {category.color}"
 												>
 													<tool.icon size={20} stroke={1.8} class="shrink-0" aria-hidden="true" />
 													<span

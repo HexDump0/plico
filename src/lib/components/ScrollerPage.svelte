@@ -24,8 +24,13 @@
 	} = $props();
 
 	// The largest canvas drawn, in pixels, so a page zoomed far in stays
-	// within what browsers will allocate.
-	const MAX_PIXELS = 16_000_000;
+	// within what browsers will allocate. Phones and tablets get less: iOS
+	// caps the canvas memory of a whole page, and a few zoomed pages are drawn
+	// at once.
+	const MAX_PIXELS =
+		typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+			? 6_000_000
+			: 16_000_000;
 
 	let canvas = $state<HTMLCanvasElement>();
 	let drawn = $state(false);
@@ -41,6 +46,7 @@
 		let task: RenderTask | undefined;
 		const delay = window.setTimeout(
 			async () => {
+				let bitmap: HTMLCanvasElement | undefined;
 				try {
 					const proxy = await source.getPage(number);
 					if (cancelled) return;
@@ -50,7 +56,7 @@
 						2,
 						Math.sqrt(MAX_PIXELS / (viewport.width * viewport.height))
 					);
-					const bitmap = document.createElement('canvas');
+					bitmap = document.createElement('canvas');
 					bitmap.width = Math.max(1, Math.floor(viewport.width * ratio));
 					bitmap.height = Math.max(1, Math.floor(viewport.height * ratio));
 					// pdf.js puts an array of canvases, one per state, under a
@@ -76,6 +82,9 @@
 					if (canvases) forms?.(canvases as Map<string, HTMLCanvasElement | HTMLCanvasElement[]>);
 				} catch {
 					// A cancelled render is replaced by the next one.
+				} finally {
+					// Safari holds a canvas's memory until it is emptied.
+					if (bitmap) bitmap.width = bitmap.height = 0;
 				}
 			},
 			untrack(() => drawn) ? 150 : 0

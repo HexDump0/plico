@@ -98,6 +98,9 @@
 				bind:value={password}
 				oninput={() => (edited = true)}
 				type={visible ? 'text' : 'password'}
+				autocapitalize="off"
+				autocorrect="off"
+				enterkeyhint="go"
 				placeholder="Password"
 				autocomplete="off"
 				spellcheck="false"

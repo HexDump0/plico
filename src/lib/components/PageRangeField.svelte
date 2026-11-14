@@ -19,6 +19,10 @@
 			type="text"
 			bind:value
 			placeholder="All pages (e.g. 1-3, 5)"
+			autocapitalize="off"
+			autocorrect="off"
+			spellcheck="false"
+			enterkeyhint="done"
 			class="min-w-0 flex-1 bg-transparent py-2.5 text-xs text-white outline-none placeholder:text-white/25"
 		/>
 	</div>

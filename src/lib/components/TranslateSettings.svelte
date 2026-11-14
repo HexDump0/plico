@@ -97,7 +97,9 @@
 			(language) => language.code === (side === 'from' ? from : to)
 		);
 		active = Math.max(0, current);
-		field?.focus();
+		// On a touch screen focusing the search would raise the keyboard over
+		// the list; the field is a tap away.
+		if (!window.matchMedia('(pointer: coarse)').matches) field?.focus();
 		list?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
 	}
 

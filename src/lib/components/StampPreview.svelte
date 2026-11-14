@@ -258,7 +258,7 @@
 		<button
 			type="button"
 			onclick={onremove}
-			class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas"
+			class="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 			aria-label="Remove PDF"
 			title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 		>

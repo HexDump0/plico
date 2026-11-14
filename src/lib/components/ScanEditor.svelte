@@ -225,7 +225,7 @@
 			bind:clientHeight={stageHeight}
 			class="relative mx-auto touch-none select-none"
 			style:aspect-ratio={ratio}
-			style:width="min(100%, calc((100svh - 18rem) * {ratio}))"
+			style:width="min(100%, calc(max(12rem, 100svh - 18rem) * {ratio}))"
 		>
 			{#if photo.url}
 				<img

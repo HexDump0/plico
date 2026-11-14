@@ -49,6 +49,7 @@
 	} | null>(null);
 	let travel = $state(0);
 	let dragging = $state(false);
+	let splitBefore = 0.5;
 	let frameElement = $state<HTMLDivElement>();
 
 	const pageCount = $derived(changed.numPages);
@@ -272,7 +273,7 @@
 			<div
 				bind:this={frameElement}
 				role="presentation"
-				class="relative touch-none select-none {dragging ? 'cursor-grabbing' : 'cursor-ew-resize'}"
+				class="relative touch-pan-y select-none {dragging ? 'cursor-grabbing' : 'cursor-ew-resize'}"
 				style:width="{frame.width}px"
 				style:height="{frame.height}px"
 				style:transition={reducedMotion || !shown
@@ -282,11 +283,18 @@
 					if (event.button !== 0) return;
 					frameElement?.setPointerCapture(event.pointerId);
 					dragging = true;
-					slide(event);
+					splitBefore = split;
+					// A finger may be starting a scroll, so it moves the split
+					// only once it drags, not where it lands.
+					if (event.pointerType !== 'touch') slide(event);
 				}}
 				onpointermove={(event) => dragging && slide(event)}
 				onpointerup={() => (dragging = false)}
-				onpointercancel={() => (dragging = false)}
+				onpointercancel={() => {
+					// The browser took the touch for a scroll: the split goes back.
+					if (dragging) split = splitBefore;
+					dragging = false;
+				}}
 			>
 				{#if shown}
 					{#key shown.page}
@@ -319,7 +327,7 @@
 					<span class="{badge} left-3 {split < 0.12 ? 'opacity-0' : ''}"
 						><span class="size-1.5 rounded-full bg-convert"
 						></span>Original{#if shown.under !== shown.page}<span class="font-normal text-muted"
-								>· page {shown.under}</span
+								>page {shown.under}</span
 							>{/if}</span
 					>
 					<span class="{badge} right-3 {split > 0.88 ? 'opacity-0' : ''}"

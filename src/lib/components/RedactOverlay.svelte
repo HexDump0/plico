@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { twoFingerScroll } from '$lib/touch';
 	import { cubicOut } from 'svelte/easing';
 	import { fade, scale } from 'svelte/transition';
 	import { IconX } from '@tabler/icons-svelte-runes';
@@ -166,6 +167,13 @@
 		}
 	}
 
+	// A second finger scrolls the page instead: whatever the first started is undone.
+	function cancelDrag() {
+		if (drag?.moved && drag.id !== null && drag.handle !== 'draw') onchange(drag.id, drag.origin);
+		drag = null;
+		drawing = null;
+	}
+
 	function end(event: PointerEvent) {
 		if (!drag || event.pointerId !== drag.pointer) return;
 		root?.releasePointerCapture(event.pointerId);
@@ -232,6 +240,7 @@
 moved by dragging it and resized from its corners. -->
 <div
 	bind:this={root}
+	{@attach twoFingerScroll(cancelDrag)}
 	role="presentation"
 	class="absolute inset-0 {editable ? 'cursor-crosshair touch-none' : 'pointer-events-none'}"
 	onpointerdown={(event) => begin(event, 'draw')}
@@ -308,7 +317,7 @@ moved by dragging it and resized from its corners. -->
 					{#each corners as corner (corner.handle)}
 						<div
 							role="presentation"
-							class="absolute size-7 {corner.place}"
+							class="absolute size-7 pointer-coarse:before:absolute pointer-coarse:before:-inset-2 {corner.place}"
 							style:cursor={corner.handle === 'nw' || corner.handle === 'se'
 								? 'nwse-resize'
 								: 'nesw-resize'}

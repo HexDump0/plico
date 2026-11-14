@@ -289,11 +289,14 @@
 					><span
 						aria-hidden={dragging}
 						class="col-start-1 row-start-1 {dragging ? 'invisible' : ''}"
-						>{isImageTool
-							? 'Drop in your images'
+						><span class="pointer-coarse:hidden">Drop in</span><span
+							class="hidden pointer-coarse:inline">Tap to choose</span
+						>
+						{isImageTool
+							? 'your images'
 							: documentInput
-								? `Drop in your ${formatName(inputType)} file`
-								: 'Drop in your PDFs'}</span
+								? `your ${formatName(inputType)} file`
+								: 'your PDFs'}</span
 					><span
 						aria-hidden={!dragging}
 						class="col-start-1 row-start-1 {dragging ? '' : 'invisible'}">You can let go btw</span
@@ -315,7 +318,7 @@
 								: 'PDFs'} added
 					</h2>
 					<button
-						class="flex items-center gap-1 rounded-lg p-2 text-sm text-brand hover:bg-brand/10"
+						class="flex min-h-11 items-center gap-1 rounded-lg px-3 text-sm text-brand hover:bg-brand/10"
 						onclick={() => input.click()}><IconPlus size={18} /> Add files</button
 					>
 				</div>
@@ -332,7 +335,7 @@
 								<p class="mt-1 text-xs text-muted">{formatSize(file.size)}</p>
 							</div>
 							<button
-								class="rounded-md p-2 text-muted hover:text-white"
+								class="rounded-md p-2 text-muted hover:text-white pointer-coarse:p-3"
 								aria-label={`Remove ${file.name}`}
 								data-remove
 								onclick={(event) => remove(file, event.currentTarget)}><IconX size={18} /></button

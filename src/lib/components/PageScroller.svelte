@@ -276,7 +276,7 @@
 		<button
 			type="button"
 			onclick={onremove}
-			class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas"
+			class="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 			aria-label={removeLabel}
 			title={removeLabel}><IconX size={18} stroke={2.5} /></button
 		>
@@ -323,7 +323,7 @@
 		<!-- Floats at the bottom of the screen while the pages scroll; above the
 		pinned action bar on phones. -->
 		<div
-			class="sticky bottom-6 z-10 mx-auto flex w-fit items-center gap-1 rounded-xl bg-panel/90 p-1 shadow-xl ring-1 shadow-black/40 ring-white/10 backdrop-blur-md max-lg:bottom-28"
+			class="sticky bottom-6 z-10 mx-auto flex w-fit items-center gap-1 rounded-xl bg-panel/90 p-1 shadow-xl ring-1 shadow-black/40 ring-white/10 backdrop-blur-md max-lg:bottom-[calc(var(--sheet-bar,6rem)+1rem)]"
 			role="group"
 			aria-label="Zoom"
 		>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { twoFingerScroll } from '$lib/touch';
 	import { cropSize, isFullPage } from '$lib/pdf/crop-area';
 	import type { CropArea } from '$lib/pdf/types';
 
@@ -172,6 +173,12 @@
 		} else onchange(shifted(drag.origin, drag.handle, dx, dy));
 	}
 
+	// A second finger scrolls the page instead: whatever the first started is undone.
+	function cancelDrag() {
+		if (drag?.moved) onchange(drag.origin);
+		drag = null;
+	}
+
 	function end(event: PointerEvent) {
 		if (!drag || event.pointerId !== drag.pointer) return;
 		root?.releasePointerCapture(event.pointerId);
@@ -204,6 +211,7 @@
 that is already there, which moves it. Handles and arrow keys resize. -->
 <div
 	bind:this={root}
+	{@attach twoFingerScroll(cancelDrag)}
 	role="presentation"
 	class="absolute inset-0 {drawable ? 'touch-none' : 'pointer-events-none'}"
 	style:cursor={drag ? cursors[drag.handle] : drawable ? 'crosshair' : undefined}

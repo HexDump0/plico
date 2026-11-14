@@ -217,7 +217,17 @@
 		bind:clientHeight={boxHeight}
 		class="relative min-h-0 flex-1 overflow-hidden"
 	>
-		<video bind:this={video} playsinline muted class="absolute inset-0 size-full object-contain"
+		<!-- Turning the phone turns the camera's frame, so its size is read again. -->
+		<video
+			bind:this={video}
+			playsinline
+			muted
+			class="absolute inset-0 size-full object-contain"
+			onresize={() => {
+				if (!video?.videoWidth) return;
+				frameWidth = video.videoWidth;
+				frameHeight = video.videoHeight;
+			}}
 		></video>
 		{#if frame && outline}
 			<svg

@@ -149,7 +149,9 @@
 	class="grows m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto overscroll-contain rounded-3xl bg-panel p-5 text-white sm:p-8"
 >
 	<div class="mb-6 flex items-center gap-3">
-		<h2 id="offline-title" class="flex-1 text-3xl font-semibold tracking-tight">Offline</h2>
+		<h2 id="offline-title" class="min-w-0 flex-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+			Offline
+		</h2>
 		{#if offline.installable}
 			<button
 				type="button"

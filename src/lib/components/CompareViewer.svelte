@@ -434,7 +434,7 @@
 			<button
 				type="button"
 				onclick={() => onremove(side)}
-				class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas"
+				class="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 				aria-label={`Remove the ${labels[side].toLowerCase()} PDF`}
 				title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 			>
@@ -523,56 +523,62 @@
 	</div>
 {/snippet}
 
+{#snippet swapButton(shape: string)}<button
+		type="button"
+		onclick={() => {
+			turns++;
+			onswap();
+		}}
+		disabled={!original || !changed}
+		class="flex items-center justify-center text-muted transition-colors enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 {shape}"
+		aria-label="Swap original and changed"
+		title="Swap"
+		><IconArrowsLeftRight
+			size={18}
+			class="motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]"
+			style="transform: rotate({turns * 180}deg)"
+		/></button
+	>{/snippet}
+
 <svelte:window bind:innerWidth={screenWidth} />
 
 <section
 	aria-label="Comparison"
-	class="flex h-[75svh] w-full flex-col gap-3 lg:h-[calc(100svh-9rem)]"
+	class="flex h-[max(20rem,calc(100svh-var(--sheet-bar,8rem)-1.5rem))] w-full flex-col gap-3 lg:h-[calc(100svh-9rem)]"
 >
-	<!-- Phones show one side at a time; the pill picks which. -->
-	<div
-		class="relative mx-auto grid w-full max-w-xs grid-cols-2 gap-2 rounded-xl bg-panel p-1 md:hidden"
-		role="group"
-		aria-label="Side"
-	>
-		<span
-			aria-hidden="true"
-			class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1rem)/2)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {phoneSide ===
-			'changed'
-				? 'translate-x-[calc(100%+0.5rem)]'
-				: ''}"
-		></span>
-		{#each sides as side (side)}<button
-				type="button"
-				aria-pressed={phoneSide === side}
-				class="relative z-10 rounded-lg px-2 py-2.5 text-xs font-semibold motion-safe:transition-colors {phoneSide ===
-				side
-					? side === 'original'
-						? 'text-convert'
-						: 'text-merge'
-					: 'text-muted hover:text-white'}"
-				onclick={() => (phoneSide = side)}>{labels[side]}</button
-			>{/each}
+	<!-- Phones show one side at a time; the pill picks which. The viewer is
+	sized to the screen above the settings sheet. -->
+	<div class="mx-auto flex w-full max-w-sm items-center gap-2 md:hidden">
+		<div
+			class="relative grid min-w-0 flex-1 grid-cols-2 gap-2 rounded-xl bg-panel p-1"
+			role="group"
+			aria-label="Side"
+		>
+			<span
+				aria-hidden="true"
+				class="pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-1rem)/2)] rounded-lg bg-panel-hover motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {phoneSide ===
+				'changed'
+					? 'translate-x-[calc(100%+0.5rem)]'
+					: ''}"
+			></span>
+			{#each sides as side (side)}<button
+					type="button"
+					aria-pressed={phoneSide === side}
+					class="relative z-10 rounded-lg px-2 py-2.5 text-xs font-semibold motion-safe:transition-colors {phoneSide ===
+					side
+						? side === 'original'
+							? 'text-convert'
+							: 'text-merge'
+						: 'text-muted hover:text-white'}"
+					onclick={() => (phoneSide = side)}>{labels[side]}</button
+				>{/each}
+		</div>
+		{@render swapButton('size-11 shrink-0 rounded-xl bg-panel')}
 	</div>
 
 	<div class="grid grid-cols-1 items-center gap-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
 		{@render fileLine('original')}
-		<button
-			type="button"
-			onclick={() => {
-				turns++;
-				onswap();
-			}}
-			disabled={!original || !changed}
-			class="mx-auto flex size-8 items-center justify-center rounded-lg text-muted transition-colors enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 max-md:hidden"
-			aria-label="Swap original and changed"
-			title="Swap"
-			><IconArrowsLeftRight
-				size={18}
-				class="motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]"
-				style="transform: rotate({turns * 180}deg)"
-			/></button
-		>
+		{@render swapButton('mx-auto size-8 rounded-lg max-md:hidden')}
 		{@render fileLine('changed')}
 	</div>
 

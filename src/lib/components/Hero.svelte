@@ -117,10 +117,10 @@
 	<main id="main-content" class="hero-main flex flex-1 flex-col">
 		<section
 			aria-labelledby="hero-title"
-			class="hero-stage relative grid flex-1 items-center gap-10 px-6 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 py-12 xl:px-24"
+			class="hero-stage relative grid flex-1 items-center gap-8 px-6 py-8 sm:gap-14 sm:px-10 sm:py-14 lg:grid-cols-12 lg:gap-8 lg:px-16 xl:px-24"
 		>
 			<div class="hero-copy relative z-10 min-w-0 lg:col-span-5">
-				<h1 id="hero-title" class="text-5xl leading-tight font-bold tracking-tight">
+				<h1 id="hero-title" class="text-4xl leading-tight font-bold tracking-tight sm:text-5xl">
 					All the PDF tools<br />You would ever want
 				</h1>
 			</div>
@@ -182,7 +182,9 @@
 						Tools</button
 					>
 				</div>
-				<div class="h-80 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%]">
+				<div
+					class="h-72 sm:h-88 lg:absolute lg:top-[13.9%] lg:right-0 lg:h-[84.08%] lg:w-[59.15%] max-lg:landscape:h-64"
+				>
 					<PdfDropzone
 						bind:this={dropzone}
 						{selectedTool}

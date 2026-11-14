@@ -88,7 +88,10 @@
 			<input
 				id="page-selection"
 				type="text"
-				inputmode="numeric"
+				autocapitalize="off"
+				autocorrect="off"
+				spellcheck="false"
+				enterkeyhint="done"
 				autocomplete="off"
 				value={text}
 				disabled={processing || pages.length === 0}

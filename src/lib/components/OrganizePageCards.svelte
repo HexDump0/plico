@@ -520,7 +520,7 @@
 							onclick={() => removeKeepingFocus(pageList, '[data-remove]', () => remove(page))}
 							aria-label={lastOfItsPdf(page) ? 'Remove PDF' : `Remove ${nameOf(page)}`}
 							title={lastOfItsPdf(page) ? 'Remove PDF' : 'Remove page'}
-							class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+							class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 							><IconX size={18} stroke={2.5} /></button
 						>
 						<div class="absolute right-2 bottom-2 flex gap-1">
@@ -530,7 +530,7 @@
 								onclick={() => rotate(page, -90)}
 								aria-label={`Rotate ${nameOf(page)} left`}
 								title="Rotate left"
-								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40"
+								class="relative flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 								><IconRotate size={17} /></button
 							>
 							<button
@@ -539,7 +539,7 @@
 								onclick={() => rotate(page, 90)}
 								aria-label={`Rotate ${nameOf(page)} right`}
 								title="Rotate right"
-								class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40"
+								class="relative flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-merge hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 								><IconRotateClockwise size={17} /></button
 							>
 						</div>

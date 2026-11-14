@@ -30,12 +30,16 @@
 
 <div>
 	<p class="text-sm font-semibold">Continue with</p>
-	<div class="mt-3 grid grid-cols-2 gap-2">
+	<!-- On phones this sits in the pinned bar, so it is one row that scrolls
+	sideways rather than a grid that would cover the page. -->
+	<div
+		class="mt-3 grid grid-cols-2 gap-2 max-lg:-mx-6 max-lg:flex max-lg:snap-x max-lg:scroll-px-6 max-lg:[scrollbar-width:none] max-lg:overflow-x-auto max-lg:overscroll-x-contain max-lg:px-6"
+	>
 		{#each suggestions as next (next.id)}
 			<button
 				type="button"
 				onclick={() => open(next)}
-				class="group flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl border-2 border-white/10 px-3 py-2 text-left text-sm font-medium transition-[border-color,transform] duration-150 hover:border-white/20 motion-safe:active:scale-[0.98] {toolCategoryColor(
+				class="group flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl border-2 border-white/10 px-3 py-2 text-left text-sm font-medium transition-[border-color,transform] duration-150 hover:border-white/20 motion-safe:active:scale-[0.98] max-lg:shrink-0 max-lg:snap-start {toolCategoryColor(
 					next.id
 				)}"
 			>
@@ -49,7 +53,7 @@
 			bind:this={moreButton}
 			type="button"
 			onclick={() => toolsDialog.open(moreButton)}
-			class="group flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl border-2 border-white/10 px-3 py-2 text-left text-sm font-medium text-muted transition-[border-color,transform] duration-150 hover:border-white/20 motion-safe:active:scale-[0.98]"
+			class="group flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl border-2 border-white/10 px-3 py-2 text-left text-sm font-medium text-muted transition-[border-color,transform] duration-150 hover:border-white/20 motion-safe:active:scale-[0.98] max-lg:shrink-0 max-lg:snap-start"
 		>
 			<IconLayoutGrid size={18} stroke={1.8} class="shrink-0" aria-hidden="true" /><span
 				class="truncate transition-colors duration-150 group-hover:text-white">More tools</span

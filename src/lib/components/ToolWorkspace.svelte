@@ -8,6 +8,7 @@
 		IconArrowsSort,
 		IconCamera,
 		IconCheck,
+		IconChevronUp,
 		IconDownload,
 		IconFilePlus,
 		IconLoader2
@@ -1599,6 +1600,60 @@
 		`${filename.trim().replace(new RegExp(`\\.${outputExtension}$`, 'i'), '') || autoName}.${outputExtension}`
 	);
 	const continuable = $derived(!!result && resultFormat === 'pdf' && nextTools(tool.id).length > 0);
+
+	// Below lg, once there are files, the settings become a sheet pinned to the
+	// bottom: the action and a handle stay in view, the settings grow up from it.
+	// In page flow they sat below every page of a long preview, out of reach.
+	const sheet = $derived(supported && workspace.files.length > 0);
+	let sheetOpen = $state(false);
+	let phoneLayout = $state(
+		typeof window !== 'undefined' && window.matchMedia('(max-width: 63.98rem)').matches
+	);
+	let sheetHandle = $state<HTMLButtonElement>();
+	let sheetHandleHeight = $state(0);
+	let sheetActionHeight = $state(0);
+	const sheetCollapsed = $derived(sheet && phoneLayout && !sheetOpen);
+	onMount(() => {
+		const query = window.matchMedia('(max-width: 63.98rem)');
+		const update = () => (phoneLayout = query.matches);
+		update();
+		query.addEventListener('change', update);
+		return () => query.removeEventListener('change', update);
+	});
+	$effect(() => {
+		if (!sheet || !phoneLayout) sheetOpen = false;
+	});
+	// Where the settings are the task, a password to type, the sheet rises
+	// already open rather than showing an action that cannot run yet.
+	let sheetShown = false;
+	$effect(() => {
+		if (sheet && !sheetShown && phoneLayout && (isProtect || isUnlock)) sheetOpen = true;
+		sheetShown = sheet;
+	});
+	// A swipe on the handle opens or closes the sheet the way it went; a tap
+	// toggles it. Each gesture starts clean, so a swipe never eats the next tap.
+	let sheetSwipe: { id: number; y: number; moved: boolean } | null = null;
+	function sheetPointerDown(event: PointerEvent) {
+		sheetSwipe = { id: event.pointerId, y: event.clientY, moved: false };
+	}
+	function sheetPointerMove(event: PointerEvent) {
+		if (!sheetSwipe || event.pointerId !== sheetSwipe.id) return;
+		const dy = event.clientY - sheetSwipe.y;
+		if (Math.abs(dy) < 24) return;
+		sheetSwipe.moved = true;
+		sheetSwipe.y = event.clientY;
+		sheetOpen = dy < 0;
+	}
+	function sheetClick() {
+		if (!sheetSwipe?.moved) sheetOpen = !sheetOpen;
+		sheetSwipe = null;
+	}
+	function closeSheet(event: KeyboardEvent) {
+		if (event.key !== 'Escape' || event.defaultPrevented || !sheetOpen || !phoneLayout) return;
+		sheetOpen = false;
+		sheetHandle?.focus({ preventScroll: true });
+	}
+
 	const savedPercent = $derived(
 		isCompress && result && resultInputSize > 0
 			? Math.round((1 - resultSize / resultInputSize) * 100)
@@ -2459,6 +2514,7 @@
 	{/if}
 {/snippet}
 
+<svelte:window onkeydown={closeSheet} />
 <main id="main-content" class="flex flex-1 flex-col">
 	{#if !supported}
 		<div class="grid flex-1 place-items-center px-6 py-16">
@@ -2475,11 +2531,12 @@
 		</div>
 	{:else}
 		<div
-			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem] {continuable
-				? 'max-lg:pb-64'
-				: workspace.files.length
-					? 'max-lg:pb-24'
-					: ''}"
+			class="grid flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem] {sheet
+				? 'max-lg:pb-[calc(var(--sheet-bar,8rem)+1rem)]'
+				: ''}"
+			style:--sheet-bar={sheetHandleHeight + sheetActionHeight
+				? `${sheetHandleHeight + sheetActionHeight}px`
+				: undefined}
 		>
 			<section
 				aria-label="Documents"
@@ -2731,463 +2788,531 @@
 					{/if}
 				</div>
 			</section>
+			{#if sheet && sheetOpen && phoneLayout}<div
+					transition:fade={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+					class="fixed inset-0 z-30 touch-none bg-black/50 lg:hidden"
+					aria-hidden="true"
+					onclick={() => (sheetOpen = false)}
+				></div>{/if}
 			<aside
 				aria-label={`${tool.label} settings`}
-				class="m-6 flex flex-col rounded-2xl bg-panel lg:sticky lg:top-6 lg:ml-0 lg:h-[calc(100svh-9rem)] lg:self-start lg:overflow-y-auto"
+				class="m-6 flex flex-col rounded-2xl bg-panel lg:sticky lg:top-6 lg:ml-0 lg:h-[calc(100svh-9rem)] lg:self-start lg:overflow-y-auto {sheet
+					? 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-40 max-lg:m-0 max-lg:max-h-[calc(100svh-4.5rem)] max-lg:rounded-t-3xl max-lg:rounded-b-none max-lg:shadow-[0_-16px_48px_rgb(0_0_0/0.45)] max-lg:ring-1 max-lg:ring-white/10 motion-safe:max-lg:animate-sheet-rise'
+					: ''}"
 			>
-				<div class="flex-1 space-y-7 p-6 sm:p-8">
-					<h1 class="flex items-center gap-3 text-xl font-semibold tracking-tight">
-						<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
-					</h1>
-					{#if isProtect}
-						<div class="space-y-4">
-							<PasswordInput
-								label="Password"
-								bind:value={protectPassword}
-								invalid={protectTooLong}
-								disabled={processing}
-							/>
-							<div>
-								<PasswordInput
-									label="Confirm password"
-									bind:value={protectConfirm}
-									invalid={protectMismatch}
-									disabled={processing}
-									onenter={() => void protect()}
-								/>
-								{#if protectMismatch}<p
-										role="alert"
-										transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
-										class="pt-2 text-xs text-convert"
-									>
-										Passwords don't match
-									</p>{/if}
-							</div>
-						</div>
-					{:else if isPdfA}
-						<PdfASettings bind:part={pdfaPart} {accent} {processing} />
-					{:else if isRepair && currentFile}
-						<div class="flex items-center justify-between">
-							<h2 class="text-sm font-semibold">Condition</h2>
-							<span
-								class="text-xs motion-safe:transition-colors {repairFindings?.length
-									? accent
-									: repairFindings === null && repairCondition === 0
-										? 'text-convert'
-										: 'text-muted'}"
-								role="status"
-								>{repairFindings
-									? repairFindings.length
-										? 'Repaired'
-										: 'No damage found'
-									: repairCondition === 'checking'
-										? 'Checking...'
-										: repairCondition === 0
-											? 'Damaged'
-											: repairCondition === -1
-												? 'Locked'
-												: 'Opens normally'}</span
-							>
-						</div>
-						{#if repairFindings?.length}<ul
-								transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
-								class="space-y-3"
-								aria-label="What was repaired"
-							>
-								{#each repairFindings as finding (finding)}<li
-										class="flex items-start gap-2.5 text-sm"
-									>
-										<IconCheck size={16} stroke={2.2} class="mt-0.5 shrink-0 {accent}" />{finding}
-									</li>{/each}
-							</ul>{/if}
-					{:else if isUnlock && currentFile}
-						<div class="flex items-center justify-between">
-							<h2 class="text-sm font-semibold">Protection</h2>
-							<span class="text-xs text-muted" role="status"
-								>{unlockProtection === 'checking'
-									? 'Checking...'
-									: unlockProtection === 'password'
-										? 'Password'
-										: unlockProtection === 'restricted'
-											? 'Restrictions only'
-											: 'None'}</span
-							>
-						</div>
-						{#if unlockProtection === 'password'}<div
-								transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
-							>
-								<PasswordInput
-									label="Password"
-									bind:value={unlockPassword}
-									invalid={unlockWrong}
-									disabled={processing}
-									onenter={() => void unlock()}
-								/>
-								{#if unlockWrong}<p
-										role="alert"
-										transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
-										class="pt-2 text-xs text-convert"
-									>
-										Incorrect password
-									</p>{/if}
-							</div>{/if}
-					{:else if isScan}
-						<ScanSettings
-							look={scan.look}
-							onlook={(look) => scan.setLook(look)}
-							bind:paper={scanPaper}
-							bind:searchable={scanSearchable}
-							bind:languages={scanLanguages}
-							models={ocrModels}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isSummarize}
-						<SummarizeSettings
-							{summary}
-							title={currentFile?.name ?? ''}
-							{pageCount}
-							{processing}
-							{reducedMotion}
-							disabled={processing}
-							onask={askQuestion}
-						/>
-					{:else if isTranslate}
-						<TranslateSettings
-							bind:from={translate.from}
-							bind:to={translate.to}
-							bind:pages={translate.pages}
-							bind:keepOriginal={translate.keepOriginal}
-							bind:showOriginal={translate.showOriginal}
-							translated={translate.translated}
-							detected={translate.detected}
-							models={translate.models}
-							{pageCount}
-							pagesInvalid={translate.pagesInvalid}
-							noText={!!translate.glyphs && !translate.hasText}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isOcr}
-						<OcrSettings
-							bind:languages={ocrLanguages}
-							bind:pages={ocrPages}
-							bind:skipText={ocrSkipText}
-							bind:query={ocrQuery}
-							models={ocrModels}
-							{pageCount}
-							pagesInvalid={ocrPagesInvalid}
-							searchable={!!ocrFound}
-							matches={ocrMatches.length}
-							match={ocrMatch}
-							onstep={stepOcrMatch}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isCompare}
-						<CompareSettings
-							bind:mode={compareMode}
-							bind:highlight={compareHighlight}
-							bind:current={compareCurrent}
-							text={compareTextState}
-							changes={comparison?.changes ?? []}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isForms}
-						<FormSettings
-							changed={formChanged.length}
-							filled={formFilled}
-							undrawable={formUndrawable}
-							onreset={() => {
-								if (typeof formFields !== 'string') formValues = { ...formFields.initial };
-							}}
-							onclear={() => {
-								if (typeof formFields !== 'string')
-									formValues = { ...formValues, ...blankValues(formFields) };
-							}}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isAnnotate || isEdit}
-						<AnnotateSettings
-							editor={isEdit ? edit : annotate}
-							page={previewPage}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isRedact}
-						<RedactSettings
-							bind:query={redactQuery}
-							bind:fill={redactFill}
-							text={redactTextState}
-							matches={redactMatches.length}
-							match={redactMatch}
-							unmarked={redactUnmarked.length}
-							onstep={stepRedactMatch}
-							onmarkall={markAllMatches}
-							areas={redactMarks.length}
-							pages={redactPages}
-							canUndo={redactHistory.length > 0}
-							onundo={undoRedact}
-							onclear={clearRedact}
-							disabled={processing}
-						/>
-					{:else if isFlatten}
-						<FlattenSettings bind:formsOnly={flattenFormsOnly} disabled={processing} />
-					{:else if isSign}
-						<SignSettings
-							bind:image={signImage}
-							bind:pages={signScope}
-							bind:range={signRange}
-							page={signPage}
-							{pageCount}
-							rangeInvalid={signRangeInvalid}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isCrop}
-						<CropSettings
-							bind:mode={cropMode}
-							bind:padding={cropPadding}
-							bind:pages={cropPages}
-							size={cropShownSize}
-							changed={!isFullPage(cropArea)}
-							canFit={!!cropPage && !!cropBounds[cropPage.number]}
-							onfit={() => {
-								const bounds = cropPage && cropBounds[cropPage.number];
-								if (cropPage && bounds)
-									cropArea = padArea(bounds, cropPadding, cropPage.width, cropPage.height);
-							}}
-							onreset={() => (cropArea = FULL_PAGE)}
-							{pageCount}
-							pagesInvalid={stampPagesInvalid}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isPageNumbers}
-						<PageNumberSettings
-							bind:position={numberPosition}
-							bind:template={numberTemplate}
-							bind:firstNumber={numberFirst}
-							bind:pages={numberPages}
-							{lastNumber}
-							{pageCount}
-							pagesInvalid={stampPagesInvalid}
-							family={numberFamily}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isWatermark}
-						<WatermarkSettings
-							bind:kind={watermarkKind}
-							bind:text={watermarkText}
-							bind:family={watermarkFamily}
-							bind:bold={watermarkBold}
-							bind:size={watermarkSize}
-							bind:color={watermarkColor}
-							bind:image={watermarkImage}
-							bind:imageWidth={watermarkImageWidth}
-							bind:position={watermarkPosition}
-							bind:tile={watermarkTile}
-							bind:rotation={watermarkRotation}
-							bind:opacity={watermarkOpacity}
-							undrawable={watermarkUndrawable}
-							tooDense={watermarkTooDense && watermarkTile}
-							{reducedMotion}
-							disabled={processing}
-						/>
-					{:else if isOrganize}
-						<div>
-							<h2 class="mb-3 text-sm font-semibold">Pages</h2>
-							<div
-								class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
-								role="group"
-								aria-label="Pages"
-							>
-								<button
-									type="button"
-									onclick={() => (organizePages = [...organizePages].reverse())}
-									disabled={processing || organizePages.length < 2}
-									class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
-									><IconArrowsSort size={16} />Reverse</button
-								>
-								<button
-									type="button"
-									onclick={() => void organizeViewer?.addBlankPage()}
-									disabled={processing || organizePages.length === 0}
-									class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
-									><IconFilePlus size={16} />Blank page</button
-								>
-							</div>
-						</div>
-					{:else if isSplit}
-						{#key currentFile}<SplitSettings
-								{pageCount}
-								{reducedMotion}
-								bind:ranges={splitRanges}
-								bind:mode={splitMode}
-								bind:interval={splitInterval}
-								bind:combine={splitCombine}
-							/>{/key}
-					{:else if isExtract || isRemove}
-						<PageSelectSettings
-							pages={organizePages}
-							bind:selected={selectedPages}
-							mode={isExtract ? 'extract' : 'remove'}
-							{processing}
-							{reducedMotion}
-							bind:output={extractOutput}
-							bind:imageFormat={extractImageFormat}
-							bind:dpi={extractDpi}
-						/>
-					{:else if isCompress}
-						<CompressSettings bind:level={compressLevel} />
-					{:else if isPdfToImage}
-						<PdfToImageSettings bind:format={pdfToImageFormat} bind:dpi={pdfToImageDpi} />
-					{:else if printTool}
-						<PrintSettings
-							bind:size={printSize}
-							bind:landscape={printLandscape}
-							bind:margin={printMargin}
-							bind:typeface={printTypeface}
-							markdown={printTool === 'markdown-to-pdf'}
-						/>
-					{:else if isImageToPdf}
-						<ImageToPdfSettings
-							{reducedMotion}
-							bind:pageSize={imagePdfPageSize}
-							bind:orientation={imagePdfOrientation}
-							bind:margin={imagePdfMargin}
-						/>
-					{/if}
-					{#if workspace.files.length}<div
-							in:rangeReveal={{ reducedMotion, preview: true }}
-							out:rangeCollapse={{ reducedMotion }}
+				<button
+					bind:this={sheetHandle}
+					bind:offsetHeight={sheetHandleHeight}
+					type="button"
+					class="{sheet
+						? 'flex'
+						: 'hidden'} group w-full shrink-0 touch-none flex-col items-center gap-1.5 rounded-t-3xl px-6 pt-4 pb-4 focus-visible:outline-none lg:hidden"
+					aria-expanded={sheetOpen}
+					aria-controls="tool-settings"
+					onpointerdown={sheetPointerDown}
+					onpointermove={sheetPointerMove}
+					onclick={sheetClick}
+				>
+					<span aria-hidden="true" class="h-1 w-9 rounded-full bg-white/20"></span>
+					<span
+						class="flex min-h-11 w-full items-center gap-3 rounded-xl group-focus-visible:ring-2 group-focus-visible:ring-white"
+					>
+						<tool.icon size={22} stroke={1.7} class="shrink-0 {accent}" aria-hidden="true" />
+						<span class="min-w-0 flex-1 truncate text-left text-base font-semibold tracking-tight"
+							>{tool.label}</span
 						>
-							<OutputFilename
-								bind:value={filename}
-								placeholder={autoName}
-								extension={outputExtension}
-							/>
-						</div>{/if}
-					<!-- Advanced options always close the settings, below the filename. -->
-					{#if isMerge}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch
-								bind:checked={mergeBookmarks}
-								label="Add a bookmark for each file"
-								tone="merge"
-							/>
-						</AdvancedOptions>
-					{:else if isProtect}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch bind:checked={allowPrinting} label="Allow printing" tone="merge" />
-							<ToggleSwitch bind:checked={allowCopying} label="Allow copying text" tone="merge" />
-							<ToggleSwitch bind:checked={allowEditing} label="Allow editing" tone="merge" />
-							{#if protectRestricted}<div
-									transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
-									class="pt-3"
-								>
+						<span class="flex shrink-0 items-center gap-1 text-sm font-medium text-muted"
+							>Settings<IconChevronUp
+								size={18}
+								aria-hidden="true"
+								class="motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] {sheetOpen
+									? 'rotate-180'
+									: ''}"
+							/></span
+						>
+					</span>
+				</button>
+				<div
+					id="tool-settings"
+					class={sheet
+						? `flex-1 max-lg:grid max-lg:min-h-0 max-lg:flex-[0_1_auto] ${reducedMotion ? '' : 'max-lg:transition-[grid-template-rows] max-lg:duration-300 max-lg:ease-[cubic-bezier(0.22,1,0.36,1)]'} ${sheetOpen ? 'max-lg:grid-rows-[1fr]' : 'max-lg:grid-rows-[0fr]'}`
+						: 'flex-1'}
+				>
+					<div
+						class={sheet ? 'max-lg:min-h-0 max-lg:overflow-y-auto max-lg:overscroll-contain' : ''}
+						inert={sheetCollapsed}
+					>
+						<div class="flex-1 space-y-7 p-6 sm:p-8 {sheet ? 'max-lg:pt-3' : ''}">
+							<h1
+								class="flex items-center gap-3 text-xl font-semibold tracking-tight {sheet
+									? 'max-lg:sr-only'
+									: ''}"
+							>
+								<tool.icon size={24} stroke={1.7} class={`shrink-0 ${accent}`} />{tool.label}
+							</h1>
+							{#if isProtect}
+								<div class="space-y-4">
 									<PasswordInput
-										label="Permissions password"
-										placeholder="Optional"
-										bind:value={protectOwner}
-										invalid={protectOwnerSame}
+										label="Password"
+										bind:value={protectPassword}
+										invalid={protectTooLong}
 										disabled={processing}
 									/>
-									{#if protectOwnerSame}<p role="alert" class="pt-2 text-xs text-convert">
-											Must differ from the password
-										</p>{/if}
-								</div>{/if}
-						</AdvancedOptions>
-					{:else if isPageNumbers}
-						<AdvancedOptions {reducedMotion} spacing="space-y-6">
-							<StampTextSettings
-								bind:family={numberFamily}
-								bind:bold={numberBold}
-								bind:size={numberSize}
-								bind:color={numberColor}
-								minSize={6}
-								maxSize={36}
-								disabled={processing}
-							/>
-							<StampAdvanced bind:margin={numberMargin} disabled={processing} />
-						</AdvancedOptions>
-					{:else if isWatermark}
-						<AdvancedOptions {reducedMotion} spacing="space-y-6">
-							<StampAdvanced
-								bind:margin={watermarkMargin}
-								marginLabel={watermarkTile ? 'Spacing' : 'Margin'}
-								bind:behind={watermarkBehind}
-								bind:pages={watermarkPages}
-								{pageCount}
-								pagesInvalid={stampPagesInvalid}
-								disabled={processing}
-							/>
-						</AdvancedOptions>
-					{:else if isForms}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch bind:checked={formFlatten} label="Flatten form" tone="brand" />
-						</AdvancedOptions>
-					{:else if isAnnotate}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch
-								bind:checked={annotate.flatten}
-								label="Draw into the page"
-								tone="brand"
-							/>
-							{#if annotate.flatten && annotate.hasNotes}<p
-									role="alert"
-									transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
-									class="pt-1 text-xs text-convert"
+									<div>
+										<PasswordInput
+											label="Confirm password"
+											bind:value={protectConfirm}
+											invalid={protectMismatch}
+											disabled={processing}
+											onenter={() => void protect()}
+										/>
+										{#if protectMismatch}<p
+												role="alert"
+												transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+												class="pt-2 text-xs text-convert"
+											>
+												Passwords don't match
+											</p>{/if}
+									</div>
+								</div>
+							{:else if isPdfA}
+								<PdfASettings bind:part={pdfaPart} {accent} {processing} />
+							{:else if isRepair && currentFile}
+								<div class="flex items-center justify-between">
+									<h2 class="text-sm font-semibold">Condition</h2>
+									<span
+										class="text-xs motion-safe:transition-colors {repairFindings?.length
+											? accent
+											: repairFindings === null && repairCondition === 0
+												? 'text-convert'
+												: 'text-muted'}"
+										role="status"
+										>{repairFindings
+											? repairFindings.length
+												? 'Repaired'
+												: 'No damage found'
+											: repairCondition === 'checking'
+												? 'Checking...'
+												: repairCondition === 0
+													? 'Damaged'
+													: repairCondition === -1
+														? 'Locked'
+														: 'Opens normally'}</span
+									>
+								</div>
+								{#if repairFindings?.length}<ul
+										transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+										class="space-y-3"
+										aria-label="What was repaired"
+									>
+										{#each repairFindings as finding (finding)}<li
+												class="flex items-start gap-2.5 text-sm"
+											>
+												<IconCheck
+													size={16}
+													stroke={2.2}
+													class="mt-0.5 shrink-0 {accent}"
+												/>{finding}
+											</li>{/each}
+									</ul>{/if}
+							{:else if isUnlock && currentFile}
+								<div class="flex items-center justify-between">
+									<h2 class="text-sm font-semibold">Protection</h2>
+									<span class="text-xs text-muted" role="status"
+										>{unlockProtection === 'checking'
+											? 'Checking...'
+											: unlockProtection === 'password'
+												? 'Password'
+												: unlockProtection === 'restricted'
+													? 'Restrictions only'
+													: 'None'}</span
+									>
+								</div>
+								{#if unlockProtection === 'password'}<div
+										transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+									>
+										<PasswordInput
+											label="Password"
+											bind:value={unlockPassword}
+											invalid={unlockWrong}
+											disabled={processing}
+											onenter={() => void unlock()}
+										/>
+										{#if unlockWrong}<p
+												role="alert"
+												transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+												class="pt-2 text-xs text-convert"
+											>
+												Incorrect password
+											</p>{/if}
+									</div>{/if}
+							{:else if isScan}
+								<ScanSettings
+									look={scan.look}
+									onlook={(look) => scan.setLook(look)}
+									bind:paper={scanPaper}
+									bind:searchable={scanSearchable}
+									bind:languages={scanLanguages}
+									models={ocrModels}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isSummarize}
+								<SummarizeSettings
+									{summary}
+									title={currentFile?.name ?? ''}
+									{pageCount}
+									{processing}
+									{reducedMotion}
+									disabled={processing}
+									onask={askQuestion}
+								/>
+							{:else if isTranslate}
+								<TranslateSettings
+									bind:from={translate.from}
+									bind:to={translate.to}
+									bind:pages={translate.pages}
+									bind:keepOriginal={translate.keepOriginal}
+									bind:showOriginal={translate.showOriginal}
+									translated={translate.translated}
+									detected={translate.detected}
+									models={translate.models}
+									{pageCount}
+									pagesInvalid={translate.pagesInvalid}
+									noText={!!translate.glyphs && !translate.hasText}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isOcr}
+								<OcrSettings
+									bind:languages={ocrLanguages}
+									bind:pages={ocrPages}
+									bind:skipText={ocrSkipText}
+									bind:query={ocrQuery}
+									models={ocrModels}
+									{pageCount}
+									pagesInvalid={ocrPagesInvalid}
+									searchable={!!ocrFound}
+									matches={ocrMatches.length}
+									match={ocrMatch}
+									onstep={stepOcrMatch}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isCompare}
+								<CompareSettings
+									bind:mode={compareMode}
+									bind:highlight={compareHighlight}
+									bind:current={compareCurrent}
+									text={compareTextState}
+									changes={comparison?.changes ?? []}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isForms}
+								<FormSettings
+									changed={formChanged.length}
+									filled={formFilled}
+									undrawable={formUndrawable}
+									onreset={() => {
+										if (typeof formFields !== 'string') formValues = { ...formFields.initial };
+									}}
+									onclear={() => {
+										if (typeof formFields !== 'string')
+											formValues = { ...formValues, ...blankValues(formFields) };
+									}}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isAnnotate || isEdit}
+								<AnnotateSettings
+									editor={isEdit ? edit : annotate}
+									page={previewPage}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isRedact}
+								<RedactSettings
+									bind:query={redactQuery}
+									bind:fill={redactFill}
+									text={redactTextState}
+									matches={redactMatches.length}
+									match={redactMatch}
+									unmarked={redactUnmarked.length}
+									onstep={stepRedactMatch}
+									onmarkall={markAllMatches}
+									areas={redactMarks.length}
+									pages={redactPages}
+									canUndo={redactHistory.length > 0}
+									onundo={undoRedact}
+									onclear={clearRedact}
+									disabled={processing}
+								/>
+							{:else if isFlatten}
+								<FlattenSettings bind:formsOnly={flattenFormsOnly} disabled={processing} />
+							{:else if isSign}
+								<SignSettings
+									bind:image={signImage}
+									bind:pages={signScope}
+									bind:range={signRange}
+									page={signPage}
+									{pageCount}
+									rangeInvalid={signRangeInvalid}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isCrop}
+								<CropSettings
+									bind:mode={cropMode}
+									bind:padding={cropPadding}
+									bind:pages={cropPages}
+									size={cropShownSize}
+									changed={!isFullPage(cropArea)}
+									canFit={!!cropPage && !!cropBounds[cropPage.number]}
+									onfit={() => {
+										const bounds = cropPage && cropBounds[cropPage.number];
+										if (cropPage && bounds)
+											cropArea = padArea(bounds, cropPadding, cropPage.width, cropPage.height);
+									}}
+									onreset={() => (cropArea = FULL_PAGE)}
+									{pageCount}
+									pagesInvalid={stampPagesInvalid}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isPageNumbers}
+								<PageNumberSettings
+									bind:position={numberPosition}
+									bind:template={numberTemplate}
+									bind:firstNumber={numberFirst}
+									bind:pages={numberPages}
+									{lastNumber}
+									{pageCount}
+									pagesInvalid={stampPagesInvalid}
+									family={numberFamily}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isWatermark}
+								<WatermarkSettings
+									bind:kind={watermarkKind}
+									bind:text={watermarkText}
+									bind:family={watermarkFamily}
+									bind:bold={watermarkBold}
+									bind:size={watermarkSize}
+									bind:color={watermarkColor}
+									bind:image={watermarkImage}
+									bind:imageWidth={watermarkImageWidth}
+									bind:position={watermarkPosition}
+									bind:tile={watermarkTile}
+									bind:rotation={watermarkRotation}
+									bind:opacity={watermarkOpacity}
+									undrawable={watermarkUndrawable}
+									tooDense={watermarkTooDense && watermarkTile}
+									{reducedMotion}
+									disabled={processing}
+								/>
+							{:else if isOrganize}
+								<div>
+									<h2 class="mb-3 text-sm font-semibold">Pages</h2>
+									<div
+										class="grid grid-cols-2 gap-1 rounded-xl bg-canvas p-1"
+										role="group"
+										aria-label="Pages"
+									>
+										<button
+											type="button"
+											onclick={() => (organizePages = [...organizePages].reverse())}
+											disabled={processing || organizePages.length < 2}
+											class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
+											><IconArrowsSort size={16} />Reverse</button
+										>
+										<button
+											type="button"
+											onclick={() => void organizeViewer?.addBlankPage()}
+											disabled={processing || organizePages.length === 0}
+											class="flex items-center justify-center gap-2 rounded-lg px-2 py-3 text-xs font-semibold text-muted enabled:hover:bg-panel-hover enabled:hover:text-white disabled:opacity-40 motion-safe:transition-colors"
+											><IconFilePlus size={16} />Blank page</button
+										>
+									</div>
+								</div>
+							{:else if isSplit}
+								{#key currentFile}<SplitSettings
+										{pageCount}
+										{reducedMotion}
+										bind:ranges={splitRanges}
+										bind:mode={splitMode}
+										bind:interval={splitInterval}
+										bind:combine={splitCombine}
+									/>{/key}
+							{:else if isExtract || isRemove}
+								<PageSelectSettings
+									pages={organizePages}
+									bind:selected={selectedPages}
+									mode={isExtract ? 'extract' : 'remove'}
+									{processing}
+									{reducedMotion}
+									bind:output={extractOutput}
+									bind:imageFormat={extractImageFormat}
+									bind:dpi={extractDpi}
+								/>
+							{:else if isCompress}
+								<CompressSettings bind:level={compressLevel} />
+							{:else if isPdfToImage}
+								<PdfToImageSettings bind:format={pdfToImageFormat} bind:dpi={pdfToImageDpi} />
+							{:else if printTool}
+								<PrintSettings
+									bind:size={printSize}
+									bind:landscape={printLandscape}
+									bind:margin={printMargin}
+									bind:typeface={printTypeface}
+									markdown={printTool === 'markdown-to-pdf'}
+								/>
+							{:else if isImageToPdf}
+								<ImageToPdfSettings
+									{reducedMotion}
+									bind:pageSize={imagePdfPageSize}
+									bind:orientation={imagePdfOrientation}
+									bind:margin={imagePdfMargin}
+								/>
+							{/if}
+							{#if workspace.files.length}<div
+									in:rangeReveal={{ reducedMotion, preview: true }}
+									out:rangeCollapse={{ reducedMotion }}
 								>
-									Notes can't be drawn into the page
-								</p>{/if}
-						</AdvancedOptions>
-					{:else if isRedact}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch bind:checked={redactMetadata} label="Remove metadata" tone="merge" />
-							<ToggleSwitch
-								bind:checked={redactAsImages}
-								label="Turn redacted pages into images"
-								tone="merge"
-							/>
-						</AdvancedOptions>
-					{:else if isCompress}
-						<AdvancedOptions {reducedMotion}>
-							<ToggleSwitch
-								bind:checked={compressRemoveMetadata}
-								label="Remove metadata"
-								tone="compress"
-							/>
-							<ToggleSwitch
-								bind:checked={compressRemoveThumbnails}
-								label="Remove page thumbnails"
-								tone="compress"
-							/>
-						</AdvancedOptions>
-					{:else if isMarkdown}
-						<AdvancedOptions {reducedMotion} spacing="space-y-4">
-							<PageRangeField bind:value={markdownPages} {pageCount} />
-							<ToggleSwitch bind:checked={markdownImages} label="Embed images" tone="split" />
-						</AdvancedOptions>
-					{:else if isPdfToImage}
-						<AdvancedOptions {reducedMotion} spacing="space-y-4">
-							<PdfToImageAdvanced
-								format={pdfToImageFormat}
-								bind:quality={pdfToImageQuality}
-								bind:pageRange={pdfToImagePageRange}
-								{pageCount}
-							/>
-						</AdvancedOptions>
-					{/if}
+									<OutputFilename
+										bind:value={filename}
+										placeholder={autoName}
+										extension={outputExtension}
+									/>
+								</div>{/if}
+							<!-- Advanced options always close the settings, below the filename. -->
+							{#if isMerge}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch
+										bind:checked={mergeBookmarks}
+										label="Add a bookmark for each file"
+										tone="merge"
+									/>
+								</AdvancedOptions>
+							{:else if isProtect}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch bind:checked={allowPrinting} label="Allow printing" tone="merge" />
+									<ToggleSwitch
+										bind:checked={allowCopying}
+										label="Allow copying text"
+										tone="merge"
+									/>
+									<ToggleSwitch bind:checked={allowEditing} label="Allow editing" tone="merge" />
+									{#if protectRestricted}<div
+											transition:slide={{ duration: reducedMotion ? 0 : 220, easing: cubicOut }}
+											class="pt-3"
+										>
+											<PasswordInput
+												label="Permissions password"
+												placeholder="Optional"
+												bind:value={protectOwner}
+												invalid={protectOwnerSame}
+												disabled={processing}
+											/>
+											{#if protectOwnerSame}<p role="alert" class="pt-2 text-xs text-convert">
+													Must differ from the password
+												</p>{/if}
+										</div>{/if}
+								</AdvancedOptions>
+							{:else if isPageNumbers}
+								<AdvancedOptions {reducedMotion} spacing="space-y-6">
+									<StampTextSettings
+										bind:family={numberFamily}
+										bind:bold={numberBold}
+										bind:size={numberSize}
+										bind:color={numberColor}
+										minSize={6}
+										maxSize={36}
+										disabled={processing}
+									/>
+									<StampAdvanced bind:margin={numberMargin} disabled={processing} />
+								</AdvancedOptions>
+							{:else if isWatermark}
+								<AdvancedOptions {reducedMotion} spacing="space-y-6">
+									<StampAdvanced
+										bind:margin={watermarkMargin}
+										marginLabel={watermarkTile ? 'Spacing' : 'Margin'}
+										bind:behind={watermarkBehind}
+										bind:pages={watermarkPages}
+										{pageCount}
+										pagesInvalid={stampPagesInvalid}
+										disabled={processing}
+									/>
+								</AdvancedOptions>
+							{:else if isForms}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch bind:checked={formFlatten} label="Flatten form" tone="brand" />
+								</AdvancedOptions>
+							{:else if isAnnotate}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch
+										bind:checked={annotate.flatten}
+										label="Draw into the page"
+										tone="brand"
+									/>
+									{#if annotate.flatten && annotate.hasNotes}<p
+											role="alert"
+											transition:slide={{ duration: reducedMotion ? 0 : 180, easing: cubicOut }}
+											class="pt-1 text-xs text-convert"
+										>
+											Notes can't be drawn into the page
+										</p>{/if}
+								</AdvancedOptions>
+							{:else if isRedact}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch
+										bind:checked={redactMetadata}
+										label="Remove metadata"
+										tone="merge"
+									/>
+									<ToggleSwitch
+										bind:checked={redactAsImages}
+										label="Turn redacted pages into images"
+										tone="merge"
+									/>
+								</AdvancedOptions>
+							{:else if isCompress}
+								<AdvancedOptions {reducedMotion}>
+									<ToggleSwitch
+										bind:checked={compressRemoveMetadata}
+										label="Remove metadata"
+										tone="compress"
+									/>
+									<ToggleSwitch
+										bind:checked={compressRemoveThumbnails}
+										label="Remove page thumbnails"
+										tone="compress"
+									/>
+								</AdvancedOptions>
+							{:else if isMarkdown}
+								<AdvancedOptions {reducedMotion} spacing="space-y-4">
+									<PageRangeField bind:value={markdownPages} {pageCount} />
+									<ToggleSwitch bind:checked={markdownImages} label="Embed images" tone="split" />
+								</AdvancedOptions>
+							{:else if isPdfToImage}
+								<AdvancedOptions {reducedMotion} spacing="space-y-4">
+									<PdfToImageAdvanced
+										format={pdfToImageFormat}
+										bind:quality={pdfToImageQuality}
+										bind:pageRange={pdfToImagePageRange}
+										{pageCount}
+									/>
+								</AdvancedOptions>
+							{/if}
+						</div>
+					</div>
 				</div>
-				<!-- On phones the action stays pinned to the bottom once there is
-				something to process, instead of sitting below every page card. -->
+				<!-- In the sheet the action is part of what stays in view. -->
 				<div
-					class="shrink-0 space-y-4 p-6 sm:p-8 {workspace.files.length
-						? 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-20 max-lg:border-t max-lg:border-white/10 max-lg:bg-canvas/85 max-lg:px-6 max-lg:py-4 max-lg:backdrop-blur-md'
+					bind:offsetHeight={sheetActionHeight}
+					class="shrink-0 space-y-4 p-6 sm:p-8 {sheet
+						? 'max-lg:space-y-3 max-lg:border-t max-lg:border-white/10 max-lg:px-6 max-lg:pt-3 max-lg:pb-[max(1rem,env(safe-area-inset-bottom))]'
 						: ''}"
 					aria-live="polite"
 				>

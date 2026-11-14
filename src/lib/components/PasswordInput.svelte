@@ -29,6 +29,9 @@
 		<input
 			bind:value
 			type={visible ? 'text' : 'password'}
+			autocapitalize="off"
+			enterkeyhint={onenter ? 'go' : undefined}
+			autocorrect="off"
 			{placeholder}
 			{disabled}
 			autocomplete="off"

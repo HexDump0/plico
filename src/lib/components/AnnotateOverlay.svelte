@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { twoFingerScroll } from '$lib/touch';
 	import { fontStack } from '$lib/pdf/font-faces.svelte';
 	import { needsEmbedding } from '$lib/pdf/unicode-fonts';
 	import { cubicOut } from 'svelte/easing';
@@ -456,6 +457,13 @@
 		}
 	}
 
+	// A second finger scrolls the page instead: whatever the first started is undone.
+	function cancelDrag() {
+		if (drag && drag.kind !== 'create' && drag.moved) editor.change(drag.origin.id, drag.origin);
+		drag = null;
+		draft = null;
+	}
+
 	function end(event: PointerEvent) {
 		if (!drag || event.pointerId !== drag.pointer) return;
 		root?.releasePointerCapture(event.pointerId);
@@ -608,6 +616,7 @@
 picked, moved and resized where the tool lets them be. -->
 <div
 	bind:this={root}
+	{@attach twoFingerScroll(cancelDrag)}
 	bind:clientWidth={pixels}
 	role="presentation"
 	class="absolute inset-0 {!editable
@@ -748,7 +757,7 @@ picked, moved and resized where the tool lets them be. -->
 				{#each corners as item (item.corner)}
 					<div
 						role="presentation"
-						class="pointer-events-auto absolute size-7 touch-none {item.place}"
+						class="pointer-events-auto absolute size-7 touch-none pointer-coarse:before:absolute pointer-coarse:before:-inset-2 {item.place}"
 						style:cursor={item.corner === 'nw' || item.corner === 'se'
 							? 'nwse-resize'
 							: 'nesw-resize'}
@@ -760,6 +769,9 @@ picked, moved and resized where the tool lets them be. -->
 					</div>
 				{/each}
 			{/if}
+			<!-- With a mouse the remove button sits on the top right corner. A finger
+			aimed at that corner to resize would remove instead, so on touch it
+			moves clear of the box, above its middle. -->
 			<button
 				type="button"
 				aria-label={selected.replaces
@@ -768,9 +780,9 @@ picked, moved and resized where the tool lets them be. -->
 						? 'Restore the original image'
 						: `Remove this ${group === 'markup' ? 'markup' : editing ? 'edit' : 'annotation'}`}
 				title={selected.replaces || selected.kind === 'picture' ? 'Restore original' : 'Remove'}
-				class="pointer-events-auto absolute right-0 flex size-6 translate-x-1/2 items-center justify-center rounded-full bg-canvas text-white shadow-lg ring-1 ring-white/15 hover:bg-brand hover:text-canvas motion-safe:transition-colors {nearTop
-					? 'bottom-0 translate-y-1/2'
-					: 'top-0 -translate-y-1/2'}"
+				class="pointer-events-auto absolute right-0 flex size-6 translate-x-1/2 items-center justify-center rounded-full bg-canvas text-white shadow-lg ring-1 ring-white/15 hover:bg-brand hover:text-canvas motion-safe:transition-colors pointer-coarse:right-1/2 pointer-coarse:size-9 pointer-coarse:before:absolute pointer-coarse:before:-inset-1 {nearTop
+					? 'bottom-0 translate-y-1/2 pointer-coarse:translate-y-[calc(100%+0.75rem)]'
+					: 'top-0 -translate-y-1/2 pointer-coarse:-translate-y-[calc(100%+0.75rem)]'}"
 				onpointerdown={(event) => event.stopPropagation()}
 				onclick={() => editor.remove(selected.id)}
 				in:scale={{ start: 0.6, duration: reducedMotion ? 0 : 180, easing: cubicOut }}
@@ -782,7 +794,7 @@ picked, moved and resized where the tool lets them be. -->
 				{@const [x, y] = selected[end]}
 				<div
 					role="presentation"
-					class="absolute size-7 -translate-1/2 cursor-grab touch-none"
+					class="absolute size-7 -translate-1/2 cursor-grab touch-none pointer-coarse:before:absolute pointer-coarse:before:-inset-2"
 					style:left={percent(x)}
 					style:top={percent(y)}
 					onpointerdown={(event) => grab(event, selected, end)}

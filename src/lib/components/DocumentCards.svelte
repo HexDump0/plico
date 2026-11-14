@@ -550,7 +550,7 @@
 									>{index + 1}</span
 								>{/if}<button
 								disabled={processing || !!dragged || !!keyboardPicked}
-								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 								aria-label={`Remove ${file.name}`}
 								data-remove
 								onclick={() =>
@@ -560,14 +560,14 @@
 							{#if onturn || onopen}
 								{#if onopen}<button
 										disabled={processing || !!dragged || !!keyboardPicked}
-										class="absolute bottom-2 left-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+										class="absolute bottom-2 left-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 										aria-label={`Adjust corners of ${file.name}`}
 										title="Adjust corners"
 										onclick={() => onopen(file)}><IconPerspective size={18} /></button
 									>{/if}
 								{#if onturn}<button
 										disabled={processing || !!dragged || !!keyboardPicked}
-										class="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
+										class="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 										aria-label={`Turn ${file.name} right`}
 										title="Turn right"
 										onclick={() => onturn(file)}><IconRotateClockwise size={18} /></button

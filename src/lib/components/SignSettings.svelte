@@ -381,7 +381,10 @@
 					<input
 						bind:this={rangeInput}
 						type="text"
-						inputmode="numeric"
+						autocapitalize="off"
+						autocorrect="off"
+						spellcheck="false"
+						enterkeyhint="done"
 						autocomplete="off"
 						bind:value={range}
 						{disabled}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { twoFingerScroll } from '$lib/touch';
 	import { cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
 	import type { PreviewPage } from '$lib/pdf/stamp-layout';
@@ -117,6 +118,13 @@
 		}
 	}
 
+	// A second finger scrolls the page instead: whatever the first started is undone.
+	function cancelDrag() {
+		if (drag?.moved) onchange(drag.origin);
+		drag = null;
+		ghost = null;
+	}
+
 	function end(event: PointerEvent) {
 		if (!drag || event.pointerId !== drag.pointer) return;
 		root?.releasePointerCapture(event.pointerId);
@@ -152,6 +160,7 @@
 
 <div
 	bind:this={root}
+	{@attach twoFingerScroll(cancelDrag)}
 	role="presentation"
 	class="absolute inset-0 {editable && imageUrl ? 'cursor-copy touch-none' : 'pointer-events-none'}"
 	onpointerdown={(event) => begin(event, 'place')}
@@ -189,7 +198,7 @@
 				{#each corners as item (item.corner)}
 					<div
 						role="presentation"
-						class="absolute size-8 {item.place}"
+						class="absolute size-8 pointer-coarse:before:absolute pointer-coarse:before:-inset-2 {item.place}"
 						style:cursor={item.corner === 'nw' || item.corner === 'se'
 							? 'nwse-resize'
 							: 'nesw-resize'}

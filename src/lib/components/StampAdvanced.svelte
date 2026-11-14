@@ -44,7 +44,10 @@
 				<input
 					id="{id}-pages"
 					type="text"
-					inputmode="numeric"
+					autocapitalize="off"
+					autocorrect="off"
+					spellcheck="false"
+					enterkeyhint="done"
 					autocomplete="off"
 					bind:value={pages}
 					{disabled}

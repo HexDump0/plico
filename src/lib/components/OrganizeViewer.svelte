@@ -367,7 +367,7 @@
 							onclick={() =>
 								removeKeepingFocus(sourceList, '[data-remove]', () => removeSource(source.key))}
 							disabled={processing}
-							class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
+							class="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 							aria-label={`Remove ${source.file.name}`}
 							title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 						>
@@ -419,8 +419,9 @@
 			<p role="status" class="py-16 text-center text-sm text-muted">{status}</p>
 		{/if}
 	{:else}
-		<div class="flex items-start justify-between gap-3">
-			<div class="flex min-w-0 flex-1 items-center gap-2 px-1">
+		<!-- On a phone the rotate buttons wrap below rather than squeeze the name. -->
+		<div class="flex flex-wrap items-start justify-between gap-3">
+			<div class="flex min-w-48 flex-1 items-center gap-2 px-1">
 				<p class="max-w-xl min-w-0 truncate text-sm font-semibold" title={files[0]?.name}>
 					{files[0]?.name}
 				</p>
@@ -435,7 +436,7 @@
 					type="button"
 					onclick={() => files[0] && onremove(files[0])}
 					disabled={processing}
-					class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
+					class="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 					aria-label="Remove PDF"
 					title="Remove PDF"><IconX size={18} stroke={2.5} /></button
 				>
@@ -564,7 +565,7 @@
 									disabled={processing}
 									aria-label={`Rotate page ${page.number} left`}
 									title="Rotate left"
-									class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+									class="relative flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 									><IconRotate size={17} /></button
 								>
 								<button
@@ -573,7 +574,7 @@
 									disabled={processing}
 									aria-label={`Rotate page ${page.number} right`}
 									title="Rotate right"
-									class="flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40"
+									class="relative flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm hover:bg-merge hover:text-canvas disabled:opacity-40 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5"
 									><IconRotateClockwise size={17} /></button
 								>
 							</div>

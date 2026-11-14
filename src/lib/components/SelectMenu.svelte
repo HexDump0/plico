@@ -28,9 +28,28 @@
 	let button = $state<HTMLButtonElement>();
 	let list = $state<HTMLUListElement>();
 	const selected = $derived(options.find((option) => option.value === value));
+	// Opens upward when the list would not fit below but does above: near the
+	// bottom of the phone settings sheet, or of the screen.
+	let upward = $state(false);
+
+	function fitsBelow() {
+		if (!button) return true;
+		const box = button.getBoundingClientRect();
+		let [top, bottom] = [0, window.innerHeight];
+		for (let at = root?.parentElement; at; at = at.parentElement) {
+			if (!/(auto|scroll|hidden)/.test(getComputedStyle(at).overflowY)) continue;
+			const clip = at.getBoundingClientRect();
+			[top, bottom] = [Math.max(top, clip.top), Math.min(bottom, clip.bottom)];
+			break;
+		}
+		const needed = Math.min(320, options.length * 44 + 20);
+		const [below, above] = [bottom - box.bottom, box.top - top];
+		return below >= needed || below >= above;
+	}
 
 	async function show() {
 		if (disabled) return;
+		upward = !fitsBelow();
 		active = Math.max(
 			0,
 			options.findIndex((option) => option.value === value)
@@ -110,7 +129,9 @@
 			onkeydown={onListKey}
 			in:scale={{ duration: reducedMotion ? 0 : 160, start: 0.96, opacity: 0, easing: cubicOut }}
 			out:fade={{ duration: reducedMotion ? 0 : 100 }}
-			class="absolute inset-x-0 top-full z-30 mt-2 origin-top rounded-xl border border-white/10 bg-panel-hover p-1.5 shadow-2xl shadow-black/50 outline-none"
+			class="absolute inset-x-0 z-30 max-h-[min(20rem,50dvh)] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-panel-hover p-1.5 shadow-2xl shadow-black/50 outline-none {upward
+				? 'bottom-full mb-2 origin-bottom'
+				: 'top-full mt-2 origin-top'}"
 		>
 			{#each options as option, index (option.value)}
 				<li
