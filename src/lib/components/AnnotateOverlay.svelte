@@ -114,16 +114,38 @@
 
 	const tool = $derived(editor.tool);
 	const editing = $derived(editor.mode === 'edit');
-	// The page's lines of text Edit can replace, and the images it draws.
-	const runs = $derived(editing && glyphs ? textRuns(glyphs, page.width, page.height) : []);
-	const images = $derived.by(() => {
+	const marks = $derived(editor.marks.filter((mark) => mark.page === page.number));
+	// Lines and images a mark has taken up and still shows. Where they were is
+	// painted over, so it is blank page there, not something to outline or
+	// pick; the mark itself answers wherever it has moved to. Text emptied and
+	// images deleted stay pickable, since their spot is all that is left of them.
+	const taken = $derived.by(() => {
+		const bands: CropArea[] = [];
+		const areas: CropArea[] = [];
+		for (const mark of marks) {
+			if (mark.kind === 'text' && mark.replaces && mark.text.trim()) bands.push(mark.replaces.band);
+			else if (mark.kind === 'picture' && !mark.deleted) areas.push(mark.from);
+		}
+		return { bands, areas };
+	});
+	const same = (a: CropArea, b: CropArea) =>
+		a.every((value, index) => Math.abs(value - b[index]) < 1e-6);
+	// The page's lines of text Edit can replace, and the images it draws. Read
+	// once per page, apart from `taken`, which changes on every frame of a drag.
+	const pageRuns = $derived(editing && glyphs ? textRuns(glyphs, page.width, page.height) : []);
+	const pageImages = $derived.by(() => {
 		if (!editing || !glyphs?.images) return [];
 		const found: CropArea[] = [];
 		for (let index = 0; index + 3 < glyphs.images.length; index += 4)
 			found.push([...glyphs.images.subarray(index, index + 4)] as CropArea);
 		return found;
 	});
-	const marks = $derived(editor.marks.filter((mark) => mark.page === page.number));
+	const runs = $derived(
+		pageRuns.filter((run) => !taken.bands.some((band) => same(band, run.band)))
+	);
+	const images = $derived(
+		pageImages.filter((area) => !taken.areas.some((from) => same(from, area)))
+	);
 	const selected = $derived(marks.find((mark) => mark.id === editor.selected));
 	const editingMark = $derived(marks.find((mark) => mark.id === editor.editing));
 	// Pixels per point.
