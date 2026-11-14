@@ -3,6 +3,7 @@
 	import gsap from 'gsap';
 	import { fade } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
+	import { removeKeepingFocus } from '$lib/focus';
 	import { cubicOut } from 'svelte/easing';
 	import {
 		IconCheck,
@@ -59,6 +60,7 @@
 
 	const workspace = getWorkspace();
 	let sources = $state<Source[]>([]);
+	let sourceList = $state<HTMLUListElement>();
 	// Extract, Remove, and Rotate stay single-document tools; only Organize
 	// builds one output from several inputs.
 	const activeFiles = $derived(mode === 'organize' ? files : files.slice(0, 1));
@@ -333,6 +335,7 @@
 	{#if mode === 'organize'}
 		<div class="flex items-start justify-between gap-3">
 			<ul
+				bind:this={sourceList}
 				class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2"
 				aria-label="PDFs in this project"
 			>
@@ -360,7 +363,9 @@
 						>
 						<button
 							type="button"
-							onclick={() => removeSource(source.key)}
+							data-remove
+							onclick={() =>
+								removeKeepingFocus(sourceList, '[data-remove]', () => removeSource(source.key))}
 							disabled={processing}
 							class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-50"
 							aria-label={`Remove ${source.file.name}`}

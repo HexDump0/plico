@@ -63,6 +63,7 @@
 		RedactMark
 	} from '$lib/pdf/types';
 	import { DownloadJob } from '$lib/pdf/download-job.svelte';
+	import { focusMoved } from '$lib/focus';
 	import { parsePageRange } from '$lib/pdf/page-range';
 	import {
 		officeOperation,
@@ -1700,6 +1701,18 @@
 	$effect(() => {
 		if (workspace.files.length === 0 && untrack(() => organizePages.length)) organizePages = [];
 	});
+	// Removing the last file takes its focused remove button with it, so focus
+	// picks up in the upload area instead of the start of the page.
+	let swapCell = $state<HTMLDivElement>();
+	let hadFiles = false;
+	$effect(() => {
+		const hasFiles = workspace.files.length > 0;
+		if (hadFiles && !hasFiles && !focusMoved())
+			untrack(() => swapCell)
+				?.querySelector<HTMLElement>('button')
+				?.focus();
+		hadFiles = hasFiles;
+	});
 	$effect(() => {
 		const keys = new Set(organizePages.map(pageKey));
 		if (selectedPages.some((key) => !keys.has(key)))
@@ -2515,7 +2528,7 @@
 				/>
 				<!-- The leaving state goes at once: fading out, it would hold this cell at
 				its height and the new state would jump when it finished. -->
-				<div class="grid min-h-0 flex-1">
+				<div bind:this={swapCell} class="grid min-h-0 flex-1">
 					{#if workspace.files.length === 0}
 						<div
 							in:fade={{ duration: reducedMotion ? 0 : 260, easing: cubicOut }}

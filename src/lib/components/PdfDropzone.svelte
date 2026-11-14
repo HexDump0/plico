@@ -11,6 +11,7 @@
 	import type { CatalogTool } from '$lib/tool-catalog';
 	import { getWorkspace, formatSize } from '$lib/workspace.svelte';
 	import { toolInput, formatName, inputAccept, acceptsFile } from '$lib/pdf/office-conversion';
+	import { focusMoved } from '$lib/focus';
 	let {
 		selectedTool = null,
 		emptyOnly = false,
@@ -69,10 +70,26 @@
 	let pendingRemoval: File | undefined;
 	let removalMotion: gsap.core.Timeline | undefined;
 	let removingRow: HTMLElement | undefined;
+	// Where the focused remove button was, so focus can stay in the list
+	// (or move to the upload area) once its row is gone.
+	let refocusAt = -1;
+	async function restoreFocus() {
+		const index = refocusAt;
+		refocusAt = -1;
+		if (index < 0) return;
+		await tick();
+		if (focusMoved()) return;
+		const buttons = list ? [...list.querySelectorAll<HTMLElement>('[data-remove]')] : [];
+		const target = buttons[Math.min(index, buttons.length - 1)] ?? emptyPanel;
+		if (target?.isConnected) target.focus();
+	}
 	function finishRemoval() {
 		removalMotion?.kill();
 		removalMotion = undefined;
-		if (pendingRemoval) workspace.remove(pendingRemoval);
+		if (pendingRemoval) {
+			workspace.remove(pendingRemoval);
+			void restoreFocus();
+		}
 		pendingRemoval = undefined;
 		if (removingRow) gsap.set(removingRow, { clearProps: 'all' });
 		removingRow = undefined;
@@ -82,8 +99,13 @@
 		finishTransition();
 		finishRemoval();
 		if (!workspace.files.includes(file)) return;
+		refocusAt =
+			document.activeElement === button && list
+				? [...list.querySelectorAll('[data-remove]')].indexOf(button)
+				: -1;
 		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
 			workspace.remove(file);
+			void restoreFocus();
 			return;
 		}
 		pendingRemoval = file;
@@ -312,6 +334,7 @@
 							<button
 								class="rounded-md p-2 text-muted hover:text-white"
 								aria-label={`Remove ${file.name}`}
+								data-remove
 								onclick={(event) => remove(file, event.currentTarget)}><IconX size={18} /></button
 							>
 						</li>

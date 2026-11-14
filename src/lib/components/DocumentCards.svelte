@@ -5,6 +5,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { removeKeepingFocus } from '$lib/focus';
 	import {
 		IconCamera,
 		IconPerspective,
@@ -70,6 +71,7 @@
 	const settling = new SvelteSet<File>();
 	let trashHovered = $state(false);
 	let trashZone = $state<HTMLDivElement>();
+	let cardList = $state<HTMLOListElement>();
 	let orderAnnouncement = $state('');
 	let sortAscending = $state(true);
 	let activePointer = -1;
@@ -153,6 +155,10 @@
 		let pointerX = 0;
 		let held = false;
 		let holdTimer = 0;
+		// On a phone the trash strip covers part of the left column, so a card
+		// picked up there starts over it. It only takes a drop once the card has
+		// been off it since the pickup.
+		let trashArmed = false;
 		let pointerY = 0;
 		const scroller = edgeScroll(node.closest<HTMLElement>('[data-drag-area]'), (delta) => {
 			baseY += delta;
@@ -264,6 +270,7 @@
 				!processing &&
 				clientX !== undefined &&
 				clientY !== undefined &&
+				trashArmed &&
 				isOverTrash(clientX, clientY);
 			const from = visibleFiles.indexOf(file);
 			if (!removeFile && (!commit || !dropTarget || processing) && from >= 0) moveSlot(startIndex);
@@ -315,6 +322,7 @@
 				dragged = file;
 				trashHovered = false;
 			});
+			trashArmed = false;
 			gsap.killTweensOf(surface);
 			settling.delete(file);
 			baseX = x = parseFloat(String(gsap.getProperty(surface, 'x'))) || 0;
@@ -378,7 +386,9 @@
 			track();
 		}
 		function track() {
-			trashHovered = isOverTrash(pointerX, pointerY);
+			const overTrash = isOverTrash(pointerX, pointerY);
+			if (!overTrash) trashArmed = true;
+			trashHovered = trashArmed && overTrash;
 			scroller.update(trashHovered ? null : pointerY);
 			if (trashHovered) {
 				dropTarget = null;
@@ -464,6 +474,7 @@
 		>
 	{/if}
 	<ol
+		bind:this={cardList}
 		aria-label={isImageToPdf ? 'Image order' : 'PDF order'}
 		class="my-auto flex flex-wrap items-center justify-center gap-5 py-16 sm:gap-7 lg:py-24"
 	>
@@ -541,7 +552,10 @@
 								disabled={processing || !!dragged || !!keyboardPicked}
 								class="absolute top-2 right-2 flex size-8 items-center justify-center rounded-lg bg-canvas/80 text-white backdrop-blur-sm transition-colors hover:bg-convert hover:text-canvas disabled:opacity-40"
 								aria-label={`Remove ${file.name}`}
-								onclick={() => workspace.remove(file)}><IconX size={18} stroke={2.5} /></button
+								data-remove
+								onclick={() =>
+									removeKeepingFocus(cardList, '[data-remove]', () => workspace.remove(file))}
+								><IconX size={18} stroke={2.5} /></button
 							>
 							{#if onturn || onopen}
 								{#if onopen}<button
